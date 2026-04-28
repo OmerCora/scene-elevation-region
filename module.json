@@ -1,0 +1,26 @@
+{
+  "id": "scene-elevation",
+  "title": "Scene Elevation",
+  "description": "System-agnostic visual scene elevation. Paint elevation onto a half-grid of points to magnify and parallax portions of the scene background, simulating 3D relief on top-down 2D maps. V1: square grid, brush tool, parallax warp. (Inspired by CodexVTT.)",
+  "version": "0.1.0",
+  "compatibility": {
+    "minimum": "14",
+    "verified": "14"
+  },
+  "authors": [{ "name": "Author" }],
+  "esmodules": ["scripts/module.mjs"],
+  "styles": ["styles/elevation.css"],
+  "languages": [
+    { "lang": "en", "name": "English", "path": "lang/en.json" }
+  ],
+  "documentTypes": {
+    "RegionBehavior": {
+      "elevation": {}
+    }
+  },
+  "url": "",
+  "manifest": "",
+  "download": "",
+  "socket": false,
+  "library": false
+}
