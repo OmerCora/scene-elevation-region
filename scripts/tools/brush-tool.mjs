@@ -45,7 +45,7 @@ export class BrushTool {
   stamp(scene, wx, wy) {
     const data = ElevationData.get(scene);
     if (!data) return false;
-    const gs = scene.grid.size;
+    const gs = data.gridSize;
     const halfGs = gs / 2;
     const radiusPx = this.size * gs;
     const r2 = radiusPx * radiusPx;

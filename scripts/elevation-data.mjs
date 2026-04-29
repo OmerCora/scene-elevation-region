@@ -1,4 +1,4 @@
-import { MODULE_ID, FLAGS, hDims, hIndex, REGION_BEHAVIOR_TYPE, WALL_FLAGS } from "./config.mjs";
+import { MODULE_ID, FLAGS, hDims, hIndex, REGION_BEHAVIOR_TYPE, WALL_FLAGS, sceneGeometry } from "./config.mjs";
 
 /**
  * Per-scene elevation grid stored as a half-grid of points.
@@ -11,24 +11,36 @@ import { MODULE_ID, FLAGS, hDims, hIndex, REGION_BEHAVIOR_TYPE, WALL_FLAGS } fro
  *     (rebuilt in memory; what the mesh shader / token scaling read)
  */
 export class ElevationData {
+  static _cache = new WeakMap();
+
   static get(scene) {
     if (!scene) return null;
-    const cached = scene.apps?.[`${MODULE_ID}:data`];
-    if (cached) return cached;
-    const data = new ElevationData(scene);
-    if (scene.apps) scene.apps[`${MODULE_ID}:data`] = data;
+    let data = ElevationData._cache.get(scene);
+    if (data) {
+      const geo = sceneGeometry(scene);
+      if (data.cols === geo.cols && data.rows === geo.rows && data.gridSize === geo.gridSize) return data;
+    }
+    data = new ElevationData(scene);
+    ElevationData._cache.set(scene, data);
     return data;
   }
 
   constructor(scene) {
     this.scene = scene;
-    const raw = scene.getFlag(MODULE_ID, FLAGS.GRID);
-    const cols = Math.max(1, Math.floor((scene.dimensions?.sceneWidth ?? scene.width) / scene.grid.size));
-    const rows = Math.max(1, Math.floor((scene.dimensions?.sceneHeight ?? scene.height) / scene.grid.size));
-    this.cols = raw?.cols ?? cols;
-    this.rows = raw?.rows ?? rows;
+    let raw = null;
+    try { raw = scene.getFlag(MODULE_ID, FLAGS.GRID); }
+    catch (err) { raw = scene.flags?.[MODULE_ID]?.[FLAGS.GRID] ?? null; }
+    // Always use current scene-rect dimensions. Older versions saved canvas
+    // padded dimensions by mistake, so saved cols/rows are intentionally ignored.
+    const geo = sceneGeometry(scene);
+    this.cols = geo.cols;
+    this.rows = geo.rows;
+    this.gridSize = geo.gridSize;
     const { hCols, hRows } = hDims(this.cols, this.rows);
     const expected = hCols * hRows;
+    // If the saved point count matches the current dims, restore. Otherwise
+    // start fresh — the painted layer is implicit-zero so no data is lost
+    // beyond what was already misaligned.
     this.painted = (raw?.points && raw.points.length === expected)
       ? raw.points.slice()
       : new Array(expected).fill(0);
@@ -70,7 +82,7 @@ export class ElevationData {
   /** Bilinear sample of composite at world coords (token scaling, eyedropper). */
   sampleAt(worldX, worldY) {
     if (this._compositeDirty) this.rebuildComposite();
-    const halfGs = this.scene.grid.size / 2;
+    const halfGs = this.gridSize / 2;
     const fx = worldX / halfGs;
     const fy = worldY / halfGs;
     const x0 = Math.floor(fx), y0 = Math.floor(fy);
@@ -94,7 +106,7 @@ export class ElevationData {
   }
 
   hToWorld(hx, hy) {
-    const halfGs = this.scene.grid.size / 2;
+    const halfGs = this.gridSize / 2;
     return { x: hx * halfGs, y: hy * halfGs };
   }
 
@@ -119,7 +131,7 @@ export class ElevationData {
   _applyRegions() {
     const regions = this.scene.regions;
     if (!regions?.size) return;
-    const halfGs = this.scene.grid.size / 2;
+    const halfGs = this.gridSize / 2;
     for (const region of regions) {
       const beh = region.behaviors?.find(b => b.type === REGION_BEHAVIOR_TYPE && !b.disabled);
       if (!beh) continue;
@@ -128,7 +140,7 @@ export class ElevationData {
       const mode = sys.mode || "set"; // set | add | plateau | ramp
       const fade = Math.clamp(Number(sys.fade ?? 0), 0, 100) / 100;
       const rampDir = Number(sys.rampDirection) || 0; // radians; for ramp mode
-      const rampLen = Math.max(1, Number(sys.rampLength) || 1) * this.scene.grid.size;
+      const rampLen = Math.max(1, Number(sys.rampLength) || 1) * this.gridSize;
 
       // Region polygons (clipper output): array of polygon arrays of [x,y,...]
       const polygons = region.polygonTree?.toClipperPoints?.()
@@ -201,8 +213,8 @@ export class ElevationData {
   _applyWalls() {
     const walls = this.scene.walls;
     if (!walls?.size) return;
-    const halfGs = this.scene.grid.size / 2;
-    const gs = this.scene.grid.size;
+    const halfGs = this.gridSize / 2;
+    const gs = this.gridSize;
 
     for (const wall of walls) {
       const thickness = Number(wall.getFlag(MODULE_ID, WALL_FLAGS.THICKNESS)) || 0;

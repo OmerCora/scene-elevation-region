@@ -1,5 +1,5 @@
 {
-  "id": "scene-elevation",
+  "id": "scene-elevation-region",
   "title": "Scene Elevation",
   "description": "System-agnostic visual scene elevation. Paint elevation onto a half-grid of points to magnify and parallax portions of the scene background, simulating 3D relief on top-down 2D maps. V1: square grid, brush tool, parallax warp. (Inspired by CodexVTT.)",
   "version": "0.1.0",

@@ -1,5 +1,5 @@
 import {
-  MODULE_ID, SETTINGS, LOD_THRESHOLD_DEFAULT, PARALLAX_STRENGTHS, REGION_BEHAVIOR_TYPE
+  MODULE_ID, SETTINGS, LOD_THRESHOLD_DEFAULT, PARALLAX_STRENGTHS, REGION_BEHAVIOR_TYPE, sceneGeometry
 } from "./config.mjs";
 import { ElevationData } from "./elevation-data.mjs";
 import { ElevationLayer } from "./elevation-layer.mjs";
@@ -33,8 +33,11 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_ENABLED, {
     name: "SCENE_ELEVATION.Settings.TokenScale",
     hint: "SCENE_ELEVATION.Settings.TokenScaleHint",
-    scope: "world", config: true, type: Boolean, default: true,
+    scope: "world", config: true, type: Boolean, default: false,
     onChange: () => _refreshAllTokenScales()
+  });
+  game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_DEFAULTED_OFF, {
+    scope: "world", config: false, type: Boolean, default: false
   });
   game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_MAX, {
     name: "SCENE_ELEVATION.Settings.TokenScaleMax",
@@ -73,11 +76,13 @@ Hooks.once("init", () => {
   registerWallConfigInjection(invalidate);
 
   // Module API
-  game.modules.get(MODULE_ID).api = {
+  const mod = game.modules.get(MODULE_ID);
+  if (mod) mod.api = {
     ElevationData, ElevationLayer, ElevationMesh,
     BrushTool, EyedropperTool, BrushPalette,
     ElevationRegionBehavior
   };
+  else console.error(`[${MODULE_ID}] Module not registered — manifest id likely doesn't match install folder.`);
 });
 
 /* -------------------------------------------- */
@@ -87,6 +92,12 @@ Hooks.once("init", () => {
 Hooks.on("canvasReady", async () => {
   await ElevationMesh.instance.attach(canvas.scene);
   _refreshAllTokenScales();
+});
+
+Hooks.once("ready", async () => {
+  if (game.settings.get(MODULE_ID, SETTINGS.TOKEN_SCALE_DEFAULTED_OFF)) return;
+  await game.settings.set(MODULE_ID, SETTINGS.TOKEN_SCALE_ENABLED, false);
+  await game.settings.set(MODULE_ID, SETTINGS.TOKEN_SCALE_DEFAULTED_OFF, true);
 });
 
 Hooks.on("canvasTearDown", async () => {
@@ -166,11 +177,13 @@ Hooks.on("renderSceneControls", (controls) => {
 /* -------------------------------------------- */
 
 function _tokenScaleFactor(token) {
+  if (!game.modules.get(MODULE_ID)?.active) return 1;
   if (!game.settings.get(MODULE_ID, SETTINGS.TOKEN_SCALE_ENABLED)) return 1;
   if (!canvas?.scene || !token?.document) return 1;
   const data = ElevationData.get(canvas.scene);
-  const cx = token.document.x + (token.document.width * canvas.grid.size) / 2;
-  const cy = token.document.y + (token.document.height * canvas.grid.size) / 2;
+  const geo = sceneGeometry(canvas.scene);
+  const cx = token.document.x + (token.document.width * geo.gridSize) / 2 - geo.x;
+  const cy = token.document.y + (token.document.height * geo.gridSize) / 2 - geo.y;
   const elev = data.sampleAt(cx, cy);
   const strengthKey = game.settings.get(MODULE_ID, SETTINGS.PARALLAX) ?? "medium";
   const parallax = PARALLAX_STRENGTHS[strengthKey] ?? PARALLAX_STRENGTHS.medium;
@@ -181,8 +194,38 @@ function _tokenScaleFactor(token) {
 
 function _applyTokenScale(token) {
   if (!token?.mesh) return;
-  const factor = _tokenScaleFactor(token);
-  token.mesh.scale.set(factor, factor);
+  try {
+    // Cache the engine-set base scale once, then drive absolute scale =
+    // base * factor. This avoids the previous bug where successive refreshes
+    // multiplied the scale unboundedly.
+    const m = token.mesh;
+    if (!game.settings.get(MODULE_ID, SETTINGS.TOKEN_SCALE_ENABLED)) {
+      if (m._seBaseScaleX !== undefined) m.scale.set(m._seBaseScaleX, m._seBaseScaleY);
+      m._seLastFactor = 1;
+      return;
+    }
+    if (m._seBaseScaleX === undefined) {
+      m._seBaseScaleX = m.scale.x;
+      m._seBaseScaleY = m.scale.y;
+    } else {
+      // If Foundry just rewrote the scale (e.g. token resize / mirror toggle),
+      // re-cache by comparing to the previously applied product.
+      if (m._seLastFactor && Math.abs(m.scale.x - m._seBaseScaleX * m._seLastFactor) > 1e-4) {
+        m._seBaseScaleX = m.scale.x;
+        m._seBaseScaleY = m.scale.y;
+      }
+    }
+    const factor = _tokenScaleFactor(token);
+    m._seLastFactor = factor;
+    const sgnX = Math.sign(m._seBaseScaleX) || 1;
+    const sgnY = Math.sign(m._seBaseScaleY) || 1;
+    m.scale.set(
+      Math.abs(m._seBaseScaleX) * factor * sgnX,
+      Math.abs(m._seBaseScaleY) * factor * sgnY
+    );
+  } catch (err) {
+    // Silent — drawToken can fire before our module/canvas is fully initialised.
+  }
 }
 
 function _refreshAllTokenScales() {

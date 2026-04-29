@@ -1,6 +1,6 @@
 /** Scene Elevation — module-wide constants and helpers. */
 
-export const MODULE_ID = "scene-elevation";
+export const MODULE_ID = "scene-elevation-region";
 
 export const FLAGS = {
   /** Per-scene elevation grid: { cols, rows, points: number[] } */
@@ -10,6 +10,7 @@ export const FLAGS = {
 export const SETTINGS = {
   PARALLAX: "parallaxStrength",
   TOKEN_SCALE_ENABLED: "tokenScaleEnabled",
+  TOKEN_SCALE_DEFAULTED_OFF: "tokenScaleDefaultedOff",
   TOKEN_SCALE_MAX: "tokenScaleMax",
   /** Client: show overlay automatically when elevation tool active. */
   SHOW_OVERLAY: "showOverlay",
@@ -19,9 +20,9 @@ export const SETTINGS = {
 
 /** Parallax strength values keyed by enum option. */
 export const PARALLAX_STRENGTHS = Object.freeze({
-  subtle: 0.05,
-  medium: 0.10,
-  strong: 0.20
+  subtle: 0.06,
+  medium: 0.13,
+  strong: 0.23
 });
 
 /** Brush bounds. */
@@ -70,6 +71,25 @@ export function hIndex(hx, hy, cols) {
 
 export function hDims(cols, rows) {
   return { hCols: cols * 2 + 1, hRows: rows * 2 + 1 };
+}
+
+export function sceneGeometry(scene = canvas?.scene) {
+  const dims = (scene === canvas?.scene && canvas?.dimensions) ? canvas.dimensions : scene?.dimensions;
+  const rect = dims?.sceneRect;
+  const gridSize = dims?.size ?? canvas?.grid?.size ?? scene?.grid?.size ?? 100;
+  const width = rect?.width ?? dims?.sceneWidth ?? scene?.width ?? gridSize;
+  const height = rect?.height ?? dims?.sceneHeight ?? scene?.height ?? gridSize;
+  const cols = Math.max(1, Math.round(width / gridSize));
+  const rows = Math.max(1, Math.round(height / gridSize));
+  return {
+    x: rect?.x ?? dims?.sceneX ?? 0,
+    y: rect?.y ?? dims?.sceneY ?? 0,
+    width: cols * gridSize,
+    height: rows * gridSize,
+    gridSize,
+    cols,
+    rows
+  };
 }
 
 export function logger(...args) {
