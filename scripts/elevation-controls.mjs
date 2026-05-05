@@ -1,12 +1,36 @@
-import { MODULE_ID, SETTINGS, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS } from "./config.mjs";
-import { getActiveElevationRegions } from "./region-elevation-renderer.mjs";
+import {
+  MODULE_ID,
+  SETTINGS,
+  SCENE_SETTING_KEYS,
+  PERSPECTIVE_POINTS,
+  REGION_BEHAVIOR_TYPE,
+  SHADOW_STRENGTH_LIMITS,
+  sceneGeometry,
+  getSceneElevationSetting,
+  getSceneElevationSettings,
+  setSceneElevationSettings,
+  setTransientSceneElevationSetting,
+  clearTransientSceneElevationSettings
+} from "./config.mjs";
+import { RegionElevationRenderer, getActiveElevationRegions } from "./region-elevation-renderer.mjs";
+import { openSceneElevationSettingsDialog } from "./scene-settings.mjs";
 
 const MIN_POLYGON_POINTS = 3;
+const MIN_SHAPE_SIZE = 8;
 const POINT_CLOSE_DISTANCE = 10;
 const DOUBLE_CLICK_MS = 420;
 const DOUBLE_CLICK_DISTANCE = 8;
 const PREVIEW_COLOR = 0x66ccff;
 const OUTLINE_COLOR = 0xffd166;
+const EDGE_HANDLE_COLOR = 0xff4d6d;
+const EDGE_HANDLE_RADIUS = 9;
+const TOOL_SELECT = "select";
+const TOOL_POLYGON = "elevationPolygon";
+const TOOL_RECTANGLE = "elevationRectangle";
+const TOOL_CIRCLE = "elevationCircle";
+const DRAW_TOOLS = new Set([TOOL_POLYGON, TOOL_RECTANGLE, TOOL_CIRCLE]);
+const ELEVATION_TOOLS = new Set([TOOL_SELECT, TOOL_POLYGON, TOOL_RECTANGLE, TOOL_CIRCLE]);
+const UTILITY_TOOLS = new Set(["sceneSettings", "showElevationRegions"]);
 
 export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLayer {
   static LAYER_NAME = "sceneElevation";
@@ -23,12 +47,23 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     super();
     this.preview = null;
     this.outlines = null;
+    this.perspectiveHandle = null;
     this._activeTool = null;
     this._points = [];
     this._hover = null;
+    this._shapeStart = null;
+    this._shapeHover = null;
     this._listeners = null;
     this._creating = false;
     this._lastClick = null;
+    this._draggingPerspectivePoint = false;
+    this._edgePointPreview = null;
+    this._createdRegionOperations = [];
+    this._undoingRegionIds = new Set();
+    this._nativeRegionVisibility = null;
+    this._nativeRegionLayerState = null;
+    this._hoverLabel = null;
+    this._visibilityRefreshFrame = null;
   }
 
   async _draw(options) {
@@ -46,20 +81,36 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this.preview.zIndex = 20_002;
     this.preview.visible = false;
 
+    this.perspectiveHandle = parent.addChild(new PIXI.Graphics());
+    this.perspectiveHandle.eventMode = "none";
+    this.perspectiveHandle.zIndex = 20_003;
+    this.perspectiveHandle.visible = false;
+
     this.refreshElevationRegionVisibility();
   }
 
   async _tearDown(options) {
     this._unbindStageListeners();
+    this._removeElevationHoverLabel();
+    this._cancelQueuedVisibilityRefresh();
+    this._restoreNativeRegionVisibility();
     this.preview?.parent?.removeChild(this.preview);
     this.outlines?.parent?.removeChild(this.outlines);
+    this.perspectiveHandle?.parent?.removeChild(this.perspectiveHandle);
     this.preview?.destroy();
     this.outlines?.destroy();
+    this.perspectiveHandle?.destroy();
     this.preview = null;
     this.outlines = null;
+    this.perspectiveHandle = null;
     this._points = [];
     this._hover = null;
+    this._shapeStart = null;
+    this._shapeHover = null;
     this._lastClick = null;
+    this._edgePointPreview = null;
+    this._draggingPerspectivePoint = false;
+    clearTransientSceneElevationSettings(canvas?.scene);
     return super._tearDown?.(options);
   }
 
@@ -68,87 +119,164 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       this.refreshElevationRegionVisibility();
       return;
     }
+    if (this._activeTool === toolName) {
+      this.refreshElevationRegionVisibility();
+      this._drawPerspectiveHandle();
+      return;
+    }
+    this._resetToolState();
     this._activeTool = toolName;
-    if (toolName === "polygon") this._startPolygonDrawing();
-    else this._stopPolygonDrawing();
+    if (toolName) this._bindStageListeners();
+    else this._unbindStageListeners();
+    if (this.preview) this.preview.visible = DRAW_TOOLS.has(toolName);
+    this._drawPreview();
     this.refreshElevationRegionVisibility();
+    this._drawPerspectiveHandle();
   }
 
   deactivate() {
     this._activeTool = null;
-    this._stopPolygonDrawing();
+    this._resetToolState();
+    this._unbindStageListeners();
     this.refreshElevationRegionVisibility(false);
+    this._restoreNativeRegionVisibility();
+    this._drawPerspectiveHandle();
     return super.deactivate?.();
   }
 
   refreshElevationRegionVisibility(forceVisible = null) {
-    if (!this.outlines) return;
     const visible = forceVisible ?? (this._activeTool !== null && game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS));
-    this.outlines.visible = visible;
-    this._drawElevationRegionOutlines();
+    if (this.outlines) this.outlines.visible = visible;
+    if (!visible) this._hideElevationHoverLabel();
+    if (this.outlines) this._drawElevationRegionOutlines();
+    this._syncNativeRegionVisibility(visible);
   }
 
-  _startPolygonDrawing() {
-    this._bindStageListeners();
-    this._points = [];
-    this._hover = null;
-    this._lastClick = null;
-    if (this.preview) this.preview.visible = true;
-    this._drawPreview();
+  queueElevationRegionVisibilityRefresh() {
+    this._cancelQueuedVisibilityRefresh();
+    this._visibilityRefreshFrame = requestAnimationFrame(() => {
+      this.refreshElevationRegionVisibility();
+      this._visibilityRefreshFrame = requestAnimationFrame(() => {
+        this._visibilityRefreshFrame = null;
+        this.refreshElevationRegionVisibility();
+        this._drawPerspectiveHandle();
+      });
+    });
   }
 
-  _stopPolygonDrawing() {
-    this._unbindStageListeners();
+  _cancelQueuedVisibilityRefresh() {
+    if (!this._visibilityRefreshFrame) return;
+    cancelAnimationFrame(this._visibilityRefreshFrame);
+    this._visibilityRefreshFrame = null;
+  }
+
+  _resetToolState() {
     this._points = [];
     this._hover = null;
+    this._shapeStart = null;
+    this._shapeHover = null;
     this._lastClick = null;
+    this._draggingPerspectivePoint = false;
+    this._edgePointPreview = null;
+    clearTransientSceneElevationSettings(canvas?.scene);
     this.preview?.clear();
     if (this.preview) this.preview.visible = false;
+    this._drawPreview();
   }
 
   _bindStageListeners() {
     if (this._listeners) return;
-    const stage = canvas.stage;
-    if (!stage) return;
+    const canvasElement = this._canvasElement();
+    if (!canvasElement) return;
     const onMove = event => this._onPointerMove(event);
     const onDown = event => this._onPointerDown(event);
+    const onUp = event => this._onPointerUp(event);
+    const onContextMenu = event => this._onContextMenu(event);
     const onKeyDown = event => this._onKeyDown(event);
-    stage.on("pointermove", onMove);
-    stage.on("pointerdown", onDown);
+    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("pointerup", onUp, true);
+    window.addEventListener("contextmenu", onContextMenu, true);
     window.addEventListener("keydown", onKeyDown);
-    this._listeners = { onMove, onDown, onKeyDown };
+    this._listeners = { canvasElement, onMove, onDown, onUp, onContextMenu, onKeyDown };
   }
 
   _unbindStageListeners() {
-    const stage = canvas.stage;
-    if (stage && this._listeners) {
-      stage.off("pointermove", this._listeners.onMove);
-      stage.off("pointerdown", this._listeners.onDown);
+    if (this._listeners) {
+      window.removeEventListener("pointermove", this._listeners.onMove, true);
+      window.removeEventListener("pointerdown", this._listeners.onDown, true);
+      window.removeEventListener("pointerup", this._listeners.onUp, true);
+      window.removeEventListener("contextmenu", this._listeners.onContextMenu, true);
+      window.removeEventListener("keydown", this._listeners.onKeyDown);
     }
-    if (this._listeners) window.removeEventListener("keydown", this._listeners.onKeyDown);
     this._listeners = null;
   }
 
   _onPointerMove(event) {
-    if (this._activeTool !== "polygon") return;
-    this._hover = this._eventPosition(event);
+    if (!this._activeTool) return;
+    if (this._isRightMouseEvent(event) && !this._draggingPerspectivePoint && !this._drawingInProgress()) return;
+    const isCanvasEvent = this._isCanvasEvent(event);
+    if (!this._draggingPerspectivePoint && !this._shapeStart && !isCanvasEvent) {
+      this._hideElevationHoverLabel();
+      return;
+    }
+    if (!this._draggingPerspectivePoint && !this._drawingInProgress() && isCanvasEvent) this._updateElevationHoverLabel(event);
+    else this._hideElevationHoverLabel();
+    if (this._draggingPerspectivePoint) {
+      this._consumeEvent(event);
+      const rawPoint = this._eventPosition(event, { snap: false });
+      this._edgePointPreview = this._clampPointToSceneEdge(rawPoint);
+      setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT, this._edgePointPreview);
+      this._drawPerspectiveHandle();
+      RegionElevationRenderer.instance.update();
+      return;
+    }
+    if (!DRAW_TOOLS.has(this._activeTool)) return;
+    this._consumeEvent(event);
+    const point = this._eventPosition(event);
+    if (this._activeTool === TOOL_POLYGON) this._hover = point;
+    else this._shapeHover = point;
     this._drawPreview();
   }
 
   _onPointerDown(event) {
-    if (this._activeTool !== "polygon" || this._creating) return;
+    if (!this._activeTool || this._creating) return;
+    if (!this._isCanvasEvent(event)) return;
     const button = event.button ?? event.data?.button ?? event.nativeEvent?.button ?? 0;
     if (button === 2) {
-      event.stopPropagation?.();
-      event.preventDefault?.();
-      this._cancelPolygon();
+      if (!this._draggingPerspectivePoint && !this._drawingInProgress()) return;
+      this._consumeEvent(event);
+      this._cancelDrawing();
       return;
     }
     if (button !== 0) return;
 
-    event.stopPropagation?.();
+    const rawPoint = this._eventPosition(event, { snap: false });
+    if (this._isPerspectiveHandleVisible() && this._isOnPerspectiveHandle(rawPoint)) {
+      this._consumeEvent(event);
+      this._draggingPerspectivePoint = true;
+      this._edgePointPreview = this._clampPointToSceneEdge(rawPoint);
+      setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT, this._edgePointPreview);
+      this._drawPerspectiveHandle();
+      RegionElevationRenderer.instance.update();
+      return;
+    }
+
+    if (!DRAW_TOOLS.has(this._activeTool)) {
+      if (this._activeTool === TOOL_SELECT) this._clearRegionUndo();
+      return;
+    }
+
+    this._consumeEvent(event);
     const original = event.nativeEvent ?? event.data?.originalEvent ?? event;
     const point = this._eventPosition(event);
+    if (this._activeTool === TOOL_RECTANGLE || this._activeTool === TOOL_CIRCLE) {
+      this._shapeStart = point;
+      this._shapeHover = point;
+      this._drawPreview();
+      return;
+    }
+
     const isDoubleClick = Number(original.detail ?? 0) >= 2 || this._isDoubleClick(point, original);
     this._rememberClick(point, original);
     if (isDoubleClick) {
@@ -162,6 +290,41 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       return;
     }
     this._appendPolygonPoint(point);
+  }
+
+  async _onPointerUp(event) {
+    if (!this._activeTool) return;
+    if (this._draggingPerspectivePoint) {
+      this._consumeEvent(event);
+      const rawPoint = this._eventPosition(event, { snap: false });
+      const point = this._clampPointToSceneEdge(rawPoint);
+      this._edgePointPreview = null;
+      this._draggingPerspectivePoint = false;
+      clearTransientSceneElevationSettings(canvas.scene);
+      const settings = getSceneElevationSettings(canvas.scene);
+      await setSceneElevationSettings(canvas.scene, { ...settings, [SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT]: point });
+      this._drawPerspectiveHandle();
+      return;
+    }
+    if ((this._activeTool !== TOOL_RECTANGLE && this._activeTool !== TOOL_CIRCLE) || !this._shapeStart) return;
+    this._consumeEvent(event);
+    const end = this._eventPosition(event);
+    const shape = this._shapeFromDrag(this._activeTool, this._shapeStart, end);
+    this._shapeStart = null;
+    this._shapeHover = null;
+    this._drawPreview();
+    if (!shape) {
+      ui.notifications.warn(game.i18n.localize("SCENE_ELEVATION.Notify.ShapeTooSmall"));
+      return;
+    }
+    await this._createElevationRegionFromShapes([shape]);
+  }
+
+  _onContextMenu(event) {
+    if (!this._isCanvasEvent(event)) return;
+    if (!this._draggingPerspectivePoint && !this._drawingInProgress()) return;
+    this._consumeEvent(event);
+    this._cancelDrawing();
   }
 
   _appendPolygonPoint(point) {
@@ -190,13 +353,25 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   }
 
   _onKeyDown(event) {
-    if (this._activeTool !== "polygon") return;
+    if (!this._activeTool || this._isEditableEventTarget(event)) return;
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
+      if (this._undoDrawingStep()) {
+        event.preventDefault();
+        return;
+      }
+      if (this._createdRegionOperations.length) {
+        event.preventDefault();
+        void this._undoLastRegionCreation();
+        return;
+      }
+    }
+    if (!DRAW_TOOLS.has(this._activeTool)) return;
     if (event.key === "Escape") {
       event.preventDefault();
-      this._cancelPolygon();
+      this._cancelDrawing();
     } else if (event.key === "Enter") {
       event.preventDefault();
-      void this._confirmPolygon();
+      if (this._activeTool === TOOL_POLYGON) void this._confirmPolygon();
     } else if ((event.key === "Backspace" || event.key === "Delete") && this._points.length) {
       event.preventDefault();
       this._points.pop();
@@ -204,17 +379,113 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     }
   }
 
-  _eventPosition(event) {
+  _updateElevationHoverLabel(event) {
+    const point = this._eventPosition(event, { snap: false });
+    const entry = _hoverElevationEntryAtPoint(point);
+    if (!entry) {
+      this._hideElevationHoverLabel();
+      return;
+    }
+    const label = this._ensureElevationHoverLabel();
+    const icon = document.createElement("i");
+    icon.className = `fa-solid ${entry.elevation > 0 ? "fa-arrow-up" : entry.elevation < 0 ? "fa-arrow-down" : "fa-minus"}`;
+    const value = document.createElement("span");
+    value.textContent = _formatElevationLabel(entry.elevation);
+    label.replaceChildren(icon, value);
+    label.style.left = `${event.clientX + 14}px`;
+    label.style.top = `${event.clientY + 14}px`;
+    label.hidden = false;
+  }
+
+  _ensureElevationHoverLabel() {
+    if (this._hoverLabel?.isConnected) return this._hoverLabel;
+    const label = document.createElement("div");
+    label.className = `${MODULE_ID}-hover-label`;
+    label.hidden = true;
+    Object.assign(label.style, {
+      position: "fixed",
+      zIndex: 10_000,
+      pointerEvents: "none"
+    });
+    document.body.appendChild(label);
+    this._hoverLabel = label;
+    return label;
+  }
+
+  _hideElevationHoverLabel() {
+    if (this._hoverLabel) this._hoverLabel.hidden = true;
+  }
+
+  _removeElevationHoverLabel() {
+    this._hoverLabel?.remove();
+    this._hoverLabel = null;
+  }
+
+  _eventPosition(event, { snap = true } = {}) {
+    if (Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)) {
+      const point = this._domEventPosition(event);
+      return snap ? this._snapPoint(point, event) : point;
+    }
     const parent = this.preview?.parent ?? canvas.primary ?? canvas.stage;
     const point = typeof event.getLocalPosition === "function"
       ? event.getLocalPosition(parent)
       : event.data.getLocalPosition(parent);
     const original = event.nativeEvent ?? event.data?.originalEvent ?? event;
-    return this._snapPoint({ x: point.x, y: point.y }, original);
+    return snap ? this._snapPoint({ x: point.x, y: point.y }, original) : { x: point.x, y: point.y };
+  }
+
+  _domEventPosition(event) {
+    const canvasElement = this._canvasElement();
+    const rect = canvasElement.getBoundingClientRect();
+    const elementWidth = Number(canvasElement.width ?? rect.width) || rect.width || 1;
+    const elementHeight = Number(canvasElement.height ?? rect.height) || rect.height || 1;
+    const scaleX = elementWidth / (rect.width || 1);
+    const scaleY = elementHeight / (rect.height || 1);
+    const pixelX = (event.clientX - rect.left) * scaleX;
+    const pixelY = (event.clientY - rect.top) * scaleY;
+    const transform = canvas.stage.worldTransform;
+    return {
+      x: (pixelX - transform.tx) / transform.a,
+      y: (pixelY - transform.ty) / transform.d
+    };
+  }
+
+  _canvasElement() {
+    return canvas.app?.view ?? canvas.app?.canvas ?? document.getElementById("board");
+  }
+
+  _isCanvasEvent(event) {
+    const canvasElement = this._listeners?.canvasElement ?? this._canvasElement();
+    const path = event.composedPath?.() ?? [];
+    return path.includes(canvasElement) || event.target === canvasElement;
+  }
+
+  _isEditableEventTarget(event) {
+    const target = event.target;
+    return target instanceof HTMLInputElement
+      || target instanceof HTMLTextAreaElement
+      || target instanceof HTMLSelectElement
+      || !!target?.isContentEditable;
+  }
+
+  _isRightMouseEvent(event) {
+    const button = event.button ?? event.data?.button ?? event.nativeEvent?.button;
+    const buttons = event.buttons ?? event.nativeEvent?.buttons ?? 0;
+    return button === 2 || (buttons & 2) !== 0;
+  }
+
+  _drawingInProgress() {
+    return this._points.length > 0 || !!this._shapeStart;
+  }
+
+  _consumeEvent(event) {
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    event.stopImmediatePropagation?.();
   }
 
   _snapPoint(point, event) {
-    if (event?.shiftKey) return point;
+    if (event?.shiftKey || event?.ctrlKey) return point;
     const mode = CONST.GRID_SNAPPING_MODES?.VERTEX ?? CONST.GRID_SNAPPING_MODES?.CENTER;
     try {
       return canvas.grid?.getSnappedPoint?.(point, { mode }) ?? point;
@@ -229,11 +500,46 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     return Math.hypot(point.x - first.x, point.y - first.y) <= POINT_CLOSE_DISTANCE;
   }
 
-  _cancelPolygon() {
+  _cancelDrawing() {
     this._points = [];
     this._hover = null;
+    this._shapeStart = null;
+    this._shapeHover = null;
     this._lastClick = null;
     this._drawPreview();
+  }
+
+  _undoDrawingStep() {
+    if (this._activeTool === TOOL_POLYGON && this._points.length) {
+      this._points.pop();
+      this._hover = this._points[this._points.length - 1] ?? null;
+      this._drawPreview();
+      return true;
+    }
+    if ((this._activeTool === TOOL_RECTANGLE || this._activeTool === TOOL_CIRCLE) && this._shapeStart) {
+      this._shapeStart = null;
+      this._shapeHover = null;
+      this._drawPreview();
+      return true;
+    }
+    return false;
+  }
+
+  _shapeFromDrag(toolName, start, end) {
+    if (toolName === TOOL_RECTANGLE) {
+      const x = Math.min(start.x, end.x);
+      const y = Math.min(start.y, end.y);
+      const width = Math.abs(end.x - start.x);
+      const height = Math.abs(end.y - start.y);
+      if (width < MIN_SHAPE_SIZE || height < MIN_SHAPE_SIZE) return null;
+      return { type: "rectangle", hole: false, x, y, width, height };
+    }
+    if (toolName === TOOL_CIRCLE) {
+      const radius = Math.hypot(end.x - start.x, end.y - start.y);
+      if (radius < MIN_SHAPE_SIZE) return null;
+      return { type: "circle", hole: false, x: start.x, y: start.y, radius };
+    }
+    return null;
   }
 
   async _confirmPolygon() {
@@ -251,7 +557,6 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     try {
       const region = await this._createElevationRegion(points);
       if (region) {
-        ui.notifications.info(game.i18n.localize("SCENE_ELEVATION.Notify.RegionCreated"));
         this._points = [];
         this._hover = null;
         this._lastClick = null;
@@ -277,15 +582,19 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   }
 
   async _createElevationRegion(points) {
+    return this._createElevationRegionFromShapes([{ type: "polygon", hole: false, points: points.flatMap(point => [point.x, point.y]) }]);
+  }
+
+  async _createElevationRegionFromShapes(shapes) {
     if (!canvas.scene) return null;
     const number = canvas.scene.regions?.size ? canvas.scene.regions.size + 1 : 1;
     const regionData = {
       name: game.i18n.format("SCENE_ELEVATION.Control.RegionName", { number }),
-      color: game.user.color,
-      shapes: [{ type: "polygon", hole: false, points: points.flatMap(point => [point.x, point.y]) }],
-      highlightMode: "coverage",
-      displayMeasurements: true,
-      visibility: CONST.REGION_VISIBILITY?.OBSERVER ?? "observer",
+      color: _randomRegionColor(),
+      shapes,
+      highlightMode: _regionHighlightMode(),
+      displayMeasurements: false,
+      visibility: _regionVisibility(),
       ownership: { [game.user.id]: CONST.DOCUMENT_OWNERSHIP_LEVELS.OWNER },
       behaviors: [{
         name: game.i18n.localize("SCENE_ELEVATION.RegionBehavior.Label"),
@@ -299,19 +608,136 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       }],
       flags: { [MODULE_ID]: { createdByElevationTool: true } }
     };
-    const [region] = await canvas.scene.createEmbeddedDocuments("Region", [regionData]);
+    let region = null;
+    try {
+      [region] = await canvas.scene.createEmbeddedDocuments("Region", [regionData]);
+    } catch (error) {
+      console.warn(`${MODULE_ID} | Preferred elevation Region defaults failed; retrying with Foundry-safe defaults.`, error);
+      regionData.highlightMode = "coverage";
+      regionData.visibility = CONST.REGION_VISIBILITY?.OBSERVER ?? "observer";
+      [region] = await canvas.scene.createEmbeddedDocuments("Region", [regionData]);
+    }
+    if (region) {
+      this._recordRegionCreation(region);
+      ui.notifications.info(game.i18n.localize("SCENE_ELEVATION.Notify.RegionCreated"));
+      this.refreshElevationRegionVisibility();
+    }
     return region ?? null;
+  }
+
+  _recordRegionCreation(region) {
+    this._createdRegionOperations.push({ type: "createRegion", sceneId: canvas.scene?.id, regionId: region.id });
+  }
+
+  _clearRegionUndo() {
+    this._createdRegionOperations = [];
+  }
+
+  async _undoLastRegionCreation() {
+    while (this._createdRegionOperations.length) {
+      const operation = this._createdRegionOperations.pop();
+      if (operation?.sceneId !== canvas.scene?.id || !operation.regionId) continue;
+      const region = canvas.scene.regions?.get(operation.regionId);
+      if (!region) continue;
+      this._undoingRegionIds.add(operation.regionId);
+      try {
+        await region.delete();
+      } finally {
+        this._undoingRegionIds.delete(operation.regionId);
+      }
+      return;
+    }
+  }
+
+  _noteRegionChanged(action, region) {
+    if (action === "delete" && this._undoingRegionIds.has(region?.id)) return;
+    if (action === "update" || action === "delete") this._clearRegionUndo();
+  }
+
+  _syncNativeRegionVisibility(showElevationRegions) {
+    const regionLayer = canvas?.regions;
+    if (!regionLayer) return;
+    if (this._activeTool === null) {
+      this._restoreNativeRegionVisibility();
+      return;
+    }
+    this._captureNativeRegionVisibility(regionLayer);
+    // The Elevation menu renders its own optional outlines. The native RegionLayer
+    // should be completely invisible while this menu is active, including on the
+    // very first switch from the native Regions menu before our graphics draw.
+    regionLayer.visible = false;
+    regionLayer.renderable = false;
+    const objects = regionLayer.objects;
+    if (objects) {
+      objects.visible = false;
+      objects.renderable = false;
+    }
+    for (const placeable of _regionLayerPlaceables(regionLayer)) {
+      placeable.visible = false;
+      placeable.renderable = false;
+    }
+  }
+
+  _captureNativeRegionVisibility(regionLayer) {
+    this._nativeRegionVisibility ??= new Map();
+    if (!this._nativeRegionLayerState) {
+      this._nativeRegionLayerState = {
+        visible: regionLayer.visible,
+        renderable: regionLayer.renderable,
+        objectsVisible: regionLayer.objects?.visible,
+        objectsRenderable: regionLayer.objects?.renderable
+      };
+    }
+    for (const placeable of _regionLayerPlaceables(regionLayer)) {
+      if (this._nativeRegionVisibility.has(placeable)) continue;
+      this._nativeRegionVisibility.set(placeable, {
+        visible: placeable.visible,
+        renderable: placeable.renderable
+      });
+    }
+  }
+
+  _restoreNativeRegionVisibility() {
+    const regionLayer = canvas?.regions;
+    if (regionLayer && this._nativeRegionLayerState) {
+      regionLayer.visible = this._nativeRegionLayerState.visible;
+      regionLayer.renderable = this._nativeRegionLayerState.renderable;
+      if (regionLayer.objects) {
+        if (this._nativeRegionLayerState.objectsVisible !== undefined) regionLayer.objects.visible = this._nativeRegionLayerState.objectsVisible;
+        if (this._nativeRegionLayerState.objectsRenderable !== undefined) regionLayer.objects.renderable = this._nativeRegionLayerState.objectsRenderable;
+      }
+    }
+    this._nativeRegionLayerState = null;
+    if (!this._nativeRegionVisibility) return;
+    for (const [placeable, state] of this._nativeRegionVisibility) {
+      if (placeable.destroyed) continue;
+      placeable.visible = state.visible;
+      placeable.renderable = state.renderable;
+    }
+    this._nativeRegionVisibility = null;
   }
 
   _drawPreview() {
     const graphics = this.preview;
     if (!graphics) return;
     graphics.clear();
-    if (this._activeTool !== "polygon") return;
+    if (!DRAW_TOOLS.has(this._activeTool)) return;
+    const scale = canvas.stage?.scale?.x || 1;
+    if ((this._activeTool === TOOL_RECTANGLE || this._activeTool === TOOL_CIRCLE) && this._shapeStart && this._shapeHover) {
+      const shape = this._shapeFromDrag(this._activeTool, this._shapeStart, this._shapeHover);
+      graphics.lineStyle(2 / scale, PREVIEW_COLOR, 0.9);
+      if (shape?.type === "rectangle") graphics.drawRect(shape.x, shape.y, shape.width, shape.height);
+      else if (shape?.type === "circle") graphics.drawCircle(shape.x, shape.y, shape.radius);
+      graphics.beginFill(PREVIEW_COLOR, 0.95);
+      graphics.drawCircle(this._shapeStart.x, this._shapeStart.y, 4 / scale);
+      graphics.endFill();
+      return;
+    }
+    if (this._activeTool !== TOOL_POLYGON) return;
     const points = this._hover && this._points.length ? [...this._points, this._hover] : this._points;
     if (!points.length) return;
 
-    graphics.lineStyle(2 / (canvas.stage?.scale?.x || 1), PREVIEW_COLOR, 0.9);
+    graphics.lineStyle(2 / scale, PREVIEW_COLOR, 0.9);
     if (points.length > 1) {
       graphics.moveTo(points[0].x, points[0].y);
       for (const point of points.slice(1)) graphics.lineTo(point.x, point.y);
@@ -319,13 +745,66 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     }
     for (const point of this._points) {
       graphics.beginFill(PREVIEW_COLOR, 0.95);
-      graphics.drawCircle(point.x, point.y, 4 / (canvas.stage?.scale?.x || 1));
+      graphics.drawCircle(point.x, point.y, 4 / scale);
       graphics.endFill();
     }
     if (this._points.length >= MIN_POLYGON_POINTS) {
       const first = this._points[0];
-      graphics.lineStyle(1 / (canvas.stage?.scale?.x || 1), PREVIEW_COLOR, 0.45);
-      graphics.drawCircle(first.x, first.y, POINT_CLOSE_DISTANCE / (canvas.stage?.scale?.x || 1));
+      graphics.lineStyle(1 / scale, PREVIEW_COLOR, 0.45);
+      graphics.drawCircle(first.x, first.y, POINT_CLOSE_DISTANCE / scale);
+    }
+  }
+
+  _drawPerspectiveHandle() {
+    const graphics = this.perspectiveHandle;
+    if (!graphics) return;
+    graphics.clear();
+    const visible = this._isPerspectiveHandleVisible();
+    graphics.visible = visible;
+    if (!visible) return;
+    const point = this._edgePointPreview ?? this._sceneEdgePoint();
+    const scale = canvas.stage?.scale?.x || 1;
+    const radius = EDGE_HANDLE_RADIUS / scale;
+    graphics.lineStyle(2 / scale, 0x111111, 0.85);
+    graphics.beginFill(EDGE_HANDLE_COLOR, 0.95);
+    graphics.drawCircle(point.x, point.y, radius);
+    graphics.endFill();
+    graphics.lineStyle(1 / scale, 0xffffff, 0.9);
+    graphics.moveTo(point.x - radius * 0.55, point.y);
+    graphics.lineTo(point.x + radius * 0.55, point.y);
+    graphics.moveTo(point.x, point.y - radius * 0.55);
+    graphics.lineTo(point.x, point.y + radius * 0.55);
+  }
+
+  _isPerspectiveHandleVisible() {
+    return this._activeTool === TOOL_SELECT && canvas?.scene && getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT) === PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE;
+  }
+
+  _isOnPerspectiveHandle(point) {
+    const handle = this._edgePointPreview ?? this._sceneEdgePoint();
+    return Math.hypot(point.x - handle.x, point.y - handle.y) <= (EDGE_HANDLE_RADIUS + 6) / (canvas.stage?.scale?.x || 1);
+  }
+
+  _sceneEdgePoint() {
+    return this._clampPointToSceneEdge(getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT));
+  }
+
+  _clampPointToSceneEdge(point) {
+    const geo = sceneGeometry(canvas.scene);
+    const x = Math.clamp(Number(point?.x ?? geo.x + geo.width / 2), geo.x, geo.x + geo.width);
+    const y = Math.clamp(Number(point?.y ?? geo.y), geo.y, geo.y + geo.height);
+    const distances = [
+      { edge: "top", distance: Math.abs(y - geo.y) },
+      { edge: "right", distance: Math.abs(x - (geo.x + geo.width)) },
+      { edge: "bottom", distance: Math.abs(y - (geo.y + geo.height)) },
+      { edge: "left", distance: Math.abs(x - geo.x) }
+    ].sort((left, right) => left.distance - right.distance);
+    switch (distances[0].edge) {
+      case "right": return { x: geo.x + geo.width, y };
+      case "bottom": return { x, y: geo.y + geo.height };
+      case "left": return { x: geo.x, y };
+      case "top":
+      default: return { x, y: geo.y };
     }
   }
 
@@ -354,17 +833,62 @@ export function registerElevationControls() {
       icon: "fa-solid fa-mountain",
       layer: ElevationAuthoringLayer.LAYER_NAME,
       visible: game.user.isGM,
-      activeTool: "polygon",
+      activeTool: TOOL_SELECT,
       tools: {
-        polygon: {
-          name: "polygon",
+        [TOOL_SELECT]: {
+          name: TOOL_SELECT,
+          title: "SCENE_ELEVATION.Control.Select",
+          icon: "fa-solid fa-arrow-pointer",
+          visible: game.user.isGM,
+          onChange: (_event, active) => {
+            const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+            if (active) layer?.activateTool(TOOL_SELECT);
+            else layer?.activateTool(null);
+          }
+        },
+        [TOOL_POLYGON]: {
+          name: TOOL_POLYGON,
           title: "SCENE_ELEVATION.Control.DrawPolygon",
           icon: "fa-solid fa-draw-polygon",
           visible: game.user.isGM,
           onChange: (_event, active) => {
             const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
-            if (active) layer?.activateTool("polygon");
+            if (active) layer?.activateTool(TOOL_POLYGON);
             else layer?.activateTool(null);
+          }
+        },
+        [TOOL_RECTANGLE]: {
+          name: TOOL_RECTANGLE,
+          title: "SCENE_ELEVATION.Control.DrawRectangle",
+          icon: "fa-regular fa-square",
+          visible: game.user.isGM,
+          onChange: (_event, active) => {
+            const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+            if (active) layer?.activateTool(TOOL_RECTANGLE);
+            else layer?.activateTool(null);
+          }
+        },
+        [TOOL_CIRCLE]: {
+          name: TOOL_CIRCLE,
+          title: "SCENE_ELEVATION.Control.DrawCircle",
+          icon: "fa-regular fa-circle",
+          visible: game.user.isGM,
+          onChange: (_event, active) => {
+            const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+            if (active) layer?.activateTool(TOOL_CIRCLE);
+            else layer?.activateTool(null);
+          }
+        },
+        sceneSettings: {
+          name: "sceneSettings",
+          title: "SCENE_ELEVATION.Control.SceneSettings",
+          icon: "fa-solid fa-sliders",
+          button: true,
+          visible: game.user.isGM,
+          onChange: async () => {
+            await openSceneElevationSettingsDialog(canvas.scene);
+            canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.refreshElevationRegionVisibility();
+            canvas?.[ElevationAuthoringLayer.LAYER_NAME]?._drawPerspectiveHandle?.();
           }
         },
         showElevationRegions: {
@@ -378,6 +902,7 @@ export function registerElevationControls() {
             const current = game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS);
             const next = typeof active === "boolean" ? active : !current;
             await game.settings.set(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS, next);
+            canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.refreshElevationRegionVisibility();
           }
         }
       }
@@ -389,16 +914,47 @@ export function registerElevationControls() {
     if (!layer) return;
     const activeControl = controls.control?.name === "elevation";
     if (activeControl) {
-      const toolName = controls.tool?.name ?? "polygon";
-      if (toolName === "showElevationRegions") layer.refreshElevationRegionVisibility();
+      const requestedTool = controls.tool?.name ?? TOOL_SELECT;
+      const toolName = ELEVATION_TOOLS.has(requestedTool) ? requestedTool : TOOL_SELECT;
+      if (UTILITY_TOOLS.has(requestedTool)) {
+        layer.activateTool(TOOL_SELECT);
+        layer.refreshElevationRegionVisibility();
+      }
       else layer.activateTool(toolName);
+      layer.queueElevationRegionVisibilityRefresh();
     }
     else layer.deactivate();
   });
 
   for (const hook of ["createRegion", "updateRegion", "deleteRegion", "createRegionBehavior", "updateRegionBehavior", "deleteRegionBehavior"]) {
-    Hooks.on(hook, () => canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.refreshElevationRegionVisibility());
+    Hooks.on(hook, (doc) => {
+      const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+      if (hook === "updateRegion") layer?._noteRegionChanged("update", doc);
+      else if (hook === "deleteRegion") layer?._noteRegionChanged("delete", doc);
+      layer?.refreshElevationRegionVisibility();
+      layer?._drawPerspectiveHandle?.();
+    });
   }
+
+  // Re-assert visibility whenever Foundry refreshes/draws a Region placeable.
+  // Without this, switching from the native Regions control to our Elevation
+  // control can leave region area highlights visible until the user toggles
+  // away and back, because Foundry re-renders region placeables after our
+  // initial hide pass.
+  for (const hook of ["refreshRegion", "drawRegion"]) {
+    Hooks.on(hook, () => {
+      const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+      if (!layer || layer._activeTool === null) return;
+      layer.refreshElevationRegionVisibility();
+    });
+  }
+
+  Hooks.on("updateScene", scene => {
+    if (scene !== canvas?.scene) return;
+    const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+    layer?.refreshElevationRegionVisibility();
+    layer?._drawPerspectiveHandle?.();
+  });
 }
 
 function _normalizeRegionPath(path) {
@@ -424,4 +980,117 @@ function _regionPaths(region) {
     ?? [];
   const rawPaths = typeof raw[0] === "number" || _looksLikePoint(raw[0]) ? [raw] : raw;
   return rawPaths.map(_normalizeRegionPath).filter(path => path.length >= MIN_POLYGON_POINTS);
+}
+
+function _hoverElevationEntryAtPoint(point) {
+  const entries = getActiveElevationRegions(canvas.scene)
+    .filter(entry => _regionContainsPoint(entry.region, point))
+    .sort((left, right) => (left.area || Infinity) - (right.area || Infinity) || right.elevation - left.elevation);
+  return entries[0] ?? null;
+}
+
+function _regionContainsPoint(region, point) {
+  try {
+    if (region.testPoint?.({ x: point.x, y: point.y })) return true;
+  } catch (err) {}
+  try {
+    if (region.testPoint?.({ x: point.x, y: point.y, elevation: point.elevation ?? 0 })) return true;
+  } catch (err) {}
+  return _regionPaths(region).some(path => _pointInPolygon(point, path));
+}
+
+function _pointInPolygon(point, path) {
+  let inside = false;
+  for (let index = 0, previous = path.length - 1; index < path.length; previous = index++) {
+    const currentPoint = path[index];
+    const previousPoint = path[previous];
+    const intersects = (currentPoint.y > point.y) !== (previousPoint.y > point.y)
+      && point.x < ((previousPoint.x - currentPoint.x) * (point.y - currentPoint.y)) / ((previousPoint.y - currentPoint.y) || 1e-9) + currentPoint.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function _formatElevationLabel(elevation) {
+  const value = Number(elevation ?? 0);
+  if (!Number.isFinite(value)) return "0";
+  if (Number.isInteger(value)) return String(value);
+  return value.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+function _regionLayerPlaceables(regionLayer) {
+  const placeables = regionLayer.placeables ?? regionLayer.objects?.children ?? regionLayer.children ?? [];
+  return Array.from(placeables).filter(placeable => placeable?.document);
+}
+
+function _isElevationRegionDocument(document) {
+  return !!document?.behaviors?.some?.(behavior => behavior.type === REGION_BEHAVIOR_TYPE && !behavior.disabled);
+}
+
+function _randomRegionColor() {
+  return `#${Math.floor(Math.random() * 0xffffff).toString(16).padStart(6, "0")}`;
+}
+
+function _regionHighlightMode() {
+  return _regionChoiceByLabel("highlightMode", /true\s*shapes?/i, [
+    CONST.REGION_HIGHLIGHT_MODES?.TRUE_SHAPES,
+    CONST.REGION_HIGHLIGHT_MODES?.SHAPES,
+    CONST.REGION_HIGHLIGHT_MODES?.SHAPE,
+    "trueShapes",
+    "shapes",
+    "shape",
+    "coverage"
+  ]);
+}
+
+function _regionVisibility() {
+  return _regionChoiceByLabel("visibility", /region\s*layer/i, [
+    CONST.REGION_VISIBILITY?.LAYER,
+    CONST.REGION_VISIBILITY?.REGION_LAYER,
+    CONST.REGION_VISIBILITY?.CONTROL,
+    "layer",
+    "regionLayer",
+    CONST.REGION_VISIBILITY?.OBSERVER,
+    "observer"
+  ]);
+}
+
+function _regionChoiceByLabel(fieldName, labelPattern, fallbacks) {
+  const choices = _regionFieldChoices(fieldName);
+  for (const [value, label] of choices) {
+    if (labelPattern.test(_regionChoiceLabel(label))) return value;
+  }
+  const validValues = new Set(choices.map(([value]) => value));
+  for (const value of fallbacks) {
+    if (value == null) continue;
+    if (!validValues.size || validValues.has(value)) return value;
+  }
+  return choices[0]?.[0] ?? fallbacks.find(value => value != null);
+}
+
+function _regionFieldChoices(fieldName) {
+  const documentClass = CONFIG.Region?.documentClass ?? foundry.documents?.RegionDocument ?? foundry.documents?.BaseRegion;
+  const field = documentClass?.defineSchema?.()?.[fieldName];
+  const choices = field?.choices ?? field?.options?.choices ?? {};
+  if (choices instanceof Map) return Array.from(choices.entries());
+  if (Array.isArray(choices)) return choices.map(value => Array.isArray(value) ? value : [value, value]);
+  return Object.entries(choices).map(([value, label]) => [_coerceChoiceValue(value), label]);
+}
+
+function _regionChoiceLabel(label) {
+  if (typeof label === "string") return `${label} ${_localizedString(label)}`;
+  if (label && typeof label === "object") {
+    const nested = label.label ?? label.name ?? label.value ?? label.key;
+    if (typeof nested === "string") return `${nested} ${_localizedString(nested)}`;
+  }
+  return String(label ?? "");
+}
+
+function _localizedString(key) {
+  return game.i18n.localize(key);
+}
+
+function _coerceChoiceValue(value) {
+  if (typeof value !== "string" || !/^-?\d+$/.test(value)) return value;
+  return Number(value);
 }
