@@ -1,70 +1,94 @@
 {
+  "TYPES": {
+    "RegionBehavior": {
+      "scene-elevation-region.elevation": "Elevation"
+    }
+  },
   "SCENE_ELEVATION": {
     "Control": {
       "Group": "Elevation",
-      "Title": "Scene Elevation",
-      "Brush": "Elevation Brush",
-      "Eyedropper": "Pick Elevation",
-      "ToggleOverlay": "Toggle Elevation Overlay",
-      "ResetScene": "Reset Scene Elevation"
+      "DrawPolygon": "Draw Elevation Polygon",
+      "ShowElevationRegions": "Show Elevation Regions",
+      "RegionName": "Elevation Region {number}"
     },
-    "Brush": {
-      "PaletteTitle": "Elevation Brush",
-      "Size": "Size",
-      "SizeHint": "Brush radius in grid squares.",
-      "Height": "Height",
-      "HeightHint": "Elevation value painted at the brush center.",
-      "Fade": "Fade",
-      "FadeHint": "Edge softness (0% = sharp; 100% = full falloff to zero at edge).",
-      "Op": "Op",
-      "OpRaise": "Raise",
-      "OpLower": "Lower",
-      "OpSet": "Set",
-      "OpSmooth": "Smooth"
+    "Notify": {
+      "PolygonNeedsPoints": "Add at least three polygon points before creating an elevation region.",
+      "RegionCreated": "Elevation region created."
     },
     "Settings": {
       "Parallax": "Parallax Strength",
-      "ParallaxHint": "How strongly elevated areas shift relative to flat areas as the camera moves.",
+      "ParallaxHint": "Optional viewer-based motion for elevated overlays and transition texture. Off keeps overlays and transition textures stationary.",
+      "ParallaxOff": "Off",
+      "ParallaxVerySubtle": "Very subtle",
       "ParallaxSubtle": "Subtle",
       "ParallaxMedium": "Medium",
       "ParallaxStrong": "Strong",
+      "ParallaxMode": "Parallax Type",
+      "ParallaxModeHint": "Where camera movement is applied while panning. Raised card lift gives the strongest layer separation and works well with contour transitions.",
+      "ParallaxModeSlopeOnly": "Stable overlay + slope parallax",
+      "ParallaxModeHybrid": "Hybrid lift + texture drift",
+      "ParallaxModeAnchored": "Anchored texture drift",
+      "ParallaxModeEdgeBlend": "Blend-aware texture drift",
+      "ParallaxModeCard": "Raised card lift",
+      "ParallaxModeShadow": "Responsive shadow only",
+      "PerspectivePoint": "Perspective Point",
+      "PerspectivePointHint": "Anchor used by parallax and responsive shadows. Scene anchors keep one shared direction; Region anchors place the point on each Region, with Region center restoring the older camera-relative local direction.",
+      "PerspectivePointCenter": "Scene center",
+      "PerspectivePointTopLeft": "Top left",
+      "PerspectivePointTopRight": "Top right",
+      "PerspectivePointBottomLeft": "Bottom left",
+      "PerspectivePointBottomRight": "Bottom right",
+      "PerspectivePointRegionCenter": "Region center",
+      "PerspectivePointRegionTopLeft": "Region top left",
+      "PerspectivePointRegionTopRight": "Region top right",
+      "PerspectivePointRegionBottomLeft": "Region bottom left",
+      "PerspectivePointRegionBottomRight": "Region bottom right",
+      "TransitionMode": "Elevation Transition Style",
+      "TransitionModeHint": "Texture and shadow treatment at Region boundaries, used to read the edge as a slope or bridge between elevation layers.",
+      "BlendMode": "Elevation Transition Style",
+      "BlendModeHint": "Texture and shadow treatment at Region boundaries, used to read the edge as a slope or bridge between elevation layers.",
+      "BlendModeOff": "Off",
+      "BlendModeSoft": "Soft edge",
+      "BlendModeWide": "Wide transition",
+      "BlendModeDepthLip": "Depth lip",
+      "BlendModeSlope": "Contour stretch",
+      "BlendModeZBridge": "Z bridge",
+      "OverlayScale": "Overlay Scale",
+      "OverlayScaleHint": "Scale elevated overlays as positive elevation increases, making higher layers feel closer to the viewport.",
+      "OverlayScaleOff": "Off",
+      "OverlayScaleSubtle": "Subtle",
+      "OverlayScaleMedium": "Medium",
+      "OverlayScaleStrong": "Strong",
+      "ShadowMode": "Shadow Type",
+      "ShadowModeHint": "How elevated region shadows choose their direction while panning.",
+      "ShadowModeResponsive": "Responsive angle",
+      "ShadowModeFixedVisible": "Always-visible fixed cast",
+      "ShadowModeTopDown": "Top-down even cast",
       "TokenScale": "Scale tokens by elevation",
-      "TokenScaleHint": "Elevated tokens appear slightly larger to reinforce the 3D illusion.",
+      "TokenScaleHint": "Tokens inside elevated regions appear slightly larger to reinforce the 3D illusion.",
       "TokenScaleMax": "Maximum token scale",
       "TokenScaleMaxHint": "Upper bound on the elevation-derived token scale factor."
     },
-    "Notify": {
-      "ResetConfirmTitle": "Reset Elevation",
-      "ResetConfirm": "Clear all elevation data on this scene? This cannot be undone.",
-      "Reset": "Scene elevation cleared.",
-      "Picked": "Picked elevation: {value}"
-    },
     "RegionBehavior": {
+      "Label": "Elevation",
       "FIELDS": {
-        "height": { "label": "Height" },
-        "mode": { "label": "Mode" },
-        "fade": { "label": "Edge Fade (%)" },
-        "rampDirection": { "label": "Ramp Direction" },
-        "rampLength": { "label": "Ramp Length (squares)" }
-      },
-      "Height": "Height",
-      "Mode": "Mode",
-      "ModeSet": "Set",
-      "ModeAdd": "Add",
-      "ModePlateau": "Plateau",
-      "ModeRamp": "Ramp",
-      "Fade": "Edge Fade (%)",
-      "RampDirection": "Ramp Direction",
-      "RampLength": "Ramp Length (squares)"
-    },
-    "Wall": {
-      "Legend": "Scene Elevation",
-      "Thickness": "Thickness (squares)",
-      "ThicknessHint": "How far from the wall line elevation is applied. 0 disables.",
-      "Height": "Height",
-      "HeightHint": "Elevation value at the wall line.",
-      "Fade": "Edge Fade (%)",
-      "FadeHint": "0 = sharp; 100 = smooth falloff to the outer edge."
+        "elevation": {
+          "label": "Elevation",
+          "hint": "Flat elevation for this region. Non-zero elevations lift the map art inside the region as an overlay."
+        },
+        "shadowStrength": {
+          "label": "Shadow strength",
+          "hint": "Multiplier for this region's short contact shadow and soft drop shadow. Set to 0 to hide shadows from this region; high values are allowed for testing stronger casts."
+        },
+        "modifyTokenElevation": {
+          "label": "Modify token elevation",
+          "hint": "When a token moves into this region, include the region elevation in the same Token movement update. Tokens outside all Elevation regions are reset to 0."
+        },
+        "modifyTokenScaling": {
+          "label": "Modify token scaling",
+          "hint": "Scale tokens inside this region based on its elevation."
+        }
+      }
     }
   }
 }

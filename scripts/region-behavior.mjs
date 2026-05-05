@@ -1,61 +1,52 @@
-import { MODULE_ID, BRUSH } from "./config.mjs";
+import { SHADOW_STRENGTH_LIMITS } from "./config.mjs";
 
 const fields = foundry.data.fields;
 
 /**
  * RegionBehavior subtype: scene-elevation.elevation
  *
- * Adds a region-driven elevation contribution that composites on top of the
- * painted half-grid. Useful for plateaus, ramps, or quickly raising/lowering
- * a defined area without painting it manually.
- *
- * Modes:
- *   set     — assign `height` to all points inside the region (with edge fade)
- *   add     — add `height` on top of existing composite
- *   plateau — alias of `add` with sharp edges (kept for clarity)
- *   ramp    — interpolate 0..height across `rampLength` along `rampDirection`
+ * Defines a flat contour elevation for its parent Region. Visual depth is
+ * derived from elevation differences at region edges; token elevation and
+ * token scaling can be enabled per region.
  */
 export class ElevationRegionBehavior extends foundry.data.regionBehaviors.RegionBehaviorType {
   static LOCALIZATION_PREFIXES = ["SCENE_ELEVATION.RegionBehavior"];
 
   static defineSchema() {
     return {
-      height: new fields.NumberField({
+      elevation: new fields.NumberField({
         required: true, initial: 1,
-        min: BRUSH.HEIGHT_MIN, max: BRUSH.HEIGHT_MAX, step: 0.1,
-        label: "SCENE_ELEVATION.RegionBehavior.Height"
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.elevation.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.elevation.hint"
       }),
-      mode: new fields.StringField({
-        required: true, initial: "set",
-        choices: {
-          set: "SCENE_ELEVATION.RegionBehavior.ModeSet",
-          add: "SCENE_ELEVATION.RegionBehavior.ModeAdd",
-          plateau: "SCENE_ELEVATION.RegionBehavior.ModePlateau",
-          ramp: "SCENE_ELEVATION.RegionBehavior.ModeRamp"
-        },
-        label: "SCENE_ELEVATION.RegionBehavior.Mode"
+      shadowStrength: new fields.NumberField({
+        required: true,
+        initial: SHADOW_STRENGTH_LIMITS.DEFAULT,
+        min: SHADOW_STRENGTH_LIMITS.MIN,
+        max: SHADOW_STRENGTH_LIMITS.MAX,
+        step: SHADOW_STRENGTH_LIMITS.STEP,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowStrength.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowStrength.hint"
       }),
-      fade: new fields.NumberField({
-        required: true, initial: 0, min: 0, max: 100, step: 1,
-        label: "SCENE_ELEVATION.RegionBehavior.Fade"
+      modifyTokenElevation: new fields.BooleanField({
+        required: true,
+        initial: true,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.modifyTokenElevation.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.modifyTokenElevation.hint"
       }),
-      rampDirection: new fields.AngleField({
-        required: true, initial: 0,
-        label: "SCENE_ELEVATION.RegionBehavior.RampDirection"
-      }),
-      rampLength: new fields.NumberField({
-        required: true, initial: 5, min: 1, step: 1,
-        label: "SCENE_ELEVATION.RegionBehavior.RampLength"
+      modifyTokenScaling: new fields.BooleanField({
+        required: true,
+        initial: true,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.modifyTokenScaling.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.modifyTokenScaling.hint"
       })
     };
   }
 
-  /** No event-driven hooks; rebuild composite when the behavior changes. */
   static events = {};
 }
 
-/** Hook handler — invalidates composite + refreshes mesh whenever a relevant
- *  region or behavior changes on the active scene. */
+/** Hook handler — refreshes the renderer whenever a relevant region or behavior changes. */
 export function registerRegionHooks(invalidate) {
   const triggers = [
     "createRegion", "updateRegion", "deleteRegion",

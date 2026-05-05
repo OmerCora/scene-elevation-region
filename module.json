@@ -1,7 +1,7 @@
 {
   "id": "scene-elevation-region",
   "title": "Scene Elevation",
-  "description": "System-agnostic visual scene elevation. Paint elevation onto a half-grid of points to magnify and parallax portions of the scene background, simulating 3D relief on top-down 2D maps. V1: square grid, brush tool, parallax warp. (Inspired by CodexVTT.)",
+  "description": "System-agnostic visual scene elevation using Foundry Regions. Add an Elevation behavior to regions to create raised overlays or negative holes with transition texture, contact/drop or inward shadows, optional parallax modes, and token scaling on top-down maps.",
   "version": "0.1.0",
   "compatibility": {
     "minimum": "14",
@@ -9,7 +9,6 @@
   },
   "authors": [{ "name": "Author" }],
   "esmodules": ["scripts/module.mjs"],
-  "styles": ["styles/elevation.css"],
   "languages": [
     { "lang": "en", "name": "English", "path": "lang/en.json" }
   ],
