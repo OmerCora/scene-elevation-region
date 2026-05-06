@@ -1,4 +1,4 @@
-import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, EXTRUSION_STRENGTHS, EXTRUSION_PIXEL_FACTORS, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, sceneGeometry, getSceneElevationSetting } from "./config.mjs";
+import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, sceneGeometry, getSceneElevationSetting } from "./config.mjs";
 
 const MIN_ELEVATION_DELTA = 0.05;
 const OVERLAY_ELEVATION_REFERENCE = 6;
@@ -6,51 +6,34 @@ const OVERLAY_LIFT_BASE = 0.045;
 const OVERLAY_LIFT_PARALLAX = 0.12;
 const OVERLAY_LIFT_MAX_GRID = 0.35;
 const OVERLAY_LIFT_MAX_PIXELS = 28;
-const SMOOTH_PARALLAX_LERP = 0.18;
 const SMOOTH_PARALLAX_EPSILON = 0.35;
 const ANCHORED_CAMERA_MULTIPLIER = 0.75;
 const VELOCITY_CAMERA_MULTIPLIER = 0.9;
 const VELOCITY_PARALLAX_DECAY = 0.82;
 const ANCHORED_VELOCITY_ANCHOR_WEIGHT = 0.6;
 const ANCHORED_VELOCITY_DRIFT_WEIGHT = 0.55;
-const TEXTURE_SHIFT_MULTIPLIER = 0.58;
-const HYBRID_CARD_LIFT_RATIO = 0.28;
-const HYBRID_TEXTURE_SHIFT_RATIO = 0.5;
-const EDGE_BLEND_TEXTURE_SHIFT_RATIO = 0.55;
-const EDGE_BLEND_WIDTH_MIN = 2;
-const EDGE_BLEND_WIDTH_GRID_RATIO = 0.028;
-const EDGE_BLEND_WIDTH_ELEVATION_RATIO = 0.018;
-const EDGE_BLEND_WIDTH_PARALLAX_BONUS = 8;
-const EDGE_BLEND_WIDTH_MAX = 8;
+const CARD_TRANSITION_SHIFT_RATIO = 0.28;
+const TRANSITION_TEXTURE_SHIFT_RATIO = 0.55;
+const TRANSITION_WIDTH_MIN = 2;
+const TRANSITION_WIDTH_GRID_RATIO = 0.028;
+const TRANSITION_WIDTH_ELEVATION_RATIO = 0.018;
+const TRANSITION_WIDTH_PARALLAX_BONUS = 8;
+const TRANSITION_WIDTH_MAX = 8;
 const EDGE_GLUE_ALPHA_MAX = 0.45;
 const SLOPE_TEXTURE_ALPHA_MAX = 0.72;
-const PROJECTED_PATCH_ALPHA_MAX = 0.82;
-const PROJECTED_PATCH_STEPS_MIN = 5;
-const PROJECTED_PATCH_STEPS_MAX = 12;
-const PROJECTED_PATCH_DEPTH_MAX_GRID = 0.7;
-const HEIGHT_DEPTH_CAMERA_MULTIPLIER = 0.85;
-const EDGE_STRIP_SAMPLE_MIN_PIXELS = 2;
-const EDGE_STRIP_SAMPLE_MAX_PIXELS = 4;
-const EDGE_STRIP_STEPS_MAX = 18;
-const EDGE_STRIP_ALPHA_MAX = 0.9;
-const HEIGHT_DEPTH_DELTA_WEIGHT = 0.32;
 const SLOPE_DROP_MIN_PIXELS = 5;
 const SLOPE_DROP_MAX_PIXELS = 14;
-const CLIFF_WARP_DROP_MAX_PIXELS = 92;
-const CLIFF_WARP_STEPS = 10;
-const CLIFF_WARP_DEPTH_MAX_GRID = 1.45;
-const CLIFF_WARP_TEXTURE_ALPHA_MAX = 0.96;
+const CLIFF_WARP_ALPHA_MAX = 0.9;
+const CLIFF_WARP_LAYER_STEPS_MIN = 3;
+const CLIFF_WARP_LAYER_STEPS_MAX = 7;
+const CLIFF_WARP_DROP_MAX_PIXELS = 68;
+const CLIFF_WARP_STRETCH_STEPS = 5;
+const CLIFF_WARP_DEPTH_MAX_GRID = 1.05;
+const CLIFF_WARP_TEXTURE_ALPHA_MAX = 0.92;
 const STRONG_TOP_DOWN_SHADOW_MULTIPLIER = 2.35;
 const STRONG_TOP_DOWN_BLUR_MULTIPLIER = 1.55;
 const SUN_EDGE_SHADOW_ALPHA_MULTIPLIER = 1.25;
 const SUN_EDGE_SHADOW_LENGTH_MULTIPLIER = 1.2;
-const SLOPE_STRETCH_STEPS = 6;
-const SLOPE_STRETCH_SCALE_MIN = 1.006;
-const SLOPE_STRETCH_SCALE_MAX = 1.075;
-const Z_BRIDGE_STEPS = 11;
-const Z_BRIDGE_DROP_MAX_PIXELS = 18;
-const Z_BRIDGE_SCALE_MIN = 1.008;
-const Z_BRIDGE_SCALE_MAX = 1.12;
 const TRANSITION_MASK_BLUR_RATIO = 0.35;
 const INNER_SHADOW_WIDTH_GRID_RATIO = 0.14;
 const INNER_SHADOW_WIDTH_ELEVATION_RATIO = 0.05;
@@ -77,13 +60,23 @@ const SOFT_SHADOW_ALPHA_ELEVATION = 0.065;
 const CONTACT_SHADOW_ALPHA_BASE = 0.34;
 const CONTACT_SHADOW_ALPHA_ELEVATION = 0.11;
 const SHADOW_ALPHA_MAX = 0.85;
+const SHADOW_BRIDGE_THRESHOLD = 1.08;
+const SHADOW_BRIDGE_MAX_ALPHA_RATIO = 0.42;
+const SHADOW_BRIDGE_OFFSET_RATIO = 0.52;
+const TEXTURE_SHADOW_BRIDGE_ALPHA_RATIO = 0.72;
+const TEXTURE_MELD_SAMPLE_PULL = 0.68;
+const TEXTURE_MELD_SOFT_ALPHA = 0.46;
+const TEXTURE_MELD_CONTACT_ALPHA = 0.36;
+const TEXTURE_MELD_BLACK_ALPHA_RATIO = 0.58;
+const FULL_TEXTURE_MELD_SOFT_ALPHA = 0.62;
+const FULL_TEXTURE_MELD_CONTACT_ALPHA = 0.5;
 
 const BLEND_PROFILE_CONFIGS = Object.freeze({
   [BLEND_MODES.OFF]: Object.freeze({
     widthMultiplier: 0,
     widthAdd: 0,
     maxWidth: 0,
-    textureShiftRatio: EDGE_BLEND_TEXTURE_SHIFT_RATIO,
+    textureShiftRatio: TRANSITION_TEXTURE_SHIFT_RATIO,
     overlayAlpha: 1,
     glueAlpha: 0,
     glueBlurMultiplier: 0,
@@ -95,8 +88,8 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
   [BLEND_MODES.SOFT]: Object.freeze({
     widthMultiplier: 1,
     widthAdd: 0,
-    maxWidth: EDGE_BLEND_WIDTH_MAX,
-    textureShiftRatio: EDGE_BLEND_TEXTURE_SHIFT_RATIO,
+    maxWidth: TRANSITION_WIDTH_MAX,
+    textureShiftRatio: TRANSITION_TEXTURE_SHIFT_RATIO,
     overlayAlpha: 1,
     glueAlpha: 0,
     glueBlurMultiplier: 0,
@@ -118,106 +111,38 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
     slopeTextureShiftRatio: 0,
     slopeDropPixels: 0
   }),
-  [BLEND_MODES.DEPTH_LIP]: Object.freeze({
-    widthMultiplier: 1.2,
-    widthAdd: 1,
-    maxWidth: 11,
-    textureShiftRatio: 0.68,
-    overlayAlpha: 0.985,
-    glueAlpha: 0.16,
-    glueBlurMultiplier: 0.68,
-    slopeAlpha: 0,
-    slopeWidthMultiplier: 0,
-    slopeTextureShiftRatio: 0,
-    slopeDropPixels: 0
-  }),
-  [BLEND_MODES.PROJECTED_PATCH]: Object.freeze({
-    widthMultiplier: 2.35,
-    widthAdd: 7,
-    maxWidth: 42,
-    textureShiftRatio: 0.48,
-    overlayAlpha: 0.99,
-    glueAlpha: 0.1,
-    glueBlurMultiplier: 0.36,
-    slopeAlpha: 0.72,
-    slopeWidthMultiplier: 1.35,
-    slopeTextureShiftRatio: 0.55,
-    slopeDropPixels: 10,
-    dropMaxPixels: 16,
-    stretchAlpha: 0,
-    stretchSteps: 0,
-    bridgeBaseAlpha: 0,
-    projected: true,
-    projectedAlpha: 0.82,
-    projectedSteps: 9,
-    projectedDepthRatio: 0.72
-  }),
   [BLEND_MODES.CLIFF_WARP]: Object.freeze({
-    widthMultiplier: 4.2,
-    widthAdd: 18,
-    maxWidth: 110,
+    widthMultiplier: 3.4,
+    widthAdd: 12,
+    maxWidth: 72,
     textureShiftRatio: 0.22,
     overlayAlpha: 0.998,
-    glueAlpha: 0.3,
+    glueAlpha: 0.26,
     glueBlurMultiplier: 0.12,
-    slopeAlpha: 0.98,
+    slopeAlpha: 0.9,
     slopeAlphaMax: CLIFF_WARP_TEXTURE_ALPHA_MAX,
-    slopeWidthMultiplier: 3.7,
+    slopeWidthMultiplier: 2.8,
     slopeTextureShiftRatio: 0.18,
-    slopeDropPixels: 54,
+    slopeDropPixels: 38,
     dropMaxPixels: CLIFF_WARP_DROP_MAX_PIXELS,
-    stretchAlpha: 1,
-    stretchSteps: CLIFF_WARP_STEPS,
-    stretchScaleMin: 1.04,
-    stretchScaleMax: 1.45,
-    bridgeBaseAlpha: 0.78,
-    projected: true,
-    projectedAlpha: 0.95,
-    projectedAlphaMax: CLIFF_WARP_TEXTURE_ALPHA_MAX,
-    projectedSteps: 10,
-    projectedStepsMax: 13,
-    projectedDepthRatio: 1.65,
-    projectedDepthMaxGrid: CLIFF_WARP_DEPTH_MAX_GRID,
-    projectedDepthMinRatio: 0.55,
-    projectedScaleFactor: 0.72,
-    projectedWidthBase: 0.55,
-    projectedWidthElevationRatio: 0.65,
-    liftMultiplier: 2.4,
-    overlayScaleBonus: 0.015
-  }),
-  [BLEND_MODES.SLOPE]: Object.freeze({
-    widthMultiplier: 2.15,
-    widthAdd: 6,
-    maxWidth: 30,
-    textureShiftRatio: 0.5,
-    overlayAlpha: 0.985,
-    glueAlpha: 0.12,
-    glueBlurMultiplier: 0.36,
-    slopeAlpha: 0.72,
-    slopeWidthMultiplier: 2.2,
-    slopeTextureShiftRatio: 0.42,
-    slopeDropPixels: 12,
-    dropMaxPixels: SLOPE_DROP_MAX_PIXELS,
     stretchAlpha: 0.86,
-    stretchSteps: SLOPE_STRETCH_STEPS,
-    bridgeBaseAlpha: 0
-  }),
-  [BLEND_MODES.Z_BRIDGE]: Object.freeze({
-    widthMultiplier: 2.65,
-    widthAdd: 9,
-    maxWidth: 46,
-    textureShiftRatio: 0.38,
-    overlayAlpha: 0.998,
-    glueAlpha: 0.22,
-    glueBlurMultiplier: 0.18,
-    slopeAlpha: 0.86,
-    slopeWidthMultiplier: 2.75,
-    slopeTextureShiftRatio: 0.24,
-    slopeDropPixels: 16,
-    dropMaxPixels: Z_BRIDGE_DROP_MAX_PIXELS,
-    stretchAlpha: 1,
-    stretchSteps: Z_BRIDGE_STEPS,
-    bridgeBaseAlpha: 0.62
+    stretchSteps: CLIFF_WARP_STRETCH_STEPS,
+    stretchScaleMin: 1.03,
+    stretchScaleMax: 1.28,
+    bridgeBaseAlpha: 0.58,
+    cliffWarp: true,
+    cliffWarpAlpha: 0.86,
+    cliffWarpAlphaMax: CLIFF_WARP_ALPHA_MAX,
+    cliffWarpSteps: 4,
+    cliffWarpStepsMax: CLIFF_WARP_LAYER_STEPS_MAX,
+    cliffWarpDepthRatio: 1.18,
+    cliffWarpDepthMaxGrid: CLIFF_WARP_DEPTH_MAX_GRID,
+    cliffWarpDepthMinRatio: 0.45,
+    cliffWarpScaleFactor: 0.48,
+    cliffWarpWidthBase: 0.38,
+    cliffWarpWidthElevationRatio: 0.42,
+    liftMultiplier: 1.9,
+    overlayScaleBonus: 0.015
   })
 });
 
@@ -238,6 +163,9 @@ export function getActiveElevationRegions(scene = canvas?.scene) {
       elevation,
       shadowStrength: Math.clamp(Number.isFinite(shadowStrength) ? shadowStrength : SHADOW_STRENGTH_LIMITS.DEFAULT, SHADOW_STRENGTH_LIMITS.MIN, SHADOW_STRENGTH_LIMITS.MAX),
       area: _regionArea(region),
+      parallaxModeOverride: _settingOverride(behavior.system?.parallaxModeOverride ?? sourceSystem.parallaxModeOverride, PARALLAX_MODES),
+      shadowModeOverride: _settingOverride(behavior.system?.shadowModeOverride ?? sourceSystem.shadowModeOverride, SHADOW_MODES),
+      blendModeOverride: _settingOverride(behavior.system?.blendModeOverride ?? sourceSystem.blendModeOverride, BLEND_MODES),
       modifyTokenElevation: behavior.system?.modifyTokenElevation !== false,
       modifyTokenScaling: behavior.system?.modifyTokenScaling !== false
     });
@@ -276,6 +204,11 @@ export function getRegionElevationStateAtPoint(point, scene = canvas?.scene, ent
 
 export function getRegionElevationAtPoint(point, scene = canvas?.scene, entries = null, options = {}) {
   return getRegionElevationStateAtPoint(point, scene, entries, options).elevation;
+}
+
+function _settingOverride(value, options) {
+  const override = String(value ?? "");
+  return Object.values(options).includes(override) ? override : "";
 }
 
 function _regionContains(region, point) {
@@ -597,13 +530,16 @@ export class RegionElevationRenderer {
     const overlayScaleStrength = _overlayScaleStrength();
     const shadowMode = _shadowMode();
     const depthScale = _depthScale();
-    const extrusionStrength = _extrusionStrength();
+    const shadowLength = _shadowLength();
     for (const visual of this._entries) {
+      const visualParallaxMode = visual.entry.parallaxModeOverride || parallaxMode;
+      const visualBlendMode = visual.entry.blendModeOverride || blendMode;
+      const visualShadowMode = visual.entry.shadowModeOverride || shadowMode;
       const perspectivePoint = _perspectivePoint(geo, visual.bounds);
-      const params = this._regionVisualParameters(visual, geo, parallax, parallaxMode, blendMode, overlayScaleStrength, shadowMode, perspectivePoint, depthScale, extrusionStrength);
+      const params = this._regionVisualParameters(visual, geo, parallax, visualParallaxMode, visualBlendMode, overlayScaleStrength, visualShadowMode, perspectivePoint, depthScale, shadowLength);
       this._visualParams.set(this._parallaxStateKey(visual), params);
       if (!params.isHole) {
-        const shadow = this._createShadow(visual.paths, params);
+        const shadow = this._createShadow(visual.paths, texture, geo, params);
         if (shadow) {
           this._applyRegionTransform(shadow, params, { includeOverlayOffset: false });
           this.container.addChild(shadow);
@@ -659,7 +595,7 @@ export class RegionElevationRenderer {
     return _validTexture(texture) ? texture : null;
   }
 
-  _regionVisualParameters(visual, geo, parallax, parallaxMode, blendMode, overlayScaleStrength, shadowMode, perspectivePoint, depthScale = DEPTH_SCALES.COMPRESSED, extrusionStrength = EXTRUSION_STRENGTHS.OFF) {
+  _regionVisualParameters(visual, geo, parallax, parallaxMode, blendMode, overlayScaleStrength, shadowMode, perspectivePoint, depthScale = DEPTH_SCALES.COMPRESSED, shadowLength = 1) {
     const gridSize = geo.gridSize;
     const { entry, bounds } = visual;
     const reference = DEPTH_SCALE_REFERENCE[depthScale] ?? DEPTH_SCALE_REFERENCE[DEPTH_SCALES.COMPRESSED];
@@ -674,9 +610,13 @@ export class RegionElevationRenderer {
     const sunShadow = _sunShadowState(shadowMode, geo, bounds);
     const shadowDirection = sunShadow?.direction ?? this._shadowDirection(bounds, parallax, shadowMode, perspectivePoint);
     const blendProfile = this._blendProfile(blendMode);
+    const shadowDisabled = shadowMode === SHADOW_MODES.OFF;
+    const textureMeldShadow = shadowMode === SHADOW_MODES.TEXTURE_MELD;
+    const fullTextureMeldShadow = shadowMode === SHADOW_MODES.FULL_TEXTURE_MELD;
+    const textureShadow = textureMeldShadow || fullTextureMeldShadow;
     const strongTopDownShadow = shadowMode === SHADOW_MODES.TOP_DOWN_STRONG;
     const shadowAlphaMultiplier = sunShadow?.alphaMultiplier ?? 1;
-    const shadowLengthMultiplier = sunShadow?.lengthMultiplier ?? 1;
+    const shadowLengthMultiplier = (sunShadow?.lengthMultiplier ?? 1) * _shadowLengthMultiplier(shadowLength);
     const shadowBlurMultiplier = sunShadow?.blurMultiplier ?? 1;
     const sign = isHole ? -1 : 1;
     const overlayScaleDepth = _overlayScaleDepthFactor(absElevation, reference, depthScale);
@@ -698,8 +638,9 @@ export class RegionElevationRenderer {
     const parallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, lift, sign, parallax) : { x: 0, y: 0 };
     const blendDirection = parallax > 0 ? (_vectorDirection(parallaxVector) ?? baseParallaxDirection) : STATIC_SHADOW_DIRECTION;
     const overlayOffset = this._overlayOffsetForMode(parallaxVector, parallaxMode);
-    const textureShift = this._textureShiftForMode(parallaxVector, parallaxMode, blendProfile);
+    const textureShift = { x: 0, y: 0 };
     const transitionShift = this._transitionShiftForMode(parallaxVector, parallaxMode, blendProfile);
+    const longShadowBlend = Math.clamp((shadowLengthMultiplier - SHADOW_BRIDGE_THRESHOLD) / 2.6, 0, 1);
     const softShadowOffset = {
       x: shadowDirection.x * lift * SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign,
       y: shadowDirection.y * lift * SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign
@@ -709,19 +650,22 @@ export class RegionElevationRenderer {
       y: shadowDirection.y * lift * CONTACT_SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign
     };
     const shadowStrength = Math.clamp(entry.shadowStrength ?? SHADOW_STRENGTH_LIMITS.DEFAULT, SHADOW_STRENGTH_LIMITS.MIN, SHADOW_STRENGTH_LIMITS.MAX);
+    const blackShadowRatio = fullTextureMeldShadow ? 0 : textureMeldShadow ? TEXTURE_MELD_BLACK_ALPHA_RATIO : 1;
+    const softShadowAlphaBase = shadowDisabled ? 0 : (SOFT_SHADOW_ALPHA_BASE + normalized * SOFT_SHADOW_ALPHA_ELEVATION) * shadowStrength * shadowAlphaMultiplier * blackShadowRatio * (strongTopDownShadow ? STRONG_TOP_DOWN_SHADOW_MULTIPLIER : 1);
+    const contactShadowAlphaBase = shadowDisabled ? 0 : (CONTACT_SHADOW_ALPHA_BASE + normalized * CONTACT_SHADOW_ALPHA_ELEVATION) * shadowStrength * shadowAlphaMultiplier * blackShadowRatio * (strongTopDownShadow ? STRONG_TOP_DOWN_SHADOW_MULTIPLIER : 1);
+    const textureSoftShadowAlphaBase = textureShadow && !shadowDisabled ? Math.clamp((fullTextureMeldShadow ? FULL_TEXTURE_MELD_SOFT_ALPHA : TEXTURE_MELD_SOFT_ALPHA) * shadowStrength * shadowAlphaMultiplier * (0.72 + normalized * 0.28), 0, fullTextureMeldShadow ? 0.98 : 0.92) : 0;
+    const textureContactShadowAlphaBase = textureShadow && !shadowDisabled ? Math.clamp((fullTextureMeldShadow ? FULL_TEXTURE_MELD_CONTACT_ALPHA : TEXTURE_MELD_CONTACT_ALPHA) * shadowStrength * shadowAlphaMultiplier * (0.72 + normalized * 0.28), 0, fullTextureMeldShadow ? 0.92 : 0.82) : 0;
     const blendWidth = this._blendWidth(gridSize, transitionNormalized, parallax, blendProfile);
-    const edgeGlueAlpha = blendWidth > 0
+    const edgeGlueAlpha = !shadowDisabled && blendWidth > 0
       ? Math.clamp(blendProfile.glueAlpha * shadowStrength * (0.65 + transitionNormalized * 0.35), 0, EDGE_GLUE_ALPHA_MAX)
       : 0;
-    const projectedStrength = EXTRUSION_PIXEL_FACTORS[extrusionStrength] ?? 0;
-    const edgeStripPatch = extrusionStrength === EXTRUSION_STRENGTHS.EDGE_STRETCH;
-    const projectedActive = !isHole && absElevation > 0 && (blendProfile.projected || projectedStrength > 0 || edgeStripPatch);
+    const cliffWarpActive = !isHole && absElevation > 0 && !!blendProfile.cliffWarp;
     let slopeWidth = blendWidth > 0 ? Math.clamp(blendWidth * blendProfile.slopeWidthMultiplier, 0, blendProfile.maxWidth * 1.9) : 0;
     let slopeDropMaxPixels = Number(blendProfile.dropMaxPixels ?? SLOPE_DROP_MAX_PIXELS);
     let slopeDropPixels = Math.clamp(blendProfile.slopeDropPixels * (0.75 + transitionNormalized * 0.25), SLOPE_DROP_MIN_PIXELS, slopeDropMaxPixels);
     let slopeStretchPixels = slopeWidth > 0 ? Math.clamp(slopeDropPixels + blendWidth * 0.35, SLOPE_DROP_MIN_PIXELS, slopeDropMaxPixels) : 0;
-    const slopeStretchScaleMin = blendProfile.stretchScaleMin ?? (blendProfile.bridgeBaseAlpha ? Z_BRIDGE_SCALE_MIN : SLOPE_STRETCH_SCALE_MIN);
-    const slopeStretchScaleMax = blendProfile.stretchScaleMax ?? (blendProfile.bridgeBaseAlpha ? Z_BRIDGE_SCALE_MAX : SLOPE_STRETCH_SCALE_MAX);
+    const slopeStretchScaleMin = blendProfile.stretchScaleMin ?? 1;
+    const slopeStretchScaleMax = blendProfile.stretchScaleMax ?? 1;
     let slopeStretchScale = slopeWidth > 0
       ? Math.clamp(
         1 + (slopeStretchPixels * 2) / Math.max(bounds.width, bounds.height, gridSize),
@@ -734,56 +678,30 @@ export class RegionElevationRenderer {
     let slopeStretchStepsBase = Number(blendProfile.stretchSteps ?? 0);
     let bridgeBaseAlphaBase = blendProfile.bridgeBaseAlpha ?? 0;
     let slopeTextureShiftRatio = blendProfile.slopeTextureShiftRatio;
-    let projectedPatchAlpha = 0;
-    let projectedPatchSteps = 0;
-    let projectedPatchShift = { x: 0, y: 0 };
-    let projectedPatchScaleDelta = 0;
-    let edgeStripAlpha = 0;
-    let edgeStripSampleWidth = 0;
-    let edgeStripSteps = 0;
-    let edgeStripTextureShift = { x: 0, y: 0 };
-    let edgeStripTargetShift = { x: 0, y: 0 };
-    if (projectedActive) {
-      const projectedIntensity = Math.max(projectedStrength, blendProfile.projected ? 0.65 : 0);
-      const projectedWidthRatio = (blendProfile.projectedWidthBase ?? 0.18) + transitionNormalized * (blendProfile.projectedWidthElevationRatio ?? 0.18);
-      slopeWidth = Math.max(slopeWidth, Math.min(blendProfile.maxWidth, gridSize * projectedWidthRatio));
-      slopeAlphaBase = Math.max(slopeAlphaBase, blendProfile.projectedAlpha ?? 0.68);
-      const projectedDepth = Math.clamp(
-        lift * (blendProfile.projectedDepthRatio ?? 0.65) * (0.6 + projectedIntensity * 0.55),
-        slopeWidth * (blendProfile.projectedDepthMinRatio ?? 0.35),
-        gridSize * (blendProfile.projectedDepthMaxGrid ?? PROJECTED_PATCH_DEPTH_MAX_GRID)
+    let cliffWarpAlpha = 0;
+    let cliffWarpSteps = 0;
+    let cliffWarpShift = { x: 0, y: 0 };
+    let cliffWarpScaleDelta = 0;
+    if (cliffWarpActive) {
+      const cliffWarpWidthRatio = (blendProfile.cliffWarpWidthBase ?? 0.18) + transitionNormalized * (blendProfile.cliffWarpWidthElevationRatio ?? 0.18);
+      slopeWidth = Math.max(slopeWidth, Math.min(blendProfile.maxWidth, gridSize * cliffWarpWidthRatio));
+      slopeAlphaBase = Math.max(slopeAlphaBase, blendProfile.cliffWarpAlpha ?? 0.68);
+      const cliffWarpDepth = Math.clamp(
+        lift * (blendProfile.cliffWarpDepthRatio ?? 0.65),
+        slopeWidth * (blendProfile.cliffWarpDepthMinRatio ?? 0.35),
+        gridSize * (blendProfile.cliffWarpDepthMaxGrid ?? CLIFF_WARP_DEPTH_MAX_GRID)
       );
-      projectedPatchShift = {
-        x: textureShift.x + overlayOffset.x + blendDirection.x * projectedDepth * sign,
-        y: textureShift.y + overlayOffset.y + blendDirection.y * projectedDepth * sign
+      cliffWarpShift = {
+        x: textureShift.x + overlayOffset.x + blendDirection.x * cliffWarpDepth * sign,
+        y: textureShift.y + overlayOffset.y + blendDirection.y * cliffWarpDepth * sign
       };
-      projectedPatchScaleDelta = (overlayScale - 1) + (projectedDepth / Math.max(bounds.width, bounds.height, gridSize)) * (blendProfile.projectedScaleFactor ?? 0.18);
-      projectedPatchSteps = Math.clamp(
-        Math.round((blendProfile.projectedSteps ?? 8) + projectedIntensity * 4 + transitionNormalized * 2),
-        PROJECTED_PATCH_STEPS_MIN,
-        Math.max(PROJECTED_PATCH_STEPS_MAX, blendProfile.projectedStepsMax ?? PROJECTED_PATCH_STEPS_MAX)
+      cliffWarpScaleDelta = (overlayScale - 1) + (cliffWarpDepth / Math.max(bounds.width, bounds.height, gridSize)) * (blendProfile.cliffWarpScaleFactor ?? 0.18);
+      cliffWarpSteps = Math.clamp(
+        Math.round((blendProfile.cliffWarpSteps ?? 4) + transitionNormalized * 1.5),
+        CLIFF_WARP_LAYER_STEPS_MIN,
+        blendProfile.cliffWarpStepsMax ?? CLIFF_WARP_LAYER_STEPS_MAX
       );
-      projectedPatchAlpha = Math.clamp((blendProfile.projectedAlpha ?? 0.72) * shadowStrength * (0.72 + transitionNormalized * 0.28), 0, blendProfile.projectedAlphaMax ?? PROJECTED_PATCH_ALPHA_MAX);
-      if (edgeStripPatch) {
-        edgeStripSampleWidth = Math.clamp(2 + transitionNormalized * 2, EDGE_STRIP_SAMPLE_MIN_PIXELS, EDGE_STRIP_SAMPLE_MAX_PIXELS);
-        edgeStripTextureShift = textureShift;
-        edgeStripTargetShift = {
-          x: contactShadowOffset.x + overlayOffset.x * 0.45,
-          y: contactShadowOffset.y + overlayOffset.y * 0.45
-        };
-        if (Math.hypot(edgeStripTargetShift.x, edgeStripTargetShift.y) < edgeStripSampleWidth) {
-          edgeStripTargetShift = {
-            x: blendDirection.x * Math.max(slopeWidth, edgeStripSampleWidth * 3) * sign,
-            y: blendDirection.y * Math.max(slopeWidth, edgeStripSampleWidth * 3) * sign
-          };
-        }
-        edgeStripTargetShift = _limitVector(edgeStripTargetShift, gridSize * 0.85);
-        const stripDistance = Math.hypot(edgeStripTargetShift.x, edgeStripTargetShift.y);
-        edgeStripSteps = Math.min(EDGE_STRIP_STEPS_MAX, Math.max(6, Math.ceil(stripDistance / Math.max(1, edgeStripSampleWidth)) + 3));
-        edgeStripAlpha = Math.clamp((0.62 + transitionNormalized * 0.24) * shadowStrength, 0, EDGE_STRIP_ALPHA_MAX);
-        slopeWidth = Math.max(slopeWidth, Math.clamp(edgeStripSampleWidth + stripDistance * 0.35, edgeStripSampleWidth * 2, gridSize * 0.55));
-        projectedPatchAlpha = 0;
-      }
+      cliffWarpAlpha = Math.clamp((blendProfile.cliffWarpAlpha ?? 0.72) * shadowStrength * (0.72 + transitionNormalized * 0.28), 0, blendProfile.cliffWarpAlphaMax ?? CLIFF_WARP_ALPHA_MAX);
     }
     const slopeTextureShift = slopeWidth > 0
       ? {
@@ -791,7 +709,7 @@ export class RegionElevationRenderer {
         y: transitionShift.y * slopeTextureShiftRatio + blendDirection.y * slopeDropPixels * sign
       }
       : { x: 0, y: 0 };
-    const useProjectionPerspective = bridgeBaseAlphaBase > 0 || projectedActive;
+    const useProjectionPerspective = bridgeBaseAlphaBase > 0 || cliffWarpActive;
     const innerShadowWidth = Math.clamp(
       gridSize * (INNER_SHADOW_WIDTH_GRID_RATIO + normalized * INNER_SHADOW_WIDTH_ELEVATION_RATIO),
       6,
@@ -802,6 +720,33 @@ export class RegionElevationRenderer {
       3,
       gridSize * 0.22
     );
+    const softShadowBlur = Math.clamp(
+      gridSize * (SOFT_SHADOW_BLUR_GRID_RATIO + normalized * SOFT_SHADOW_BLUR_ELEVATION_RATIO) * (0.8 + shadowStrength * 0.16) * shadowBlurMultiplier * (strongTopDownShadow ? STRONG_TOP_DOWN_BLUR_MULTIPLIER : 1),
+      SOFT_SHADOW_BLUR_MIN,
+      gridSize * (strongTopDownShadow ? 0.9 : 0.48)
+    );
+    const contactShadowBlur = Math.clamp(
+      gridSize * (CONTACT_SHADOW_BLUR_GRID_RATIO + normalized * CONTACT_SHADOW_BLUR_ELEVATION_RATIO) * (0.85 + shadowStrength * 0.12) * shadowBlurMultiplier * (strongTopDownShadow ? STRONG_TOP_DOWN_BLUR_MULTIPLIER : 1),
+      CONTACT_SHADOW_BLUR_MIN,
+      gridSize * (strongTopDownShadow ? 0.36 : 0.16)
+    );
+    const bridgeShadowOffset = {
+      x: contactShadowOffset.x + (softShadowOffset.x - contactShadowOffset.x) * SHADOW_BRIDGE_OFFSET_RATIO,
+      y: contactShadowOffset.y + (softShadowOffset.y - contactShadowOffset.y) * SHADOW_BRIDGE_OFFSET_RATIO
+    };
+    const shadowSeparation = Math.hypot(softShadowOffset.x - contactShadowOffset.x, softShadowOffset.y - contactShadowOffset.y);
+    const shadowBridgeBlend = shadowSeparation > 2 ? longShadowBlend : 0;
+    const bridgeShadowBlur = Math.clamp(
+      Math.max(contactShadowBlur + (softShadowBlur - contactShadowBlur) * 0.62, shadowSeparation * 0.18),
+      CONTACT_SHADOW_BLUR_MIN,
+      gridSize * (strongTopDownShadow ? 0.7 : 0.42)
+    );
+    const bridgeShadowAlpha = shadowBridgeBlend > 0
+      ? Math.clamp(Math.max(softShadowAlphaBase, contactShadowAlphaBase) * SHADOW_BRIDGE_MAX_ALPHA_RATIO * shadowBridgeBlend, 0, SHADOW_ALPHA_MAX * 0.52)
+      : 0;
+    const textureBridgeShadowAlpha = shadowBridgeBlend > 0
+      ? Math.clamp(Math.max(textureSoftShadowAlphaBase, textureContactShadowAlphaBase) * TEXTURE_SHADOW_BRIDGE_ALPHA_RATIO * shadowBridgeBlend, 0, fullTextureMeldShadow ? 0.9 : 0.78)
+      : 0;
     return {
       isHole,
       center: bounds.center,
@@ -818,21 +763,20 @@ export class RegionElevationRenderer {
       slopeStretchSteps: slopeWidth > 0 ? Math.max(0, slopeStretchStepsBase) : 0,
       slopeStretchAlpha: slopeWidth > 0 ? Math.clamp(slopeStretchAlphaBase * (0.72 + transitionNormalized * 0.28), 0, 1) : 0,
       bridgeBaseAlpha: slopeWidth > 0 ? Math.clamp(bridgeBaseAlphaBase * (0.68 + transitionNormalized * 0.32), 0, 1) : 0,
-      projectedPatch: projectedActive,
-      projectedPatchAlpha,
-      projectedPatchSteps,
-      projectedPatchShift,
-      projectedPatchScaleDelta,
-      edgeStripPatch,
-      edgeStripAlpha,
-      edgeStripSampleWidth,
-      edgeStripSteps,
-      edgeStripTextureShift,
-      edgeStripTargetShift,
+      cliffWarp: cliffWarpActive,
+      cliffWarpAlpha,
+      cliffWarpSteps,
+      cliffWarpShift,
+      cliffWarpScaleDelta,
+      textureMeldShadow: textureShadow,
+      textureSoftShadowAlpha: textureSoftShadowAlphaBase,
+      textureBridgeShadowAlpha,
+      textureContactShadowAlpha: textureContactShadowAlphaBase,
       overlayAlpha: blendWidth > 0 ? blendProfile.overlayAlpha : 1,
       edgeGlueAlpha,
       edgeGlueBlur: Math.clamp(blendWidth * blendProfile.glueBlurMultiplier, 0, blendWidth * 1.7),
       softShadowOffset,
+      bridgeShadowOffset,
       contactShadowOffset,
       innerShadowOffset: {
         x: shadowDirection.x * lift * INNER_SHADOW_OFFSET_MULTIPLIER,
@@ -840,60 +784,26 @@ export class RegionElevationRenderer {
       },
       innerShadowWidth,
       innerContactWidth: Math.max(4, innerShadowWidth * 0.62),
-      innerShadowAlpha: Math.clamp((INNER_SHADOW_ALPHA_BASE + normalized * INNER_SHADOW_ALPHA_ELEVATION) * shadowStrength, 0, INNER_SHADOW_ALPHA_MAX),
-      innerContactAlpha: Math.clamp((INNER_CONTACT_ALPHA_BASE + normalized * INNER_CONTACT_ALPHA_ELEVATION) * shadowStrength, 0, INNER_SHADOW_ALPHA_MAX),
+      innerShadowAlpha: shadowDisabled ? 0 : Math.clamp((INNER_SHADOW_ALPHA_BASE + normalized * INNER_SHADOW_ALPHA_ELEVATION) * shadowStrength, 0, INNER_SHADOW_ALPHA_MAX),
+      innerContactAlpha: shadowDisabled ? 0 : Math.clamp((INNER_CONTACT_ALPHA_BASE + normalized * INNER_CONTACT_ALPHA_ELEVATION) * shadowStrength, 0, INNER_SHADOW_ALPHA_MAX),
       innerShadowBlur,
       innerContactBlur: Math.max(2, innerShadowBlur * 0.48),
-      softShadowAlpha: Math.clamp((SOFT_SHADOW_ALPHA_BASE + normalized * SOFT_SHADOW_ALPHA_ELEVATION) * shadowStrength * shadowAlphaMultiplier * (strongTopDownShadow ? STRONG_TOP_DOWN_SHADOW_MULTIPLIER : 1), 0, strongTopDownShadow ? 1 : SHADOW_ALPHA_MAX),
-      contactShadowAlpha: Math.clamp((CONTACT_SHADOW_ALPHA_BASE + normalized * CONTACT_SHADOW_ALPHA_ELEVATION) * shadowStrength * shadowAlphaMultiplier * (strongTopDownShadow ? STRONG_TOP_DOWN_SHADOW_MULTIPLIER : 1), 0, strongTopDownShadow ? 1 : SHADOW_ALPHA_MAX),
-      softShadowBlur: Math.clamp(
-        gridSize * (SOFT_SHADOW_BLUR_GRID_RATIO + normalized * SOFT_SHADOW_BLUR_ELEVATION_RATIO) * (0.8 + shadowStrength * 0.16) * shadowBlurMultiplier * (strongTopDownShadow ? STRONG_TOP_DOWN_BLUR_MULTIPLIER : 1),
-        SOFT_SHADOW_BLUR_MIN,
-        gridSize * (strongTopDownShadow ? 0.9 : 0.48)
-      ),
-      contactShadowBlur: Math.clamp(
-        gridSize * (CONTACT_SHADOW_BLUR_GRID_RATIO + normalized * CONTACT_SHADOW_BLUR_ELEVATION_RATIO) * (0.85 + shadowStrength * 0.12) * shadowBlurMultiplier * (strongTopDownShadow ? STRONG_TOP_DOWN_BLUR_MULTIPLIER : 1),
-        CONTACT_SHADOW_BLUR_MIN,
-        gridSize * (strongTopDownShadow ? 0.36 : 0.16)
-      )
+      softShadowAlpha: Math.clamp(softShadowAlphaBase, 0, strongTopDownShadow ? 1 : SHADOW_ALPHA_MAX),
+      bridgeShadowAlpha,
+      contactShadowAlpha: Math.clamp(contactShadowAlphaBase, 0, strongTopDownShadow ? 1 : SHADOW_ALPHA_MAX),
+      softShadowBlur,
+      bridgeShadowBlur,
+      contactShadowBlur
     };
   }
 
   _overlayOffsetForMode(parallaxVector, parallaxMode) {
     switch (parallaxMode) {
       case PARALLAX_MODES.CARD:
-      case PARALLAX_MODES.SMOOTH_CARD:
       case PARALLAX_MODES.ANCHORED_CARD:
       case PARALLAX_MODES.VELOCITY_CARD:
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
-      case PARALLAX_MODES.HEIGHT_DEPTH_CARD:
         return parallaxVector;
-      case PARALLAX_MODES.HYBRID:
-        return { x: parallaxVector.x * HYBRID_CARD_LIFT_RATIO, y: parallaxVector.y * HYBRID_CARD_LIFT_RATIO };
-      case PARALLAX_MODES.SLOPE_ONLY:
-      case PARALLAX_MODES.ANCHORED:
-      case PARALLAX_MODES.EDGE_BLEND:
-      case PARALLAX_MODES.SHADOW:
-      default:
-        return { x: 0, y: 0 };
-    }
-  }
-
-  _textureShiftForMode(parallaxVector, parallaxMode, blendProfile) {
-    switch (parallaxMode) {
-      case PARALLAX_MODES.ANCHORED:
-        return { x: parallaxVector.x * TEXTURE_SHIFT_MULTIPLIER, y: parallaxVector.y * TEXTURE_SHIFT_MULTIPLIER };
-      case PARALLAX_MODES.EDGE_BLEND:
-        return { x: parallaxVector.x * blendProfile.textureShiftRatio, y: parallaxVector.y * blendProfile.textureShiftRatio };
-      case PARALLAX_MODES.HYBRID:
-        return { x: parallaxVector.x * HYBRID_TEXTURE_SHIFT_RATIO, y: parallaxVector.y * HYBRID_TEXTURE_SHIFT_RATIO };
-      case PARALLAX_MODES.CARD:
-      case PARALLAX_MODES.SMOOTH_CARD:
-      case PARALLAX_MODES.ANCHORED_CARD:
-      case PARALLAX_MODES.VELOCITY_CARD:
-      case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
-      case PARALLAX_MODES.HEIGHT_DEPTH_CARD:
-      case PARALLAX_MODES.SLOPE_ONLY:
       case PARALLAX_MODES.SHADOW:
       default:
         return { x: 0, y: 0 };
@@ -902,20 +812,11 @@ export class RegionElevationRenderer {
 
   _transitionShiftForMode(parallaxVector, parallaxMode, blendProfile) {
     switch (parallaxMode) {
-      case PARALLAX_MODES.SLOPE_ONLY:
-      case PARALLAX_MODES.EDGE_BLEND:
-        return { x: parallaxVector.x * blendProfile.textureShiftRatio, y: parallaxVector.y * blendProfile.textureShiftRatio };
-      case PARALLAX_MODES.ANCHORED:
-        return { x: parallaxVector.x * TEXTURE_SHIFT_MULTIPLIER, y: parallaxVector.y * TEXTURE_SHIFT_MULTIPLIER };
-      case PARALLAX_MODES.HYBRID:
-        return { x: parallaxVector.x * HYBRID_TEXTURE_SHIFT_RATIO, y: parallaxVector.y * HYBRID_TEXTURE_SHIFT_RATIO };
       case PARALLAX_MODES.CARD:
-      case PARALLAX_MODES.SMOOTH_CARD:
       case PARALLAX_MODES.ANCHORED_CARD:
       case PARALLAX_MODES.VELOCITY_CARD:
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
-      case PARALLAX_MODES.HEIGHT_DEPTH_CARD:
-        return { x: parallaxVector.x * HYBRID_CARD_LIFT_RATIO, y: parallaxVector.y * HYBRID_CARD_LIFT_RATIO };
+        return { x: parallaxVector.x * CARD_TRANSITION_SHIFT_RATIO, y: parallaxVector.y * CARD_TRANSITION_SHIFT_RATIO };
       case PARALLAX_MODES.SHADOW:
       default:
         return { x: 0, y: 0 };
@@ -924,31 +825,15 @@ export class RegionElevationRenderer {
 
   _parallaxVectorForMode(visual, baseVector, parallaxMode, lift, sign, parallax) {
     switch (parallaxMode) {
-      case PARALLAX_MODES.SMOOTH_CARD:
-        return this._smoothParallaxVector(visual, baseVector);
       case PARALLAX_MODES.ANCHORED_CARD:
         return this._anchoredParallaxVector(visual, lift, sign, parallax);
       case PARALLAX_MODES.VELOCITY_CARD:
         return this._velocityParallaxVector(visual, lift, sign, parallax);
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
         return this._anchoredVelocityParallaxVector(visual, lift, sign, parallax);
-      case PARALLAX_MODES.HEIGHT_DEPTH_CARD:
-        return this._heightDepthParallaxVector(visual, lift, sign, parallax);
       default:
         return baseVector;
     }
-  }
-
-  _smoothParallaxVector(visual, target) {
-    const state = this._parallaxStateFor(visual);
-    const current = state.smoothVector ?? target;
-    const next = {
-      x: current.x + (target.x - current.x) * SMOOTH_PARALLAX_LERP,
-      y: current.y + (target.y - current.y) * SMOOTH_PARALLAX_LERP
-    };
-    state.smoothVector = next;
-    if (Math.hypot(target.x - next.x, target.y - next.y) > SMOOTH_PARALLAX_EPSILON) this._needsParallaxFrame = true;
-    return next;
   }
 
   _anchoredParallaxVector(visual, lift, sign, parallax) {
@@ -1005,24 +890,6 @@ export class RegionElevationRenderer {
     return state.velocityVector;
   }
 
-  _heightDepthParallaxVector(visual, lift, sign, parallax) {
-    const focus = this._cameraFocus;
-    if (!focus) return { x: 0, y: 0 };
-    const dx = focus.x - visual.bounds.center.x;
-    const dy = focus.y - visual.bounds.center.y;
-    const distance = Math.hypot(dx, dy);
-    const direction = distance > 1 ? { x: dx / distance, y: dy / distance } : this._cameraDirection(visual.bounds);
-    const geo = sceneGeometry(this._scene);
-    const distanceFactor = Math.clamp(distance / Math.max(geo.gridSize * 4, Math.hypot(geo.width, geo.height) * 0.22), 0.25, 1.35);
-    const elevationFactor = Math.clamp(Math.abs(visual.entry.elevation) / 12, 0.25, 1.8);
-    const delta = this._cameraDelta();
-    const target = {
-      x: (direction.x * lift * distanceFactor * elevationFactor + delta.x * parallax * HEIGHT_DEPTH_DELTA_WEIGHT) * sign,
-      y: (direction.y * lift * distanceFactor * elevationFactor + delta.y * parallax * HEIGHT_DEPTH_DELTA_WEIGHT) * sign
-    };
-    return _limitVector(target, lift * HEIGHT_DEPTH_CAMERA_MULTIPLIER * Math.max(1, elevationFactor));
-  }
-
   _cameraDelta() {
     const current = this._cameraFocus;
     const previous = this._previousCameraFocus ?? current;
@@ -1045,16 +912,16 @@ export class RegionElevationRenderer {
   }
 
   _blendProfile(blendMode) {
-    return BLEND_PROFILE_CONFIGS[blendMode] ?? BLEND_PROFILE_CONFIGS[BLEND_MODES.SLOPE];
+    return BLEND_PROFILE_CONFIGS[blendMode] ?? BLEND_PROFILE_CONFIGS[BLEND_MODES.WIDE];
   }
 
   _blendWidth(gridSize, normalized, parallax, blendProfile) {
     if (blendProfile.widthMultiplier <= 0) return 0;
-    const baseWidth = gridSize * (EDGE_BLEND_WIDTH_GRID_RATIO + normalized * EDGE_BLEND_WIDTH_ELEVATION_RATIO)
-      + parallax * EDGE_BLEND_WIDTH_PARALLAX_BONUS;
+    const baseWidth = gridSize * (TRANSITION_WIDTH_GRID_RATIO + normalized * TRANSITION_WIDTH_ELEVATION_RATIO)
+      + parallax * TRANSITION_WIDTH_PARALLAX_BONUS;
     return Math.clamp(
       baseWidth * blendProfile.widthMultiplier + blendProfile.widthAdd,
-      EDGE_BLEND_WIDTH_MIN,
+      TRANSITION_WIDTH_MIN,
       blendProfile.maxWidth
     );
   }
@@ -1070,11 +937,10 @@ export class RegionElevationRenderer {
 
   _shadowDirection(bounds, parallax, shadowMode, perspectivePoint) {
     switch (shadowMode) {
+      case SHADOW_MODES.OFF:
       case SHADOW_MODES.TOP_DOWN:
       case SHADOW_MODES.TOP_DOWN_STRONG:
         return { x: 0, y: 0 };
-      case SHADOW_MODES.FIXED_VISIBLE:
-        return STATIC_SHADOW_DIRECTION;
       case SHADOW_MODES.REVERSED_RESPONSIVE: {
         const direction = parallax > 0 ? this._perspectiveDirection(bounds, perspectivePoint) : STATIC_SHADOW_DIRECTION;
         return { x: -direction.x, y: -direction.y };
@@ -1103,13 +969,23 @@ export class RegionElevationRenderer {
     return { x: dx / distance, y: dy / distance };
   }
 
-  _createShadow(paths, params) {
-    if (params.softShadowAlpha <= 0 && params.contactShadowAlpha <= 0) return null;
+  _createShadow(paths, texture, geo, params) {
+    if (params.softShadowAlpha <= 0 && params.bridgeShadowAlpha <= 0 && params.contactShadowAlpha <= 0 && params.textureSoftShadowAlpha <= 0 && params.textureBridgeShadowAlpha <= 0 && params.textureContactShadowAlpha <= 0) return null;
     const shadow = new PIXI.Container();
     shadow.eventMode = "none";
+    if (params.textureMeldShadow && texture) {
+      const textureSoft = this._createTextureShadowLayer(paths, texture, geo, params.softShadowOffset, params.textureSoftShadowAlpha, params.softShadowBlur);
+      const textureBridge = this._createTextureShadowLayer(paths, texture, geo, params.bridgeShadowOffset, params.textureBridgeShadowAlpha, params.bridgeShadowBlur);
+      const textureContact = this._createTextureShadowLayer(paths, texture, geo, params.contactShadowOffset, params.textureContactShadowAlpha, params.contactShadowBlur);
+      if (textureSoft) shadow.addChild(textureSoft);
+      if (textureBridge) shadow.addChild(textureBridge);
+      if (textureContact) shadow.addChild(textureContact);
+    }
     const soft = this._createShadowLayer(paths, params.softShadowOffset, params.softShadowAlpha, params.softShadowBlur);
+    const bridge = this._createShadowLayer(paths, params.bridgeShadowOffset, params.bridgeShadowAlpha, params.bridgeShadowBlur);
     const contact = this._createShadowLayer(paths, params.contactShadowOffset, params.contactShadowAlpha, params.contactShadowBlur);
     if (soft) shadow.addChild(soft);
+    if (bridge) shadow.addChild(bridge);
     if (contact) shadow.addChild(contact);
     return shadow.children.length ? shadow : null;
   }
@@ -1123,7 +999,7 @@ export class RegionElevationRenderer {
 
   _createSlopeLayer(paths, texture, geo, params) {
     if (!texture || params.slopeAlpha <= 0 || params.slopeWidth <= 0) return null;
-    if (params.projectedPatch) return this._createProjectedPatchLayer(paths, texture, geo, params);
+    if (params.cliffWarp) return this._createCliffWarpLayer(paths, texture, geo, params);
     const slope = new PIXI.Container();
     slope.eventMode = "none";
     const band = new PIXI.Container();
@@ -1168,10 +1044,9 @@ export class RegionElevationRenderer {
     return slope;
   }
 
-  _createProjectedPatchLayer(paths, texture, geo, params) {
+  _createCliffWarpLayer(paths, texture, geo, params) {
     if (!texture || params.slopeWidth <= 0) return null;
-    if (params.edgeStripPatch) return this._createEdgeStripPatchLayer(paths, texture, geo, params);
-    if (params.projectedPatchAlpha <= 0) return null;
+    if (params.cliffWarpAlpha <= 0) return null;
     const patch = new PIXI.Container();
     patch.eventMode = "none";
     const band = new PIXI.Container();
@@ -1208,55 +1083,22 @@ export class RegionElevationRenderer {
       }
     }
 
-    const steps = Math.max(1, Math.floor(params.projectedPatchSteps ?? PROJECTED_PATCH_STEPS_MIN));
+    const steps = Math.max(1, Math.floor(params.cliffWarpSteps ?? CLIFF_WARP_LAYER_STEPS_MIN));
     for (let step = 1; step <= steps; step++) {
       const t = step / steps;
       const eased = t * t * (3 - 2 * t);
-      const alpha = params.projectedPatchAlpha * (0.55 + 0.45 * t) / steps;
+      const alpha = params.cliffWarpAlpha * (0.55 + 0.45 * t) / steps;
       const shift = {
-        x: params.projectedPatchShift.x * eased,
-        y: params.projectedPatchShift.y * eased
+        x: params.cliffWarpShift.x * eased,
+        y: params.cliffWarpShift.y * eased
       };
-      const stretchScale = 1 + params.projectedPatchScaleDelta * eased;
+      const stretchScale = 1 + params.cliffWarpScaleDelta * eased;
       band.addChild(this._createTextureSprite(texture, geo, {
         shift,
         alpha,
         center: params.projectionCenter,
         stretchScale
       }));
-    }
-
-    patch.addChild(band);
-    return patch;
-  }
-
-  _createEdgeStripPatchLayer(paths, texture, geo, params) {
-    if (!texture || params.edgeStripAlpha <= 0 || params.edgeStripSampleWidth <= 0) return null;
-    const patch = new PIXI.Container();
-    patch.eventMode = "none";
-    const band = new PIXI.Container();
-    band.eventMode = "none";
-    const steps = Math.max(1, Math.floor(params.edgeStripSteps ?? 8));
-    const transitionMask = this._createDirectionalTransitionMask(paths, params.edgeStripSampleWidth * 1.45, params.edgeStripTargetShift, steps);
-    band.mask = transitionMask;
-    band.addChild(transitionMask);
-
-    for (let step = 0; step <= steps; step++) {
-      const progress = step / steps;
-      const eased = progress * progress * (3 - 2 * progress);
-      const strip = new PIXI.Container();
-      strip.eventMode = "none";
-      strip.position.set(params.edgeStripTargetShift.x * eased, params.edgeStripTargetShift.y * eased);
-      const mask = this._createTransitionMask(paths, params.edgeStripSampleWidth);
-      const alpha = Math.clamp(params.edgeStripAlpha * (0.38 + 0.62 * progress), 0, EDGE_STRIP_ALPHA_MAX);
-      const sprite = this._createTextureSprite(texture, geo, {
-        shift: params.edgeStripTextureShift,
-        alpha
-      });
-      sprite.mask = mask;
-      strip.addChild(mask);
-      strip.addChild(sprite);
-      band.addChild(strip);
     }
 
     patch.addChild(band);
@@ -1312,6 +1154,29 @@ export class RegionElevationRenderer {
   _createShadowLayer(paths, offset, alpha, blur) {
     if (alpha <= 0) return null;
     return this._createGeneratedShadowLayer(paths, offset, alpha, blur);
+  }
+
+  _createTextureShadowLayer(paths, texture, geo, offset, alpha, blur) {
+    if (!texture || alpha <= 0) return null;
+    const mask = this._createGeneratedShadowLayer(paths, offset, 1, blur);
+    if (!mask) return null;
+    mask.renderable = false;
+
+    const layer = new PIXI.Container();
+    layer.eventMode = "none";
+    const sprite = new PIXI.Sprite(texture);
+    sprite.eventMode = "none";
+    sprite.position.set(
+      geo.x - offset.x * TEXTURE_MELD_SAMPLE_PULL,
+      geo.y - offset.y * TEXTURE_MELD_SAMPLE_PULL
+    );
+    sprite.width = geo.width;
+    sprite.height = geo.height;
+    sprite.alpha = alpha;
+    sprite.mask = mask;
+    layer.addChild(mask);
+    layer.addChild(sprite);
+    return layer;
   }
 
   _createGeneratedShadowLayer(paths, offset, alpha, blur, { strokeWidth = 0 } = {}) {
@@ -1446,50 +1311,6 @@ export class RegionElevationRenderer {
     return mask;
   }
 
-  _createDirectionalTransitionMask(paths, width, shift, steps) {
-    const bounds = _pathsBounds(paths);
-    if (!bounds) return this._createMask(paths);
-    const strokeWidth = Math.max(1, width * 1.55);
-    const blur = Math.max(0.5, width * TRANSITION_MASK_BLUR_RATIO);
-    const minShiftX = Math.min(0, shift.x);
-    const maxShiftX = Math.max(0, shift.x);
-    const minShiftY = Math.min(0, shift.y);
-    const maxShiftY = Math.max(0, shift.y);
-    const padding = Math.ceil(strokeWidth + blur * 4 + 3);
-    const textureWidth = Math.ceil(bounds.width + (maxShiftX - minShiftX) + padding * 2);
-    const textureHeight = Math.ceil(bounds.height + (maxShiftY - minShiftY) + padding * 2);
-    const MaskGraphics = _graphicsClass();
-    const maskShape = new MaskGraphics();
-    maskShape.eventMode = "none";
-    maskShape.lineStyle(strokeWidth, 0xffffff, 1);
-    const count = Math.max(1, Math.floor(steps ?? 1));
-    for (let step = 0; step <= count; step++) {
-      const progress = step / count;
-      _drawShiftedPaths(
-        maskShape,
-        paths,
-        -bounds.minX - minShiftX + padding + shift.x * progress,
-        -bounds.minY - minShiftY + padding + shift.y * progress
-      );
-    }
-    maskShape.filters = [_makeBlurFilter(blur)];
-    maskShape.filterArea = new PIXI.Rectangle(0, 0, textureWidth, textureHeight);
-
-    const texture = this._generateTexture(maskShape, textureWidth, textureHeight);
-    maskShape.destroy({ children: true });
-    if (!_validTexture(texture)) {
-      texture?.destroy?.(true);
-      return this._createTransitionMask(paths, width);
-    }
-
-    const mask = new PIXI.Sprite(texture);
-    mask.eventMode = "none";
-    mask.position.set(bounds.minX + minShiftX - padding, bounds.minY + minShiftY - padding);
-    mask.renderable = false;
-    mask._seGeneratedTexture = texture;
-    return mask;
-  }
-
   _generateTexture(displayObject, width, height) {
     const renderer = canvas.app?.renderer;
     if (!renderer) return null;
@@ -1559,8 +1380,8 @@ function _parallaxMode() {
 }
 
 function _blendMode() {
-  const mode = getSceneElevationSetting(SCENE_SETTING_KEYS.BLEND_MODE) ?? BLEND_MODES.SLOPE;
-  return Object.values(BLEND_MODES).includes(mode) ? mode : BLEND_MODES.SLOPE;
+  const mode = getSceneElevationSetting(SCENE_SETTING_KEYS.BLEND_MODE) ?? BLEND_MODES.WIDE;
+  return Object.values(BLEND_MODES).includes(mode) ? mode : BLEND_MODES.WIDE;
 }
 
 function _perspectivePoint(geo, bounds = null) {
@@ -1592,6 +1413,14 @@ function _perspectivePoint(geo, bounds = null) {
       return { x: geo.x, y: geo.y + geo.height };
     case PERSPECTIVE_POINTS.BOTTOM_RIGHT:
       return { x: geo.x + geo.width, y: geo.y + geo.height };
+    case PERSPECTIVE_POINTS.FAR_TOP:
+      return { x: geo.x + geo.width / 2, y: geo.y - geo.height };
+    case PERSPECTIVE_POINTS.FAR_LEFT:
+      return { x: geo.x - geo.width, y: geo.y + geo.height / 2 };
+    case PERSPECTIVE_POINTS.FAR_RIGHT:
+      return { x: geo.x + geo.width * 2, y: geo.y + geo.height / 2 };
+    case PERSPECTIVE_POINTS.FAR_BOTTOM:
+      return { x: geo.x + geo.width / 2, y: geo.y + geo.height * 2 };
     case PERSPECTIVE_POINTS.CENTER:
     default:
       return { x: geo.x + geo.width / 2, y: geo.y + geo.height / 2 };
@@ -1608,14 +1437,19 @@ function _shadowMode() {
   return Object.values(SHADOW_MODES).includes(mode) ? mode : SHADOW_MODES.TOP_DOWN;
 }
 
+function _shadowLength() {
+  const value = Number(getSceneElevationSetting(SCENE_SETTING_KEYS.SHADOW_LENGTH) ?? 1);
+  return Math.clamp(Number.isFinite(value) ? value : 1, 0, 8);
+}
+
+function _shadowLengthMultiplier(value) {
+  if (value <= 1) return value;
+  return 1 + (value - 1) * 1.35;
+}
+
 function _depthScale() {
   const scale = getSceneElevationSetting(SCENE_SETTING_KEYS.DEPTH_SCALE) ?? DEPTH_SCALES.COMPRESSED;
   return Object.values(DEPTH_SCALES).includes(scale) ? scale : DEPTH_SCALES.COMPRESSED;
-}
-
-function _extrusionStrength() {
-  const value = getSceneElevationSetting(SCENE_SETTING_KEYS.EXTRUSION) ?? EXTRUSION_STRENGTHS.OFF;
-  return Object.values(EXTRUSION_STRENGTHS).includes(value) ? value : EXTRUSION_STRENGTHS.OFF;
 }
 
 function _sunShadowState(shadowMode, geo, bounds) {

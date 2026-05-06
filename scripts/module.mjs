@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, PARALLAX_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, EXTRUSION_STRENGTHS, REGION_BEHAVIOR_TYPE, getSceneElevationSetting } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, PARALLAX_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, REGION_BEHAVIOR_TYPE, getSceneElevationSetting } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -88,16 +88,10 @@ Hooks.once("init", () => {
     hint: "SCENE_ELEVATION.Settings.ParallaxModeHint",
     scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.PARALLAX_MODE],
     choices: {
-      [PARALLAX_MODES.SLOPE_ONLY]: "SCENE_ELEVATION.Settings.ParallaxModeSlopeOnly",
-      [PARALLAX_MODES.HYBRID]: "SCENE_ELEVATION.Settings.ParallaxModeHybrid",
-      [PARALLAX_MODES.ANCHORED]: "SCENE_ELEVATION.Settings.ParallaxModeAnchored",
-      [PARALLAX_MODES.EDGE_BLEND]: "SCENE_ELEVATION.Settings.ParallaxModeEdgeBlend",
       [PARALLAX_MODES.CARD]: "SCENE_ELEVATION.Settings.ParallaxModeCard",
-      [PARALLAX_MODES.SMOOTH_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeSmoothCard",
       [PARALLAX_MODES.ANCHORED_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard",
       [PARALLAX_MODES.VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard",
       [PARALLAX_MODES.ANCHORED_VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard",
-      [PARALLAX_MODES.HEIGHT_DEPTH_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeHeightDepthCard",
       [PARALLAX_MODES.SHADOW]: "SCENE_ELEVATION.Settings.ParallaxModeShadow"
     },
     onChange: () => {
@@ -115,6 +109,10 @@ Hooks.once("init", () => {
       [PERSPECTIVE_POINTS.TOP_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointTopRight",
       [PERSPECTIVE_POINTS.BOTTOM_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointBottomLeft",
       [PERSPECTIVE_POINTS.BOTTOM_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointBottomRight",
+      [PERSPECTIVE_POINTS.FAR_TOP]: "SCENE_ELEVATION.Settings.PerspectivePointFarTop",
+      [PERSPECTIVE_POINTS.FAR_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointFarLeft",
+      [PERSPECTIVE_POINTS.FAR_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointFarRight",
+      [PERSPECTIVE_POINTS.FAR_BOTTOM]: "SCENE_ELEVATION.Settings.PerspectivePointFarBottom",
       [PERSPECTIVE_POINTS.REGION_CENTER]: "SCENE_ELEVATION.Settings.PerspectivePointRegionCenter",
       [PERSPECTIVE_POINTS.REGION_TOP_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionTopLeft",
       [PERSPECTIVE_POINTS.REGION_TOP_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionTopRight",
@@ -138,11 +136,7 @@ Hooks.once("init", () => {
       [BLEND_MODES.OFF]: "SCENE_ELEVATION.Settings.BlendModeOff",
       [BLEND_MODES.SOFT]: "SCENE_ELEVATION.Settings.BlendModeSoft",
       [BLEND_MODES.WIDE]: "SCENE_ELEVATION.Settings.BlendModeWide",
-      [BLEND_MODES.DEPTH_LIP]: "SCENE_ELEVATION.Settings.BlendModeDepthLip",
-      [BLEND_MODES.PROJECTED_PATCH]: "SCENE_ELEVATION.Settings.BlendModeProjectedPatch",
-      [BLEND_MODES.CLIFF_WARP]: "SCENE_ELEVATION.Settings.BlendModeCliffWarp",
-      [BLEND_MODES.SLOPE]: "SCENE_ELEVATION.Settings.BlendModeSlope",
-      [BLEND_MODES.Z_BRIDGE]: "SCENE_ELEVATION.Settings.BlendModeZBridge"
+      [BLEND_MODES.CLIFF_WARP]: "SCENE_ELEVATION.Settings.BlendModeCliffWarp"
     },
     onChange: () => {
       RegionElevationRenderer.instance.update();
@@ -171,13 +165,36 @@ Hooks.once("init", () => {
     hint: "SCENE_ELEVATION.Settings.ShadowModeHint",
     scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.SHADOW_MODE],
     choices: {
+      [SHADOW_MODES.OFF]: "SCENE_ELEVATION.Settings.ShadowModeOff",
       [SHADOW_MODES.RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeResponsive",
       [SHADOW_MODES.REVERSED_RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeReversedResponsive",
-      [SHADOW_MODES.FIXED_VISIBLE]: "SCENE_ELEVATION.Settings.ShadowModeFixedVisible",
+      [SHADOW_MODES.TEXTURE_MELD]: "SCENE_ELEVATION.Settings.ShadowModeTextureMeld",
+      [SHADOW_MODES.FULL_TEXTURE_MELD]: "SCENE_ELEVATION.Settings.ShadowModeFullTextureMeld",
       [SHADOW_MODES.TOP_DOWN]: "SCENE_ELEVATION.Settings.ShadowModeTopDown",
       [SHADOW_MODES.TOP_DOWN_STRONG]: "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong",
       [SHADOW_MODES.SMALL_TIME_SUN]: "SCENE_ELEVATION.Settings.ShadowModeSmallTimeSun",
       [SHADOW_MODES.SUN_AT_EDGE]: "SCENE_ELEVATION.Settings.ShadowModeSunAtEdge"
+    },
+    onChange: () => {
+      RegionElevationRenderer.instance.update();
+      _refreshAllTokenScales();
+    }
+  });
+  game.settings.register(MODULE_ID, SETTINGS.SHADOW_LENGTH, {
+    name: "SCENE_ELEVATION.Settings.ShadowLength",
+    hint: "SCENE_ELEVATION.Settings.ShadowLengthHint",
+    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.SHADOW_LENGTH],
+    range: { min: 0, max: 8, step: 0.1 },
+    onChange: () => RegionElevationRenderer.instance.update()
+  });
+  game.settings.register(MODULE_ID, SETTINGS.DEPTH_SCALE, {
+    name: "SCENE_ELEVATION.Settings.DepthScale",
+    hint: "SCENE_ELEVATION.Settings.DepthScaleHint",
+    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.DEPTH_SCALE],
+    choices: {
+      [DEPTH_SCALES.COMPRESSED]: "SCENE_ELEVATION.Settings.DepthScaleCompressed",
+      [DEPTH_SCALES.LINEAR]: "SCENE_ELEVATION.Settings.DepthScaleLinear",
+      [DEPTH_SCALES.DRAMATIC]: "SCENE_ELEVATION.Settings.DepthScaleDramatic"
     },
     onChange: () => {
       RegionElevationRenderer.instance.update();
@@ -227,34 +244,6 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS, {
     scope: "client", config: false, type: Boolean, default: false,
     onChange: () => canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.refreshElevationRegionVisibility()
-  });
-
-  game.settings.register(MODULE_ID, SETTINGS.DEPTH_SCALE, {
-    name: "SCENE_ELEVATION.Settings.DepthScale",
-    hint: "SCENE_ELEVATION.Settings.DepthScaleHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.DEPTH_SCALE],
-    choices: {
-      [DEPTH_SCALES.COMPRESSED]: "SCENE_ELEVATION.Settings.DepthScaleCompressed",
-      [DEPTH_SCALES.LINEAR]: "SCENE_ELEVATION.Settings.DepthScaleLinear",
-      [DEPTH_SCALES.DRAMATIC]: "SCENE_ELEVATION.Settings.DepthScaleDramatic"
-    },
-    onChange: () => {
-      RegionElevationRenderer.instance.update();
-      _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.EXTRUSION, {
-    name: "SCENE_ELEVATION.Settings.Extrusion",
-    hint: "SCENE_ELEVATION.Settings.ExtrusionHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.EXTRUSION],
-    choices: {
-      [EXTRUSION_STRENGTHS.OFF]: "SCENE_ELEVATION.Settings.ExtrusionOff",
-      [EXTRUSION_STRENGTHS.SUBTLE]: "SCENE_ELEVATION.Settings.ExtrusionSubtle",
-      [EXTRUSION_STRENGTHS.BOLD]: "SCENE_ELEVATION.Settings.ExtrusionBold",
-      [EXTRUSION_STRENGTHS.TOWER]: "SCENE_ELEVATION.Settings.ExtrusionTower",
-      [EXTRUSION_STRENGTHS.EDGE_STRETCH]: "SCENE_ELEVATION.Settings.ExtrusionEdgeStretch"
-    },
-    onChange: () => RegionElevationRenderer.instance.update()
   });
 
   CONFIG.Canvas.layers[ElevationAuthoringLayer.LAYER_NAME] = {

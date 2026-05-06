@@ -9,6 +9,7 @@ export const SETTINGS = {
   BLEND_MODE: "overlayBlendMode",
   OVERLAY_SCALE: "overlayScale",
   SHADOW_MODE: "shadowMode",
+  SHADOW_LENGTH: "shadowLength",
   SUNRISE_HOUR: "sunriseHour",
   SUNSET_HOUR: "sunsetHour",
   SHOW_ELEVATION_REGIONS: "showElevationRegions",
@@ -16,8 +17,7 @@ export const SETTINGS = {
   TOKEN_ELEVATION_ANIMATION_MS: "tokenElevationAnimationMs",
   TOKEN_SCALE_ENABLED: "tokenScaleEnabled",
   TOKEN_SCALE_MAX: "tokenScaleMax",
-  DEPTH_SCALE: "depthScale",
-  EXTRUSION: "extrusionStrength"
+  DEPTH_SCALE: "depthScale"
 };
 
 export const SCENE_SETTINGS_FLAG = "sceneSettings";
@@ -30,6 +30,7 @@ export const SCENE_SETTING_KEYS = Object.freeze({
   BLEND_MODE: SETTINGS.BLEND_MODE,
   OVERLAY_SCALE: SETTINGS.OVERLAY_SCALE,
   SHADOW_MODE: SETTINGS.SHADOW_MODE,
+  SHADOW_LENGTH: SETTINGS.SHADOW_LENGTH,
   SUNRISE_HOUR: SETTINGS.SUNRISE_HOUR,
   SUNSET_HOUR: SETTINGS.SUNSET_HOUR,
   SUN_EDGE_POINT: "sunEdgePoint",
@@ -37,8 +38,7 @@ export const SCENE_SETTING_KEYS = Object.freeze({
   TOKEN_ELEVATION_ANIMATION_MS: SETTINGS.TOKEN_ELEVATION_ANIMATION_MS,
   TOKEN_SCALE_ENABLED: SETTINGS.TOKEN_SCALE_ENABLED,
   TOKEN_SCALE_MAX: SETTINGS.TOKEN_SCALE_MAX,
-  DEPTH_SCALE: SETTINGS.DEPTH_SCALE,
-  EXTRUSION: SETTINGS.EXTRUSION
+  DEPTH_SCALE: SETTINGS.DEPTH_SCALE
 });
 
 /** Parallax strength values keyed by enum option. */
@@ -67,6 +67,10 @@ export const PERSPECTIVE_POINTS = Object.freeze({
   TOP_RIGHT: "topRight",
   BOTTOM_LEFT: "bottomLeft",
   BOTTOM_RIGHT: "bottomRight",
+  FAR_TOP: "farTop",
+  FAR_LEFT: "farLeft",
+  FAR_RIGHT: "farRight",
+  FAR_BOTTOM: "farBottom",
   REGION_CENTER: "regionCenter",
   REGION_TOP_LEFT: "regionTopLeft",
   REGION_TOP_RIGHT: "regionTopRight",
@@ -79,23 +83,19 @@ export const PERSPECTIVE_POINTS = Object.freeze({
 });
 
 export const PARALLAX_MODES = Object.freeze({
-  SLOPE_ONLY: "slopeOnly",
-  HYBRID: "hybrid",
-  ANCHORED: "anchored",
-  EDGE_BLEND: "edgeBlend",
   CARD: "card",
-  SMOOTH_CARD: "smoothCard",
   ANCHORED_CARD: "anchoredCard",
   VELOCITY_CARD: "velocityCard",
   ANCHORED_VELOCITY_CARD: "anchoredVelocityCard",
-  HEIGHT_DEPTH_CARD: "heightDepthCard",
   SHADOW: "shadow"
 });
 
 export const SHADOW_MODES = Object.freeze({
+  OFF: "off",
   RESPONSIVE: "responsive",
   REVERSED_RESPONSIVE: "reversedResponsive",
-  FIXED_VISIBLE: "fixedVisible",
+  TEXTURE_MELD: "textureMeld",
+  FULL_TEXTURE_MELD: "fullTextureMeld",
   TOP_DOWN: "topDown",
   TOP_DOWN_STRONG: "topDownStrong",
   SMALL_TIME_SUN: "smallTimeSun",
@@ -112,11 +112,7 @@ export const BLEND_MODES = Object.freeze({
   OFF: "off",
   SOFT: "soft",
   WIDE: "wide",
-  DEPTH_LIP: "depthLip",
-  PROJECTED_PATCH: "projectedPatch",
-  CLIFF_WARP: "cliffWarp",
-  SLOPE: "slope",
-  Z_BRIDGE: "zBridge"
+  CLIFF_WARP: "cliffWarp"
 });
 
 export const OVERLAY_SCALE_STRENGTHS = Object.freeze({
@@ -147,24 +143,6 @@ export const DEPTH_SCALE_REFERENCE = Object.freeze({
   [DEPTH_SCALES.DRAMATIC]: 32
 });
 
-/** Projected transition strength. Kept under the original setting key for
- * compatibility with scenes that already stored this option during testing. */
-export const EXTRUSION_STRENGTHS = Object.freeze({
-  OFF: "off",
-  SUBTLE: "subtle",
-  BOLD: "bold",
-  TOWER: "tower",
-  EDGE_STRETCH: "edgeStretch"
-});
-
-export const EXTRUSION_PIXEL_FACTORS = Object.freeze({
-  [EXTRUSION_STRENGTHS.OFF]: 0,
-  [EXTRUSION_STRENGTHS.SUBTLE]: 0.35,
-  [EXTRUSION_STRENGTHS.BOLD]: 0.65,
-  [EXTRUSION_STRENGTHS.TOWER]: 1,
-  [EXTRUSION_STRENGTHS.EDGE_STRETCH]: 0.85
-});
-
 export const ELEVATION_DEFAULT_SETTINGS = Object.freeze({
   [SCENE_SETTING_KEYS.PARALLAX]: "medium",
   [SCENE_SETTING_KEYS.PARALLAX_MODE]: PARALLAX_MODES.ANCHORED_CARD,
@@ -172,14 +150,14 @@ export const ELEVATION_DEFAULT_SETTINGS = Object.freeze({
   [SCENE_SETTING_KEYS.BLEND_MODE]: BLEND_MODES.WIDE,
   [SCENE_SETTING_KEYS.OVERLAY_SCALE]: "subtle",
   [SCENE_SETTING_KEYS.SHADOW_MODE]: SHADOW_MODES.TOP_DOWN,
+  [SCENE_SETTING_KEYS.SHADOW_LENGTH]: 1,
   [SCENE_SETTING_KEYS.SUNRISE_HOUR]: 6,
   [SCENE_SETTING_KEYS.SUNSET_HOUR]: 18,
   [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: TOKEN_ELEVATION_MODES.PER_REGION,
   [SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]: 120,
   [SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]: true,
   [SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]: 1.5,
-  [SCENE_SETTING_KEYS.DEPTH_SCALE]: DEPTH_SCALES.COMPRESSED,
-  [SCENE_SETTING_KEYS.EXTRUSION]: EXTRUSION_STRENGTHS.OFF
+  [SCENE_SETTING_KEYS.DEPTH_SCALE]: DEPTH_SCALES.COMPRESSED
 });
 
 export const SHADOW_STRENGTH_LIMITS = Object.freeze({
@@ -221,6 +199,11 @@ const MERGE_SCENE_SETTING_OPTIONS = Object.freeze({
   insertValues: true
 });
 
+const MERGE_KNOWN_SCENE_SETTING_OPTIONS = Object.freeze({
+  ...MERGE_SCENE_SETTING_OPTIONS,
+  insertKeys: false
+});
+
 export function defaultSceneElevationSettings(scene = canvas?.scene) {
   return {
     [SCENE_SETTING_KEYS.PARALLAX]: _worldSetting(SETTINGS.PARALLAX, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PARALLAX]),
@@ -230,6 +213,7 @@ export function defaultSceneElevationSettings(scene = canvas?.scene) {
     [SCENE_SETTING_KEYS.BLEND_MODE]: _worldSetting(SETTINGS.BLEND_MODE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.BLEND_MODE]),
     [SCENE_SETTING_KEYS.OVERLAY_SCALE]: _worldSetting(SETTINGS.OVERLAY_SCALE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.OVERLAY_SCALE]),
     [SCENE_SETTING_KEYS.SHADOW_MODE]: _worldSetting(SETTINGS.SHADOW_MODE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.SHADOW_MODE]),
+    [SCENE_SETTING_KEYS.SHADOW_LENGTH]: _worldSetting(SETTINGS.SHADOW_LENGTH, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.SHADOW_LENGTH]),
     [SCENE_SETTING_KEYS.SUNRISE_HOUR]: _worldSetting(SETTINGS.SUNRISE_HOUR, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.SUNRISE_HOUR]),
     [SCENE_SETTING_KEYS.SUNSET_HOUR]: _worldSetting(SETTINGS.SUNSET_HOUR, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.SUNSET_HOUR]),
     [SCENE_SETTING_KEYS.SUN_EDGE_POINT]: _defaultSunEdgePoint(scene),
@@ -237,8 +221,7 @@ export function defaultSceneElevationSettings(scene = canvas?.scene) {
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]: _worldSetting(SETTINGS.TOKEN_ELEVATION_ANIMATION_MS, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]: _worldSetting(SETTINGS.TOKEN_SCALE_ENABLED, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]: _worldSetting(SETTINGS.TOKEN_SCALE_MAX, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]),
-    [SCENE_SETTING_KEYS.DEPTH_SCALE]: _worldSetting(SETTINGS.DEPTH_SCALE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.DEPTH_SCALE]),
-    [SCENE_SETTING_KEYS.EXTRUSION]: _worldSetting(SETTINGS.EXTRUSION, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.EXTRUSION])
+    [SCENE_SETTING_KEYS.DEPTH_SCALE]: _worldSetting(SETTINGS.DEPTH_SCALE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.DEPTH_SCALE])
   };
 }
 
@@ -254,8 +237,8 @@ export function getSceneElevationSettings(scene = canvas?.scene) {
   const defaults = defaultSceneElevationSettings(scene);
   const stored = scene?.getFlag?.(MODULE_ID, SCENE_SETTINGS_FLAG) ?? foundry.utils.getProperty(scene ?? {}, `flags.${MODULE_ID}.${SCENE_SETTINGS_FLAG}`) ?? {};
   const transient = scene ? (_transientSceneSettings.get(scene) ?? {}) : {};
-  const sceneSettings = foundry.utils.mergeObject(foundry.utils.deepClone(defaults), foundry.utils.deepClone(stored), MERGE_SCENE_SETTING_OPTIONS);
-  return foundry.utils.mergeObject(sceneSettings, foundry.utils.deepClone(transient), MERGE_SCENE_SETTING_OPTIONS);
+  const sceneSettings = foundry.utils.mergeObject(foundry.utils.deepClone(defaults), foundry.utils.deepClone(stored), MERGE_KNOWN_SCENE_SETTING_OPTIONS);
+  return foundry.utils.mergeObject(sceneSettings, foundry.utils.deepClone(transient), MERGE_KNOWN_SCENE_SETTING_OPTIONS);
 }
 
 export function getSceneElevationSetting(key, scene = canvas?.scene) {
@@ -264,7 +247,7 @@ export function getSceneElevationSetting(key, scene = canvas?.scene) {
 
 export async function setSceneElevationSettings(scene, settings) {
   if (!scene) return null;
-  const next = foundry.utils.mergeObject(getSceneElevationSettings(scene), foundry.utils.deepClone(settings), MERGE_SCENE_SETTING_OPTIONS);
+  const next = foundry.utils.mergeObject(getSceneElevationSettings(scene), foundry.utils.deepClone(settings), MERGE_KNOWN_SCENE_SETTING_OPTIONS);
   await scene.setFlag(MODULE_ID, SCENE_SETTINGS_FLAG, next);
   return next;
 }

@@ -9,7 +9,6 @@ import {
   SHADOW_MODES,
   TOKEN_ELEVATION_MODES,
   DEPTH_SCALES,
-  EXTRUSION_STRENGTHS,
   elevationDefaultSettings,
   getSceneElevationSettings,
   setSceneElevationSettings
@@ -26,16 +25,10 @@ const SELECT_GROUPS = Object.freeze({
     ["extreme", "SCENE_ELEVATION.Settings.ParallaxExtreme"]
   ],
   [SCENE_SETTING_KEYS.PARALLAX_MODE]: [
-    [PARALLAX_MODES.SLOPE_ONLY, "SCENE_ELEVATION.Settings.ParallaxModeSlopeOnly"],
-    [PARALLAX_MODES.HYBRID, "SCENE_ELEVATION.Settings.ParallaxModeHybrid"],
-    [PARALLAX_MODES.ANCHORED, "SCENE_ELEVATION.Settings.ParallaxModeAnchored"],
-    [PARALLAX_MODES.EDGE_BLEND, "SCENE_ELEVATION.Settings.ParallaxModeEdgeBlend"],
     [PARALLAX_MODES.CARD, "SCENE_ELEVATION.Settings.ParallaxModeCard"],
-    [PARALLAX_MODES.SMOOTH_CARD, "SCENE_ELEVATION.Settings.ParallaxModeSmoothCard"],
     [PARALLAX_MODES.ANCHORED_CARD, "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard"],
     [PARALLAX_MODES.VELOCITY_CARD, "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard"],
     [PARALLAX_MODES.ANCHORED_VELOCITY_CARD, "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard"],
-    [PARALLAX_MODES.HEIGHT_DEPTH_CARD, "SCENE_ELEVATION.Settings.ParallaxModeHeightDepthCard"],
     [PARALLAX_MODES.SHADOW, "SCENE_ELEVATION.Settings.ParallaxModeShadow"]
   ],
   [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: [
@@ -44,6 +37,10 @@ const SELECT_GROUPS = Object.freeze({
     [PERSPECTIVE_POINTS.TOP_RIGHT, "SCENE_ELEVATION.Settings.PerspectivePointTopRight"],
     [PERSPECTIVE_POINTS.BOTTOM_LEFT, "SCENE_ELEVATION.Settings.PerspectivePointBottomLeft"],
     [PERSPECTIVE_POINTS.BOTTOM_RIGHT, "SCENE_ELEVATION.Settings.PerspectivePointBottomRight"],
+    [PERSPECTIVE_POINTS.FAR_TOP, "SCENE_ELEVATION.Settings.PerspectivePointFarTop"],
+    [PERSPECTIVE_POINTS.FAR_LEFT, "SCENE_ELEVATION.Settings.PerspectivePointFarLeft"],
+    [PERSPECTIVE_POINTS.FAR_RIGHT, "SCENE_ELEVATION.Settings.PerspectivePointFarRight"],
+    [PERSPECTIVE_POINTS.FAR_BOTTOM, "SCENE_ELEVATION.Settings.PerspectivePointFarBottom"],
     [PERSPECTIVE_POINTS.REGION_CENTER, "SCENE_ELEVATION.Settings.PerspectivePointRegionCenter"],
     [PERSPECTIVE_POINTS.REGION_TOP_LEFT, "SCENE_ELEVATION.Settings.PerspectivePointRegionTopLeft"],
     [PERSPECTIVE_POINTS.REGION_TOP_RIGHT, "SCENE_ELEVATION.Settings.PerspectivePointRegionTopRight"],
@@ -58,11 +55,7 @@ const SELECT_GROUPS = Object.freeze({
     [BLEND_MODES.OFF, "SCENE_ELEVATION.Settings.BlendModeOff"],
     [BLEND_MODES.SOFT, "SCENE_ELEVATION.Settings.BlendModeSoft"],
     [BLEND_MODES.WIDE, "SCENE_ELEVATION.Settings.BlendModeWide"],
-    [BLEND_MODES.DEPTH_LIP, "SCENE_ELEVATION.Settings.BlendModeDepthLip"],
-    [BLEND_MODES.PROJECTED_PATCH, "SCENE_ELEVATION.Settings.BlendModeProjectedPatch"],
-    [BLEND_MODES.CLIFF_WARP, "SCENE_ELEVATION.Settings.BlendModeCliffWarp"],
-    [BLEND_MODES.SLOPE, "SCENE_ELEVATION.Settings.BlendModeSlope"],
-    [BLEND_MODES.Z_BRIDGE, "SCENE_ELEVATION.Settings.BlendModeZBridge"]
+    [BLEND_MODES.CLIFF_WARP, "SCENE_ELEVATION.Settings.BlendModeCliffWarp"]
   ],
   [SCENE_SETTING_KEYS.OVERLAY_SCALE]: [
     ["shrinkMedium", "SCENE_ELEVATION.Settings.OverlayScaleShrinkMedium"],
@@ -73,9 +66,11 @@ const SELECT_GROUPS = Object.freeze({
     ["strong", "SCENE_ELEVATION.Settings.OverlayScaleStrong"]
   ],
   [SCENE_SETTING_KEYS.SHADOW_MODE]: [
+    [SHADOW_MODES.OFF, "SCENE_ELEVATION.Settings.ShadowModeOff"],
     [SHADOW_MODES.RESPONSIVE, "SCENE_ELEVATION.Settings.ShadowModeResponsive"],
     [SHADOW_MODES.REVERSED_RESPONSIVE, "SCENE_ELEVATION.Settings.ShadowModeReversedResponsive"],
-    [SHADOW_MODES.FIXED_VISIBLE, "SCENE_ELEVATION.Settings.ShadowModeFixedVisible"],
+    [SHADOW_MODES.TEXTURE_MELD, "SCENE_ELEVATION.Settings.ShadowModeTextureMeld"],
+    [SHADOW_MODES.FULL_TEXTURE_MELD, "SCENE_ELEVATION.Settings.ShadowModeFullTextureMeld"],
     [SHADOW_MODES.TOP_DOWN, "SCENE_ELEVATION.Settings.ShadowModeTopDown"],
     [SHADOW_MODES.TOP_DOWN_STRONG, "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong"],
     [SHADOW_MODES.SMALL_TIME_SUN, "SCENE_ELEVATION.Settings.ShadowModeSmallTimeSun"],
@@ -90,13 +85,6 @@ const SELECT_GROUPS = Object.freeze({
     [DEPTH_SCALES.COMPRESSED, "SCENE_ELEVATION.Settings.DepthScaleCompressed"],
     [DEPTH_SCALES.LINEAR, "SCENE_ELEVATION.Settings.DepthScaleLinear"],
     [DEPTH_SCALES.DRAMATIC, "SCENE_ELEVATION.Settings.DepthScaleDramatic"]
-  ],
-  [SCENE_SETTING_KEYS.EXTRUSION]: [
-    [EXTRUSION_STRENGTHS.OFF, "SCENE_ELEVATION.Settings.ExtrusionOff"],
-    [EXTRUSION_STRENGTHS.SUBTLE, "SCENE_ELEVATION.Settings.ExtrusionSubtle"],
-    [EXTRUSION_STRENGTHS.BOLD, "SCENE_ELEVATION.Settings.ExtrusionBold"],
-    [EXTRUSION_STRENGTHS.TOWER, "SCENE_ELEVATION.Settings.ExtrusionTower"],
-    [EXTRUSION_STRENGTHS.EDGE_STRETCH, "SCENE_ELEVATION.Settings.ExtrusionEdgeStretch"]
   ]
 });
 
@@ -162,10 +150,10 @@ function _settingsForm(settings) {
     ${_selectField(SCENE_SETTING_KEYS.BLEND_MODE, "SCENE_ELEVATION.Settings.TransitionMode", settings)}
     ${_selectField(SCENE_SETTING_KEYS.OVERLAY_SCALE, "SCENE_ELEVATION.Settings.OverlayScale", settings)}
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_MODE, "SCENE_ELEVATION.Settings.ShadowMode", settings)}
+    ${_numberField(SCENE_SETTING_KEYS.SHADOW_LENGTH, "SCENE_ELEVATION.Settings.ShadowLength", "SCENE_ELEVATION.Settings.ShadowLengthHint", settings, { min: 0, max: 8, step: 0.1 })}
+    ${_selectField(SCENE_SETTING_KEYS.DEPTH_SCALE, "SCENE_ELEVATION.Settings.DepthScale", settings)}
     ${_numberField(SCENE_SETTING_KEYS.SUNRISE_HOUR, "SCENE_ELEVATION.Settings.SunriseHour", "SCENE_ELEVATION.Settings.SunriseHourHint", settings, { min: 0, max: 23.75, step: 0.25 })}
     ${_numberField(SCENE_SETTING_KEYS.SUNSET_HOUR, "SCENE_ELEVATION.Settings.SunsetHour", "SCENE_ELEVATION.Settings.SunsetHourHint", settings, { min: 0.25, max: 24, step: 0.25 })}
-    ${_selectField(SCENE_SETTING_KEYS.DEPTH_SCALE, "SCENE_ELEVATION.Settings.DepthScale", settings)}
-    ${_selectField(SCENE_SETTING_KEYS.EXTRUSION, "SCENE_ELEVATION.Settings.Extrusion", settings)}
     ${_selectField(SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, "SCENE_ELEVATION.Settings.TokenElevationMode", settings)}
     <div class="form-group">
       <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenElevationAnimationMs")}</label>
@@ -220,6 +208,7 @@ function _formSettings(data, current) {
     [SCENE_SETTING_KEYS.BLEND_MODE]: _choice(data, SCENE_SETTING_KEYS.BLEND_MODE, Object.values(BLEND_MODES), current),
     [SCENE_SETTING_KEYS.OVERLAY_SCALE]: _choice(data, SCENE_SETTING_KEYS.OVERLAY_SCALE, Object.keys(OVERLAY_SCALE_STRENGTHS), current),
     [SCENE_SETTING_KEYS.SHADOW_MODE]: _choice(data, SCENE_SETTING_KEYS.SHADOW_MODE, Object.values(SHADOW_MODES), current),
+    [SCENE_SETTING_KEYS.SHADOW_LENGTH]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SHADOW_LENGTH) ?? current[SCENE_SETTING_KEYS.SHADOW_LENGTH] ?? 1), 0, 8),
     [SCENE_SETTING_KEYS.SUNRISE_HOUR]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SUNRISE_HOUR) ?? current[SCENE_SETTING_KEYS.SUNRISE_HOUR] ?? 6), 0, 23.75),
     [SCENE_SETTING_KEYS.SUNSET_HOUR]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SUNSET_HOUR) ?? current[SCENE_SETTING_KEYS.SUNSET_HOUR] ?? 18), 0.25, 24),
     [SCENE_SETTING_KEYS.SUN_EDGE_POINT]: current[SCENE_SETTING_KEYS.SUN_EDGE_POINT],
@@ -227,8 +216,7 @@ function _formSettings(data, current) {
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS) ?? current[SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS] ?? 120), 0, 600),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]: data.has(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? current[SCENE_SETTING_KEYS.TOKEN_SCALE_MAX] ?? 1.5), 1, 3),
-    [SCENE_SETTING_KEYS.DEPTH_SCALE]: _choice(data, SCENE_SETTING_KEYS.DEPTH_SCALE, Object.values(DEPTH_SCALES), current),
-    [SCENE_SETTING_KEYS.EXTRUSION]: _choice(data, SCENE_SETTING_KEYS.EXTRUSION, Object.values(EXTRUSION_STRENGTHS), current)
+    [SCENE_SETTING_KEYS.DEPTH_SCALE]: _choice(data, SCENE_SETTING_KEYS.DEPTH_SCALE, Object.values(DEPTH_SCALES), current)
   };
 }
 

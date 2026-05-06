@@ -656,6 +656,9 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
         system: {
           elevation: 1,
           shadowStrength: SHADOW_STRENGTH_LIMITS.DEFAULT,
+          parallaxModeOverride: "",
+          shadowModeOverride: "",
+          blendModeOverride: "",
           modifyTokenElevation: true,
           modifyTokenScaling: true
         }
