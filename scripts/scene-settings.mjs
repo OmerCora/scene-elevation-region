@@ -77,7 +77,9 @@ const SELECT_GROUPS = Object.freeze({
     [SHADOW_MODES.REVERSED_RESPONSIVE, "SCENE_ELEVATION.Settings.ShadowModeReversedResponsive"],
     [SHADOW_MODES.FIXED_VISIBLE, "SCENE_ELEVATION.Settings.ShadowModeFixedVisible"],
     [SHADOW_MODES.TOP_DOWN, "SCENE_ELEVATION.Settings.ShadowModeTopDown"],
-    [SHADOW_MODES.TOP_DOWN_STRONG, "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong"]
+    [SHADOW_MODES.TOP_DOWN_STRONG, "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong"],
+    [SHADOW_MODES.SMALL_TIME_SUN, "SCENE_ELEVATION.Settings.ShadowModeSmallTimeSun"],
+    [SHADOW_MODES.SUN_AT_EDGE, "SCENE_ELEVATION.Settings.ShadowModeSunAtEdge"]
   ],
   [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: [
     [TOKEN_ELEVATION_MODES.ALWAYS, "SCENE_ELEVATION.Settings.TokenElevationModeAlways"],
@@ -108,9 +110,10 @@ export async function openSceneElevationSettingsDialog(scene = canvas?.scene) {
 class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
   constructor(scene) {
     super({
+      classes: [MODULE_ID, `${MODULE_ID}-scene-settings-dialog`],
       window: { title: game.i18n.localize("SCENE_ELEVATION.SceneSettings.Title"), resizable: true },
-      position: { width: 440, height: 560 },
-      content: _settingsForm(getSceneElevationSettings(scene)),
+      position: { width: 460, height: 620 },
+      content: `<div class="${MODULE_ID}-scene-settings-scroll">${_settingsForm(getSceneElevationSettings(scene))}</div>`,
       buttons: [{ action: "close", label: game.i18n.localize("Close"), icon: "fa-solid fa-check", default: true }]
     });
     this.scene = scene;
@@ -159,6 +162,8 @@ function _settingsForm(settings) {
     ${_selectField(SCENE_SETTING_KEYS.BLEND_MODE, "SCENE_ELEVATION.Settings.TransitionMode", settings)}
     ${_selectField(SCENE_SETTING_KEYS.OVERLAY_SCALE, "SCENE_ELEVATION.Settings.OverlayScale", settings)}
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_MODE, "SCENE_ELEVATION.Settings.ShadowMode", settings)}
+    ${_numberField(SCENE_SETTING_KEYS.SUNRISE_HOUR, "SCENE_ELEVATION.Settings.SunriseHour", "SCENE_ELEVATION.Settings.SunriseHourHint", settings, { min: 0, max: 23.75, step: 0.25 })}
+    ${_numberField(SCENE_SETTING_KEYS.SUNSET_HOUR, "SCENE_ELEVATION.Settings.SunsetHour", "SCENE_ELEVATION.Settings.SunsetHourHint", settings, { min: 0.25, max: 24, step: 0.25 })}
     ${_selectField(SCENE_SETTING_KEYS.DEPTH_SCALE, "SCENE_ELEVATION.Settings.DepthScale", settings)}
     ${_selectField(SCENE_SETTING_KEYS.EXTRUSION, "SCENE_ELEVATION.Settings.Extrusion", settings)}
     ${_selectField(SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, "SCENE_ELEVATION.Settings.TokenElevationMode", settings)}
@@ -188,6 +193,15 @@ function _selectField(name, labelKey, settings) {
   </div>`;
 }
 
+function _numberField(name, labelKey, hintKey, settings, { min, max, step }) {
+  const value = Number(settings[name] ?? 0);
+  return `<div class="form-group">
+    <label>${game.i18n.localize(labelKey)}</label>
+    <input type="number" name="${name}" min="${min}" max="${max}" step="${step}" value="${Number.isFinite(value) ? value : 0}">
+    <p class="hint">${game.i18n.localize(hintKey)}</p>
+  </div>`;
+}
+
 function _populateSettingsForm(form, settings) {
   for (const [key, value] of Object.entries(settings)) {
     const field = form.elements.namedItem(key);
@@ -206,6 +220,9 @@ function _formSettings(data, current) {
     [SCENE_SETTING_KEYS.BLEND_MODE]: _choice(data, SCENE_SETTING_KEYS.BLEND_MODE, Object.values(BLEND_MODES), current),
     [SCENE_SETTING_KEYS.OVERLAY_SCALE]: _choice(data, SCENE_SETTING_KEYS.OVERLAY_SCALE, Object.keys(OVERLAY_SCALE_STRENGTHS), current),
     [SCENE_SETTING_KEYS.SHADOW_MODE]: _choice(data, SCENE_SETTING_KEYS.SHADOW_MODE, Object.values(SHADOW_MODES), current),
+    [SCENE_SETTING_KEYS.SUNRISE_HOUR]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SUNRISE_HOUR) ?? current[SCENE_SETTING_KEYS.SUNRISE_HOUR] ?? 6), 0, 23.75),
+    [SCENE_SETTING_KEYS.SUNSET_HOUR]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SUNSET_HOUR) ?? current[SCENE_SETTING_KEYS.SUNSET_HOUR] ?? 18), 0.25, 24),
+    [SCENE_SETTING_KEYS.SUN_EDGE_POINT]: current[SCENE_SETTING_KEYS.SUN_EDGE_POINT],
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: _choice(data, SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, Object.values(TOKEN_ELEVATION_MODES), current),
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS) ?? current[SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS] ?? 120), 0, 600),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]: data.has(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED),

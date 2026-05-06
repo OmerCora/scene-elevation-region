@@ -42,6 +42,8 @@ const CLIFF_WARP_DEPTH_MAX_GRID = 1.45;
 const CLIFF_WARP_TEXTURE_ALPHA_MAX = 0.96;
 const STRONG_TOP_DOWN_SHADOW_MULTIPLIER = 2.35;
 const STRONG_TOP_DOWN_BLUR_MULTIPLIER = 1.55;
+const SUN_EDGE_SHADOW_ALPHA_MULTIPLIER = 1.25;
+const SUN_EDGE_SHADOW_LENGTH_MULTIPLIER = 1.2;
 const SLOPE_STRETCH_STEPS = 6;
 const SLOPE_STRETCH_SCALE_MIN = 1.006;
 const SLOPE_STRETCH_SCALE_MAX = 1.075;
@@ -669,9 +671,13 @@ export class RegionElevationRenderer {
     const transitionNormalized = Math.clamp(_depthNormalize(deltaMagnitude, reference, depthScale), 0.1, 1);
     const isHole = entry.elevation < 0;
     const baseParallaxDirection = parallax > 0 ? this._perspectiveDirection(bounds, perspectivePoint) : STATIC_SHADOW_DIRECTION;
-    const shadowDirection = this._shadowDirection(bounds, parallax, shadowMode, perspectivePoint);
+    const sunShadow = _sunShadowState(shadowMode, geo, bounds);
+    const shadowDirection = sunShadow?.direction ?? this._shadowDirection(bounds, parallax, shadowMode, perspectivePoint);
     const blendProfile = this._blendProfile(blendMode);
     const strongTopDownShadow = shadowMode === SHADOW_MODES.TOP_DOWN_STRONG;
+    const shadowAlphaMultiplier = sunShadow?.alphaMultiplier ?? 1;
+    const shadowLengthMultiplier = sunShadow?.lengthMultiplier ?? 1;
+    const shadowBlurMultiplier = sunShadow?.blurMultiplier ?? 1;
     const sign = isHole ? -1 : 1;
     const overlayScaleDepth = _overlayScaleDepthFactor(absElevation, reference, depthScale);
     const overlayScaleDelta = overlayScaleDepth * (overlayScaleStrength + (blendProfile.overlayScaleBonus ?? 0)) * sign;
@@ -695,12 +701,12 @@ export class RegionElevationRenderer {
     const textureShift = this._textureShiftForMode(parallaxVector, parallaxMode, blendProfile);
     const transitionShift = this._transitionShiftForMode(parallaxVector, parallaxMode, blendProfile);
     const softShadowOffset = {
-      x: shadowDirection.x * lift * SHADOW_OFFSET_MULTIPLIER * sign,
-      y: shadowDirection.y * lift * SHADOW_OFFSET_MULTIPLIER * sign
+      x: shadowDirection.x * lift * SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign,
+      y: shadowDirection.y * lift * SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign
     };
     const contactShadowOffset = {
-      x: shadowDirection.x * lift * CONTACT_SHADOW_OFFSET_MULTIPLIER * sign,
-      y: shadowDirection.y * lift * CONTACT_SHADOW_OFFSET_MULTIPLIER * sign
+      x: shadowDirection.x * lift * CONTACT_SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign,
+      y: shadowDirection.y * lift * CONTACT_SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign
     };
     const shadowStrength = Math.clamp(entry.shadowStrength ?? SHADOW_STRENGTH_LIMITS.DEFAULT, SHADOW_STRENGTH_LIMITS.MIN, SHADOW_STRENGTH_LIMITS.MAX);
     const blendWidth = this._blendWidth(gridSize, transitionNormalized, parallax, blendProfile);
@@ -838,15 +844,15 @@ export class RegionElevationRenderer {
       innerContactAlpha: Math.clamp((INNER_CONTACT_ALPHA_BASE + normalized * INNER_CONTACT_ALPHA_ELEVATION) * shadowStrength, 0, INNER_SHADOW_ALPHA_MAX),
       innerShadowBlur,
       innerContactBlur: Math.max(2, innerShadowBlur * 0.48),
-      softShadowAlpha: Math.clamp((SOFT_SHADOW_ALPHA_BASE + normalized * SOFT_SHADOW_ALPHA_ELEVATION) * shadowStrength * (strongTopDownShadow ? STRONG_TOP_DOWN_SHADOW_MULTIPLIER : 1), 0, strongTopDownShadow ? 1 : SHADOW_ALPHA_MAX),
-      contactShadowAlpha: Math.clamp((CONTACT_SHADOW_ALPHA_BASE + normalized * CONTACT_SHADOW_ALPHA_ELEVATION) * shadowStrength * (strongTopDownShadow ? STRONG_TOP_DOWN_SHADOW_MULTIPLIER : 1), 0, strongTopDownShadow ? 1 : SHADOW_ALPHA_MAX),
+      softShadowAlpha: Math.clamp((SOFT_SHADOW_ALPHA_BASE + normalized * SOFT_SHADOW_ALPHA_ELEVATION) * shadowStrength * shadowAlphaMultiplier * (strongTopDownShadow ? STRONG_TOP_DOWN_SHADOW_MULTIPLIER : 1), 0, strongTopDownShadow ? 1 : SHADOW_ALPHA_MAX),
+      contactShadowAlpha: Math.clamp((CONTACT_SHADOW_ALPHA_BASE + normalized * CONTACT_SHADOW_ALPHA_ELEVATION) * shadowStrength * shadowAlphaMultiplier * (strongTopDownShadow ? STRONG_TOP_DOWN_SHADOW_MULTIPLIER : 1), 0, strongTopDownShadow ? 1 : SHADOW_ALPHA_MAX),
       softShadowBlur: Math.clamp(
-        gridSize * (SOFT_SHADOW_BLUR_GRID_RATIO + normalized * SOFT_SHADOW_BLUR_ELEVATION_RATIO) * (0.8 + shadowStrength * 0.16) * (strongTopDownShadow ? STRONG_TOP_DOWN_BLUR_MULTIPLIER : 1),
+        gridSize * (SOFT_SHADOW_BLUR_GRID_RATIO + normalized * SOFT_SHADOW_BLUR_ELEVATION_RATIO) * (0.8 + shadowStrength * 0.16) * shadowBlurMultiplier * (strongTopDownShadow ? STRONG_TOP_DOWN_BLUR_MULTIPLIER : 1),
         SOFT_SHADOW_BLUR_MIN,
         gridSize * (strongTopDownShadow ? 0.9 : 0.48)
       ),
       contactShadowBlur: Math.clamp(
-        gridSize * (CONTACT_SHADOW_BLUR_GRID_RATIO + normalized * CONTACT_SHADOW_BLUR_ELEVATION_RATIO) * (0.85 + shadowStrength * 0.12) * (strongTopDownShadow ? STRONG_TOP_DOWN_BLUR_MULTIPLIER : 1),
+        gridSize * (CONTACT_SHADOW_BLUR_GRID_RATIO + normalized * CONTACT_SHADOW_BLUR_ELEVATION_RATIO) * (0.85 + shadowStrength * 0.12) * shadowBlurMultiplier * (strongTopDownShadow ? STRONG_TOP_DOWN_BLUR_MULTIPLIER : 1),
         CONTACT_SHADOW_BLUR_MIN,
         gridSize * (strongTopDownShadow ? 0.36 : 0.16)
       )
@@ -1610,6 +1616,144 @@ function _depthScale() {
 function _extrusionStrength() {
   const value = getSceneElevationSetting(SCENE_SETTING_KEYS.EXTRUSION) ?? EXTRUSION_STRENGTHS.OFF;
   return Object.values(EXTRUSION_STRENGTHS).includes(value) ? value : EXTRUSION_STRENGTHS.OFF;
+}
+
+function _sunShadowState(shadowMode, geo, bounds) {
+  if (shadowMode === SHADOW_MODES.SUN_AT_EDGE) {
+    const sunPoint = _clampPointToSceneEdge(getSceneElevationSetting(SCENE_SETTING_KEYS.SUN_EDGE_POINT), geo);
+    return {
+      direction: _directionAwayFromPoint(bounds.center, sunPoint),
+      alphaMultiplier: SUN_EDGE_SHADOW_ALPHA_MULTIPLIER,
+      lengthMultiplier: SUN_EDGE_SHADOW_LENGTH_MULTIPLIER,
+      blurMultiplier: 1.08
+    };
+  }
+  if (shadowMode !== SHADOW_MODES.SMALL_TIME_SUN) return null;
+
+  const hour = _currentTimeHour();
+  const sunrise = _sceneHourSetting(SCENE_SETTING_KEYS.SUNRISE_HOUR, 6, 0, 23.75);
+  const sunset = _sceneHourSetting(SCENE_SETTING_KEYS.SUNSET_HOUR, 18, 0.25, 24);
+  const sunPoint = _sunPointForHour(hour, sunrise, sunset, geo);
+  if (!sunPoint) return {
+    direction: STATIC_SHADOW_DIRECTION,
+    alphaMultiplier: 0,
+    lengthMultiplier: 1,
+    blurMultiplier: 1
+  };
+
+  const middleY = geo.y + geo.height / 2;
+  const altitude = Math.clamp((middleY - sunPoint.y) / Math.max(1, middleY - geo.y), 0, 1);
+  return {
+    direction: _directionAwayFromPoint(bounds.center, sunPoint),
+    alphaMultiplier: 0.38 + altitude * 0.92,
+    lengthMultiplier: 1.75 - altitude * 0.55,
+    blurMultiplier: 1.35 - altitude * 0.18
+  };
+}
+
+function _sceneHourSetting(key, fallback, min, max) {
+  const value = Number(getSceneElevationSetting(key) ?? fallback);
+  return Math.clamp(Number.isFinite(value) ? value : fallback, min, max);
+}
+
+function _sunPointForHour(hour, sunrise, sunset, geo) {
+  if (!Number.isFinite(hour) || sunset <= sunrise) return null;
+  if (hour < sunrise || hour > sunset) return null;
+
+  const noon = 12;
+  const leftX = geo.x;
+  const centerX = geo.x + geo.width / 2;
+  const rightX = geo.x + geo.width;
+  const topY = geo.y;
+  const middleY = geo.y + geo.height / 2;
+  if (sunrise < noon && sunset > noon) {
+    if (hour <= noon) {
+      const progress = Math.clamp((hour - sunrise) / Math.max(0.25, noon - sunrise), 0, 1);
+      return {
+        x: rightX + (centerX - rightX) * progress,
+        y: middleY + (topY - middleY) * progress
+      };
+    }
+    const progress = Math.clamp((hour - noon) / Math.max(0.25, sunset - noon), 0, 1);
+    return {
+      x: centerX + (leftX - centerX) * progress,
+      y: topY + (middleY - topY) * progress
+    };
+  }
+
+  const progress = Math.clamp((hour - sunrise) / Math.max(0.25, sunset - sunrise), 0, 1);
+  return {
+    x: rightX + (leftX - rightX) * progress,
+    y: middleY - Math.sin(progress * Math.PI) * (middleY - topY)
+  };
+}
+
+function _directionAwayFromPoint(center, sourcePoint) {
+  const dx = center.x - sourcePoint.x;
+  const dy = center.y - sourcePoint.y;
+  const distance = Math.hypot(dx, dy);
+  if (!Number.isFinite(distance) || distance < 1) return STATIC_SHADOW_DIRECTION;
+  return { x: dx / distance, y: dy / distance };
+}
+
+function _currentTimeHour() {
+  const smallTime = game.modules.get("smalltime") ?? game.modules.get("small-time");
+  const api = smallTime?.active ? smallTime.api : null;
+  const candidates = [];
+  for (const methodName of ["getTime", "getCurrentTime", "getCurrentTimeOfDay", "currentTime"]) {
+    const member = api?.[methodName];
+    if (typeof member === "function") {
+      try { candidates.push(member.call(api)); } catch (err) {}
+    }
+  }
+  for (const propertyName of ["time", "currentTime", "current", "clock", "timeOfDay"]) {
+    if (api?.[propertyName] !== undefined) candidates.push(api[propertyName]);
+  }
+  candidates.push(game.time?.worldTime);
+  for (const candidate of candidates) {
+    const hour = _extractHour(candidate);
+    if (Number.isFinite(hour)) return hour;
+  }
+  return 12;
+}
+
+function _extractHour(value, depth = 0) {
+  if (value === null || value === undefined || depth > 3) return null;
+  if (typeof value === "number") return _numberToHour(value);
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^[+-]?\d+(?:\.\d+)?$/.test(trimmed)) return _numberToHour(Number(trimmed));
+    const timeMatch = trimmed.match(/\b(\d{1,2})(?::(\d{1,2}))?\s*(am|pm)?\b/i);
+    if (timeMatch) {
+      const suffix = timeMatch[3]?.toLowerCase();
+      let hour = Number(timeMatch[1]);
+      const minutes = Number(timeMatch[2] ?? 0);
+      if (suffix === "pm" && hour < 12) hour += 12;
+      else if (suffix === "am" && hour === 12) hour = 0;
+      if (Number.isFinite(hour) && Number.isFinite(minutes)) return ((hour + minutes / 60) % 24 + 24) % 24;
+    }
+    const numeric = Number(trimmed);
+    return Number.isFinite(numeric) ? _numberToHour(numeric) : null;
+  }
+  if (value instanceof Date) return value.getHours() + value.getMinutes() / 60;
+  if (typeof value !== "object") return null;
+
+  const hourValue = value.hour ?? value.hours ?? value.h;
+  if (Number.isFinite(Number(hourValue))) {
+    const minutes = Number(value.minute ?? value.minutes ?? value.m ?? 0);
+    return ((Number(hourValue) + (Number.isFinite(minutes) ? minutes : 0) / 60) % 24 + 24) % 24;
+  }
+  for (const key of ["time", "current", "clock", "worldTime", "seconds", "totalSeconds", "value"]) {
+    const hour = _extractHour(value[key], depth + 1);
+    if (Number.isFinite(hour)) return hour;
+  }
+  return null;
+}
+
+function _numberToHour(value) {
+  if (!Number.isFinite(value)) return null;
+  if (Math.abs(value) > 24) return ((value / 3600) % 24 + 24) % 24;
+  return ((value % 24) + 24) % 24;
 }
 
 /** Compute the per-region "lift factor" used as the multiplier for visual height

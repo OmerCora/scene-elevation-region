@@ -3,6 +3,7 @@ import {
   SETTINGS,
   SCENE_SETTING_KEYS,
   PERSPECTIVE_POINTS,
+  SHADOW_MODES,
   REGION_BEHAVIOR_TYPE,
   SHADOW_STRENGTH_LIMITS,
   sceneGeometry,
@@ -23,6 +24,7 @@ const DOUBLE_CLICK_DISTANCE = 8;
 const PREVIEW_COLOR = 0x66ccff;
 const OUTLINE_COLOR = 0xffd166;
 const EDGE_HANDLE_COLOR = 0xff4d6d;
+const SUN_HANDLE_COLOR = 0xffd166;
 const EDGE_HANDLE_RADIUS = 9;
 const TOOL_SELECT = "select";
 const TOOL_POLYGON = "elevationPolygon";
@@ -48,6 +50,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this.preview = null;
     this.outlines = null;
     this.perspectiveHandle = null;
+    this.sunHandle = null;
     this._activeTool = null;
     this._points = [];
     this._hover = null;
@@ -57,7 +60,9 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._creating = false;
     this._lastClick = null;
     this._draggingPerspectivePoint = false;
+    this._draggingSunPoint = false;
     this._edgePointPreview = null;
+    this._sunEdgePointPreview = null;
     this._createdRegionOperations = [];
     this._undoingRegionIds = new Set();
     this._nativeRegionVisibility = null;
@@ -86,6 +91,11 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this.perspectiveHandle.zIndex = 20_003;
     this.perspectiveHandle.visible = false;
 
+    this.sunHandle = parent.addChild(new PIXI.Graphics());
+    this.sunHandle.eventMode = "none";
+    this.sunHandle.zIndex = 20_004;
+    this.sunHandle.visible = false;
+
     this.refreshElevationRegionVisibility();
   }
 
@@ -97,19 +107,24 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this.preview?.parent?.removeChild(this.preview);
     this.outlines?.parent?.removeChild(this.outlines);
     this.perspectiveHandle?.parent?.removeChild(this.perspectiveHandle);
+    this.sunHandle?.parent?.removeChild(this.sunHandle);
     this.preview?.destroy();
     this.outlines?.destroy();
     this.perspectiveHandle?.destroy();
+    this.sunHandle?.destroy();
     this.preview = null;
     this.outlines = null;
     this.perspectiveHandle = null;
+    this.sunHandle = null;
     this._points = [];
     this._hover = null;
     this._shapeStart = null;
     this._shapeHover = null;
     this._lastClick = null;
     this._edgePointPreview = null;
+    this._sunEdgePointPreview = null;
     this._draggingPerspectivePoint = false;
+    this._draggingSunPoint = false;
     clearTransientSceneElevationSettings(canvas?.scene);
     return super._tearDown?.(options);
   }
@@ -177,7 +192,9 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._shapeHover = null;
     this._lastClick = null;
     this._draggingPerspectivePoint = false;
+    this._draggingSunPoint = false;
     this._edgePointPreview = null;
+    this._sunEdgePointPreview = null;
     clearTransientSceneElevationSettings(canvas?.scene);
     this.preview?.clear();
     if (this.preview) this.preview.visible = false;
@@ -214,14 +231,23 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
   _onPointerMove(event) {
     if (!this._activeTool) return;
-    if (this._isRightMouseEvent(event) && !this._draggingPerspectivePoint && !this._drawingInProgress()) return;
+    if (this._isRightMouseEvent(event) && !this._draggingPerspectivePoint && !this._draggingSunPoint && !this._drawingInProgress()) return;
     const isCanvasEvent = this._isCanvasEvent(event);
-    if (!this._draggingPerspectivePoint && !this._shapeStart && !isCanvasEvent) {
+    if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._shapeStart && !isCanvasEvent) {
       this._hideElevationHoverLabel();
       return;
     }
-    if (!this._draggingPerspectivePoint && !this._drawingInProgress() && isCanvasEvent) this._updateElevationHoverLabel(event);
+    if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._drawingInProgress() && isCanvasEvent) this._updateElevationHoverLabel(event);
     else this._hideElevationHoverLabel();
+    if (this._draggingSunPoint) {
+      this._consumeEvent(event);
+      const rawPoint = this._eventPosition(event, { snap: false });
+      this._sunEdgePointPreview = this._clampPointToSceneEdge(rawPoint);
+      setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.SUN_EDGE_POINT, this._sunEdgePointPreview);
+      this._drawPerspectiveHandle();
+      RegionElevationRenderer.instance.update();
+      return;
+    }
     if (this._draggingPerspectivePoint) {
       this._consumeEvent(event);
       const rawPoint = this._eventPosition(event, { snap: false });
@@ -244,7 +270,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     if (!this._isCanvasEvent(event)) return;
     const button = event.button ?? event.data?.button ?? event.nativeEvent?.button ?? 0;
     if (button === 2) {
-      if (!this._draggingPerspectivePoint && !this._drawingInProgress()) return;
+      if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._drawingInProgress()) return;
       this._consumeEvent(event);
       this._cancelDrawing();
       return;
@@ -252,6 +278,15 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     if (button !== 0) return;
 
     const rawPoint = this._eventPosition(event, { snap: false });
+    if (this._isSunHandleVisible() && this._isOnSunHandle(rawPoint)) {
+      this._consumeEvent(event);
+      this._draggingSunPoint = true;
+      this._sunEdgePointPreview = this._clampPointToSceneEdge(rawPoint);
+      setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.SUN_EDGE_POINT, this._sunEdgePointPreview);
+      this._drawPerspectiveHandle();
+      RegionElevationRenderer.instance.update();
+      return;
+    }
     if (this._isPerspectiveHandleVisible() && this._isOnPerspectiveHandle(rawPoint)) {
       this._consumeEvent(event);
       this._draggingPerspectivePoint = true;
@@ -294,6 +329,19 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
   async _onPointerUp(event) {
     if (!this._activeTool) return;
+    if (this._draggingSunPoint) {
+      this._consumeEvent(event);
+      const rawPoint = this._eventPosition(event, { snap: false });
+      const point = this._clampPointToSceneEdge(rawPoint);
+      this._sunEdgePointPreview = null;
+      this._draggingSunPoint = false;
+      clearTransientSceneElevationSettings(canvas.scene);
+      const settings = getSceneElevationSettings(canvas.scene);
+      await setSceneElevationSettings(canvas.scene, { ...settings, [SCENE_SETTING_KEYS.SUN_EDGE_POINT]: point });
+      this._drawPerspectiveHandle();
+      RegionElevationRenderer.instance.update();
+      return;
+    }
     if (this._draggingPerspectivePoint) {
       this._consumeEvent(event);
       const rawPoint = this._eventPosition(event, { snap: false });
@@ -322,7 +370,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
   _onContextMenu(event) {
     if (!this._isCanvasEvent(event)) return;
-    if (!this._draggingPerspectivePoint && !this._drawingInProgress()) return;
+    if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._drawingInProgress()) return;
     this._consumeEvent(event);
     this._cancelDrawing();
   }
@@ -506,7 +554,13 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._shapeStart = null;
     this._shapeHover = null;
     this._lastClick = null;
+    this._draggingPerspectivePoint = false;
+    this._draggingSunPoint = false;
+    this._edgePointPreview = null;
+    this._sunEdgePointPreview = null;
+    clearTransientSceneElevationSettings(canvas?.scene);
     this._drawPreview();
+    this._drawPerspectiveHandle();
   }
 
   _undoDrawingStep() {
@@ -756,6 +810,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   }
 
   _drawPerspectiveHandle() {
+    this._drawSunHandle();
     const graphics = this.perspectiveHandle;
     if (!graphics) return;
     graphics.clear();
@@ -776,8 +831,36 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     graphics.lineTo(point.x, point.y + radius * 0.55);
   }
 
+  _drawSunHandle() {
+    const graphics = this.sunHandle;
+    if (!graphics) return;
+    graphics.clear();
+    const visible = this._isSunHandleVisible();
+    graphics.visible = visible;
+    if (!visible) return;
+    const point = this._sunEdgePointPreview ?? this._sunEdgePoint();
+    const scale = canvas.stage?.scale?.x || 1;
+    const radius = (EDGE_HANDLE_RADIUS + 2) / scale;
+    graphics.lineStyle(2 / scale, 0x4a2d00, 0.9);
+    graphics.beginFill(SUN_HANDLE_COLOR, 0.98);
+    graphics.drawCircle(point.x, point.y, radius);
+    graphics.endFill();
+    graphics.lineStyle(1.5 / scale, 0xfff3b0, 0.95);
+    for (let index = 0; index < 8; index++) {
+      const angle = (Math.PI * 2 * index) / 8;
+      const inner = radius * 1.35;
+      const outer = radius * 1.85;
+      graphics.moveTo(point.x + Math.cos(angle) * inner, point.y + Math.sin(angle) * inner);
+      graphics.lineTo(point.x + Math.cos(angle) * outer, point.y + Math.sin(angle) * outer);
+    }
+  }
+
   _isPerspectiveHandleVisible() {
     return this._activeTool === TOOL_SELECT && canvas?.scene && getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT) === PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE;
+  }
+
+  _isSunHandleVisible() {
+    return this._activeTool === TOOL_SELECT && canvas?.scene && getSceneElevationSetting(SCENE_SETTING_KEYS.SHADOW_MODE) === SHADOW_MODES.SUN_AT_EDGE;
   }
 
   _isOnPerspectiveHandle(point) {
@@ -785,8 +868,17 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     return Math.hypot(point.x - handle.x, point.y - handle.y) <= (EDGE_HANDLE_RADIUS + 6) / (canvas.stage?.scale?.x || 1);
   }
 
+  _isOnSunHandle(point) {
+    const handle = this._sunEdgePointPreview ?? this._sunEdgePoint();
+    return Math.hypot(point.x - handle.x, point.y - handle.y) <= (EDGE_HANDLE_RADIUS + 8) / (canvas.stage?.scale?.x || 1);
+  }
+
   _sceneEdgePoint() {
     return this._clampPointToSceneEdge(getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT));
+  }
+
+  _sunEdgePoint() {
+    return this._clampPointToSceneEdge(getSceneElevationSetting(SCENE_SETTING_KEYS.SUN_EDGE_POINT));
   }
 
   _clampPointToSceneEdge(point) {

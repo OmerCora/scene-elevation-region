@@ -175,12 +175,26 @@ Hooks.once("init", () => {
       [SHADOW_MODES.REVERSED_RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeReversedResponsive",
       [SHADOW_MODES.FIXED_VISIBLE]: "SCENE_ELEVATION.Settings.ShadowModeFixedVisible",
       [SHADOW_MODES.TOP_DOWN]: "SCENE_ELEVATION.Settings.ShadowModeTopDown",
-      [SHADOW_MODES.TOP_DOWN_STRONG]: "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong"
+      [SHADOW_MODES.TOP_DOWN_STRONG]: "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong",
+      [SHADOW_MODES.SMALL_TIME_SUN]: "SCENE_ELEVATION.Settings.ShadowModeSmallTimeSun",
+      [SHADOW_MODES.SUN_AT_EDGE]: "SCENE_ELEVATION.Settings.ShadowModeSunAtEdge"
     },
     onChange: () => {
       RegionElevationRenderer.instance.update();
       _refreshAllTokenScales();
     }
+  });
+  game.settings.register(MODULE_ID, SETTINGS.SUNRISE_HOUR, {
+    name: "SCENE_ELEVATION.Settings.SunriseHour",
+    hint: "SCENE_ELEVATION.Settings.SunriseHourHint",
+    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.SUNRISE_HOUR],
+    onChange: () => RegionElevationRenderer.instance.update()
+  });
+  game.settings.register(MODULE_ID, SETTINGS.SUNSET_HOUR, {
+    name: "SCENE_ELEVATION.Settings.SunsetHour",
+    hint: "SCENE_ELEVATION.Settings.SunsetHourHint",
+    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.SUNSET_HOUR],
+    onChange: () => RegionElevationRenderer.instance.update()
   });
   game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_ENABLED, {
     name: "SCENE_ELEVATION.Settings.TokenScale",
@@ -261,6 +275,11 @@ Hooks.once("init", () => {
   };
   registerRegionHooks(invalidate);
   registerElevationControls();
+
+  Hooks.on("updateWorldTime", () => {
+    RegionElevationRenderer.instance.update();
+    _refreshAllTokenScales();
+  });
 
   const mod = game.modules.get(MODULE_ID);
   if (mod) mod.api = {
