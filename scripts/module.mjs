@@ -14,6 +14,7 @@ const TOKEN_ELEVATION_SETTLE_TIMEOUT_MS = 900;
 const _syncingTokenElevation = new Set();
 const _pendingTokenElevationUpdates = new Map();
 const _tokensWithPendingMovement = new Set();
+let _tokenVisualRefreshFrame = null;
 
 class ResetElevationDefaultsDialog extends foundry.applications.api.DialogV2 {
   constructor() {
@@ -99,7 +100,10 @@ Hooks.once("init", () => {
       [PARALLAX_MODES.HEIGHT_DEPTH_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeHeightDepthCard",
       [PARALLAX_MODES.SHADOW]: "SCENE_ELEVATION.Settings.ParallaxModeShadow"
     },
-    onChange: () => RegionElevationRenderer.instance.update()
+    onChange: () => {
+      RegionElevationRenderer.instance.update();
+      _refreshAllTokenScales();
+    }
   });
   game.settings.register(MODULE_ID, SETTINGS.PERSPECTIVE_POINT, {
     name: "SCENE_ELEVATION.Settings.PerspectivePoint",
@@ -121,7 +125,10 @@ Hooks.once("init", () => {
       [PERSPECTIVE_POINTS.FURTHEST_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointFurthestEdge",
       [PERSPECTIVE_POINTS.NEAREST_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointNearestEdge"
     },
-    onChange: () => RegionElevationRenderer.instance.update()
+    onChange: () => {
+      RegionElevationRenderer.instance.update();
+      _refreshAllTokenScales();
+    }
   });
   game.settings.register(MODULE_ID, SETTINGS.BLEND_MODE, {
     name: "SCENE_ELEVATION.Settings.TransitionMode",
@@ -137,7 +144,10 @@ Hooks.once("init", () => {
       [BLEND_MODES.SLOPE]: "SCENE_ELEVATION.Settings.BlendModeSlope",
       [BLEND_MODES.Z_BRIDGE]: "SCENE_ELEVATION.Settings.BlendModeZBridge"
     },
-    onChange: () => RegionElevationRenderer.instance.update()
+    onChange: () => {
+      RegionElevationRenderer.instance.update();
+      _refreshAllTokenScales();
+    }
   });
   game.settings.register(MODULE_ID, SETTINGS.OVERLAY_SCALE, {
     name: "SCENE_ELEVATION.Settings.OverlayScale",
@@ -151,7 +161,10 @@ Hooks.once("init", () => {
       medium: "SCENE_ELEVATION.Settings.OverlayScaleMedium",
       strong: "SCENE_ELEVATION.Settings.OverlayScaleStrong"
     },
-    onChange: () => RegionElevationRenderer.instance.update()
+    onChange: () => {
+      RegionElevationRenderer.instance.update();
+      _refreshAllTokenScales();
+    }
   });
   game.settings.register(MODULE_ID, SETTINGS.SHADOW_MODE, {
     name: "SCENE_ELEVATION.Settings.ShadowMode",
@@ -164,7 +177,10 @@ Hooks.once("init", () => {
       [SHADOW_MODES.TOP_DOWN]: "SCENE_ELEVATION.Settings.ShadowModeTopDown",
       [SHADOW_MODES.TOP_DOWN_STRONG]: "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong"
     },
-    onChange: () => RegionElevationRenderer.instance.update()
+    onChange: () => {
+      RegionElevationRenderer.instance.update();
+      _refreshAllTokenScales();
+    }
   });
   game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_ENABLED, {
     name: "SCENE_ELEVATION.Settings.TokenScale",
@@ -271,12 +287,15 @@ Hooks.on("canvasReady", async () => {
 
 Hooks.on("canvasTearDown", () => {
   _clearPendingTokenElevationUpdates();
+  _clearPendingTokenVisualRefresh();
   RegionElevationRenderer.instance.detach();
 });
 
 Hooks.on("canvasPan", () => {
   RegionElevationRenderer.instance.onPan();
 });
+
+Hooks.on(`${MODULE_ID}.visualRefresh`, () => _queueTokenVisualRefresh());
 
 Hooks.on("updateScene", (scene, change) => {
   if (scene !== canvas.scene) return;
@@ -333,44 +352,77 @@ function _highestTokenElevationState(tokenDocument, position = {}) {
 function _applyTokenScale(token) {
   if (!token?.mesh) return;
   const uuid = token.document?.uuid ?? token.document?.id;
-  if (uuid && _tokensWithPendingMovement.has(uuid)) return;
   try {
-    // Cache the engine-set base scale once, then drive absolute scale =
-    // base * factor. This avoids the previous bug where successive refreshes
-    // multiplied the scale unboundedly.
     const m = token.mesh;
-    if (!getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED)) {
-      if (m._seBaseScaleX !== undefined) m.scale.set(m._seBaseScaleX, m._seBaseScaleY);
-      m._seLastFactor = 1;
-      return;
-    }
-    if (m._seBaseScaleX === undefined) {
-      m._seBaseScaleX = m.scale.x;
-      m._seBaseScaleY = m.scale.y;
-    } else {
-      // If Foundry just rewrote the scale (e.g. token resize / mirror toggle),
-      // re-cache by comparing to the previously applied product.
-      if (m._seLastFactor && Math.abs(m.scale.x - m._seBaseScaleX * m._seLastFactor) > 1e-4) {
+    const skipScale = uuid && _tokensWithPendingMovement.has(uuid);
+    if (!skipScale) {
+      // Cache the engine-set base scale once, then drive absolute scale =
+      // base * factor. This avoids the previous bug where successive refreshes
+      // multiplied the scale unboundedly.
+      if (!getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED)) {
+        if (m._seBaseScaleX !== undefined) m.scale.set(m._seBaseScaleX, m._seBaseScaleY);
+        m._seLastFactor = 1;
+      } else if (m._seBaseScaleX === undefined) {
+        m._seBaseScaleX = m.scale.x;
+        m._seBaseScaleY = m.scale.y;
+      } else if (m._seLastFactor && Math.abs(m.scale.x - m._seBaseScaleX * m._seLastFactor) > 1e-4) {
+        // If Foundry just rewrote the scale (e.g. token resize / mirror toggle),
+        // re-cache by comparing to the previously applied product.
         m._seBaseScaleX = m.scale.x;
         m._seBaseScaleY = m.scale.y;
       }
+      if (getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED)) {
+        const factor = _tokenScaleFactor(token);
+        m._seLastFactor = factor;
+        const sgnX = Math.sign(m._seBaseScaleX) || 1;
+        const sgnY = Math.sign(m._seBaseScaleY) || 1;
+        m.scale.set(
+          Math.abs(m._seBaseScaleX) * factor * sgnX,
+          Math.abs(m._seBaseScaleY) * factor * sgnY
+        );
+      }
     }
-    const factor = _tokenScaleFactor(token);
-    m._seLastFactor = factor;
-    const sgnX = Math.sign(m._seBaseScaleX) || 1;
-    const sgnY = Math.sign(m._seBaseScaleY) || 1;
-    m.scale.set(
-      Math.abs(m._seBaseScaleX) * factor * sgnX,
-      Math.abs(m._seBaseScaleY) * factor * sgnY
-    );
+    _applyTokenParallaxOffset(token);
   } catch (err) {
     // Silent — drawToken can fire before our module/canvas is fully initialised.
   }
 }
 
+function _applyTokenParallaxOffset(token) {
+  const m = token?.mesh;
+  if (!m?.position) return;
+  if (m._seBasePositionX === undefined) {
+    m._seBasePositionX = m.position.x;
+    m._seBasePositionY = m.position.y;
+  } else if (m._seLastOffset) {
+    const expectedX = m._seBasePositionX + m._seLastOffset.x;
+    const expectedY = m._seBasePositionY + m._seLastOffset.y;
+    if (Math.abs(m.position.x - expectedX) > 0.5 || Math.abs(m.position.y - expectedY) > 0.5) {
+      m._seBasePositionX = m.position.x;
+      m._seBasePositionY = m.position.y;
+    }
+  }
+  const offset = RegionElevationRenderer.instance.tokenParallaxOffset(token.document);
+  m._seLastOffset = offset;
+  m.position.set(m._seBasePositionX + offset.x, m._seBasePositionY + offset.y);
+}
+
 function _refreshAllTokenScales() {
   if (!canvas?.tokens) return;
   for (const t of canvas.tokens.placeables) _applyTokenScale(t);
+}
+
+function _queueTokenVisualRefresh() {
+  if (_tokenVisualRefreshFrame) return;
+  _tokenVisualRefreshFrame = requestAnimationFrame(() => {
+    _tokenVisualRefreshFrame = null;
+    _refreshAllTokenScales();
+  });
+}
+
+function _clearPendingTokenVisualRefresh() {
+  if (_tokenVisualRefreshFrame) cancelAnimationFrame(_tokenVisualRefreshFrame);
+  _tokenVisualRefreshFrame = null;
 }
 
 async function _syncTokenElevation(tokenDocument, position = {}) {
@@ -505,6 +557,9 @@ Hooks.on("drawToken", (token) => {
     delete m._seBaseScaleX;
     delete m._seBaseScaleY;
     delete m._seLastFactor;
+    delete m._seBasePositionX;
+    delete m._seBasePositionY;
+    delete m._seLastOffset;
   }
   _applyTokenScale(token);
 });

@@ -1,4 +1,4 @@
-import { SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, EXTRUSION_STRENGTHS, EXTRUSION_PIXEL_FACTORS, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, sceneGeometry, getSceneElevationSetting } from "./config.mjs";
+import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, EXTRUSION_STRENGTHS, EXTRUSION_PIXEL_FACTORS, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, sceneGeometry, getSceneElevationSetting } from "./config.mjs";
 
 const MIN_ELEVATION_DELTA = 0.05;
 const OVERLAY_ELEVATION_REFERENCE = 6;
@@ -425,6 +425,7 @@ export class RegionElevationRenderer {
     this._previousCameraFocus = null;
     this._panRaf = null;
     this._parallaxState = new Map();
+    this._visualParams = new Map();
     this._needsParallaxFrame = false;
   }
 
@@ -470,6 +471,7 @@ export class RegionElevationRenderer {
     this._cameraFocus = null;
     this._previousCameraFocus = null;
     this._parallaxState.clear();
+    this._visualParams.clear();
     this._needsParallaxFrame = false;
   }
 
@@ -497,6 +499,25 @@ export class RegionElevationRenderer {
     this._parallaxState.clear();
     this._updateCameraFocus(true);
     this._drawRegions();
+  }
+
+  tokenParallaxOffset(tokenDocument, position = {}) {
+    if (!this.container || !this._scene || tokenDocument?.parent !== this._scene || !_parallaxEnabled()) return { x: 0, y: 0 };
+    const gridSize = canvas.grid.size ?? 100;
+    const x = Number(position.x ?? tokenDocument.x ?? 0);
+    const y = Number(position.y ?? tokenDocument.y ?? 0);
+    const width = Number(position.width ?? tokenDocument.width ?? 1);
+    const height = Number(position.height ?? tokenDocument.height ?? 1);
+    const point = {
+      x: x + (width * gridSize) / 2,
+      y: y + (height * gridSize) / 2
+    };
+    const state = getRegionElevationStateAtPoint(point, this._scene, this._entries.map(visual => visual.entry), { requireTokenScaling: true });
+    if (!state.found) return { x: 0, y: 0 };
+    const visual = this._entries.find(candidate => candidate.entry === state.entry);
+    if (!visual) return { x: 0, y: 0 };
+    const offset = this._visualParams.get(this._parallaxStateKey(visual))?.overlayOffset;
+    return offset ? { x: offset.x, y: offset.y } : { x: 0, y: 0 };
   }
 
   _updateCameraFocus(force) {
@@ -562,6 +583,7 @@ export class RegionElevationRenderer {
 
   _drawRegions() {
     this._clearRegionChildren();
+    this._visualParams.clear();
     this._needsParallaxFrame = false;
     if (!this.container || !this._entries.length) return;
 
@@ -577,6 +599,7 @@ export class RegionElevationRenderer {
     for (const visual of this._entries) {
       const perspectivePoint = _perspectivePoint(geo, visual.bounds);
       const params = this._regionVisualParameters(visual, geo, parallax, parallaxMode, blendMode, overlayScaleStrength, shadowMode, perspectivePoint, depthScale, extrusionStrength);
+      this._visualParams.set(this._parallaxStateKey(visual), params);
       if (!params.isHole) {
         const shadow = this._createShadow(visual.paths, params);
         if (shadow) {
@@ -599,6 +622,7 @@ export class RegionElevationRenderer {
       }
     }
     if (this._needsParallaxFrame) this._requestParallaxFrame();
+    Hooks.callAll(`${MODULE_ID}.visualRefresh`);
   }
 
   _requestParallaxFrame() {
