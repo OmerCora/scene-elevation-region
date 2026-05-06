@@ -28,12 +28,20 @@ const PROJECTED_PATCH_ALPHA_MAX = 0.82;
 const PROJECTED_PATCH_STEPS_MIN = 5;
 const PROJECTED_PATCH_STEPS_MAX = 12;
 const PROJECTED_PATCH_DEPTH_MAX_GRID = 0.7;
+const HEIGHT_DEPTH_CAMERA_MULTIPLIER = 0.85;
 const EDGE_STRIP_SAMPLE_MIN_PIXELS = 2;
 const EDGE_STRIP_SAMPLE_MAX_PIXELS = 4;
 const EDGE_STRIP_STEPS_MAX = 18;
 const EDGE_STRIP_ALPHA_MAX = 0.9;
+const HEIGHT_DEPTH_DELTA_WEIGHT = 0.32;
 const SLOPE_DROP_MIN_PIXELS = 5;
 const SLOPE_DROP_MAX_PIXELS = 14;
+const CLIFF_WARP_DROP_MAX_PIXELS = 92;
+const CLIFF_WARP_STEPS = 10;
+const CLIFF_WARP_DEPTH_MAX_GRID = 1.45;
+const CLIFF_WARP_TEXTURE_ALPHA_MAX = 0.96;
+const STRONG_TOP_DOWN_SHADOW_MULTIPLIER = 2.35;
+const STRONG_TOP_DOWN_BLUR_MULTIPLIER = 1.55;
 const SLOPE_STRETCH_STEPS = 6;
 const SLOPE_STRETCH_SCALE_MIN = 1.006;
 const SLOPE_STRETCH_SCALE_MAX = 1.075;
@@ -55,6 +63,7 @@ const INNER_SHADOW_ALPHA_MAX = 0.82;
 const STATIC_SHADOW_DIRECTION = Object.freeze({ x: 0.42, y: 0.91 });
 const SHADOW_OFFSET_MULTIPLIER = 1.7;
 const CONTACT_SHADOW_OFFSET_MULTIPLIER = 0.58;
+const OVERLAY_SCALE_DEPTH_MAX = 3.4;
 const SOFT_SHADOW_BLUR_MIN = 4;
 const SOFT_SHADOW_BLUR_GRID_RATIO = 0.18;
 const SOFT_SHADOW_BLUR_ELEVATION_RATIO = 0.055;
@@ -140,6 +149,39 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
     projectedAlpha: 0.82,
     projectedSteps: 9,
     projectedDepthRatio: 0.72
+  }),
+  [BLEND_MODES.CLIFF_WARP]: Object.freeze({
+    widthMultiplier: 4.2,
+    widthAdd: 18,
+    maxWidth: 110,
+    textureShiftRatio: 0.22,
+    overlayAlpha: 0.998,
+    glueAlpha: 0.3,
+    glueBlurMultiplier: 0.12,
+    slopeAlpha: 0.98,
+    slopeAlphaMax: CLIFF_WARP_TEXTURE_ALPHA_MAX,
+    slopeWidthMultiplier: 3.7,
+    slopeTextureShiftRatio: 0.18,
+    slopeDropPixels: 54,
+    dropMaxPixels: CLIFF_WARP_DROP_MAX_PIXELS,
+    stretchAlpha: 1,
+    stretchSteps: CLIFF_WARP_STEPS,
+    stretchScaleMin: 1.04,
+    stretchScaleMax: 1.45,
+    bridgeBaseAlpha: 0.78,
+    projected: true,
+    projectedAlpha: 0.95,
+    projectedAlphaMax: CLIFF_WARP_TEXTURE_ALPHA_MAX,
+    projectedSteps: 10,
+    projectedStepsMax: 13,
+    projectedDepthRatio: 1.65,
+    projectedDepthMaxGrid: CLIFF_WARP_DEPTH_MAX_GRID,
+    projectedDepthMinRatio: 0.55,
+    projectedScaleFactor: 0.72,
+    projectedWidthBase: 0.55,
+    projectedWidthElevationRatio: 0.65,
+    liftMultiplier: 2.4,
+    overlayScaleBonus: 0.015
   }),
   [BLEND_MODES.SLOPE]: Object.freeze({
     widthMultiplier: 2.15,
@@ -604,25 +646,28 @@ export class RegionElevationRenderer {
     const isHole = entry.elevation < 0;
     const baseParallaxDirection = parallax > 0 ? this._perspectiveDirection(bounds, perspectivePoint) : STATIC_SHADOW_DIRECTION;
     const shadowDirection = this._shadowDirection(bounds, parallax, shadowMode, perspectivePoint);
+    const blendProfile = this._blendProfile(blendMode);
+    const strongTopDownShadow = shadowMode === SHADOW_MODES.TOP_DOWN_STRONG;
     const sign = isHole ? -1 : 1;
-    const overlayScaleDelta = normalized * overlayScaleStrength * sign;
+    const overlayScaleDepth = _overlayScaleDepthFactor(absElevation, reference, depthScale);
+    const overlayScaleDelta = overlayScaleDepth * (overlayScaleStrength + (blendProfile.overlayScaleBonus ?? 0)) * sign;
     const overlayScale = 1 + overlayScaleDelta;
     const perspectiveDistance = Math.hypot(perspectivePoint.x - bounds.center.x, perspectivePoint.y - bounds.center.y);
     const distanceBoost = _parallaxDistanceBoost(perspectiveDistance, geo);
     const liftFactor = _depthLiftFactor(absElevation, depthScale);
+    const liftMultiplier = blendProfile.liftMultiplier ?? 1;
     const liftCeiling = depthScale === DEPTH_SCALES.COMPRESSED
       ? _parallaxLiftMaxPixels(gridSize)
       : Math.max(_parallaxLiftMaxPixels(gridSize), gridSize * (depthScale === DEPTH_SCALES.DRAMATIC ? 6 : 4));
     const lift = Math.clamp(
-      liftFactor * gridSize * (OVERLAY_LIFT_BASE + parallax * OVERLAY_LIFT_PARALLAX) * distanceBoost,
+      liftFactor * gridSize * (OVERLAY_LIFT_BASE + parallax * OVERLAY_LIFT_PARALLAX) * distanceBoost * liftMultiplier,
       0,
-      liftCeiling
+      liftCeiling * Math.max(1, liftMultiplier)
     );
     const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * lift * sign, y: baseParallaxDirection.y * lift * sign } : { x: 0, y: 0 };
     const parallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, lift, sign, parallax) : { x: 0, y: 0 };
     const blendDirection = parallax > 0 ? (_vectorDirection(parallaxVector) ?? baseParallaxDirection) : STATIC_SHADOW_DIRECTION;
     const overlayOffset = this._overlayOffsetForMode(parallaxVector, parallaxMode);
-    const blendProfile = this._blendProfile(blendMode);
     const textureShift = this._textureShiftForMode(parallaxVector, parallaxMode, blendProfile);
     const transitionShift = this._transitionShiftForMode(parallaxVector, parallaxMode, blendProfile);
     const softShadowOffset = {
@@ -645,11 +690,13 @@ export class RegionElevationRenderer {
     let slopeDropMaxPixels = Number(blendProfile.dropMaxPixels ?? SLOPE_DROP_MAX_PIXELS);
     let slopeDropPixels = Math.clamp(blendProfile.slopeDropPixels * (0.75 + transitionNormalized * 0.25), SLOPE_DROP_MIN_PIXELS, slopeDropMaxPixels);
     let slopeStretchPixels = slopeWidth > 0 ? Math.clamp(slopeDropPixels + blendWidth * 0.35, SLOPE_DROP_MIN_PIXELS, slopeDropMaxPixels) : 0;
+    const slopeStretchScaleMin = blendProfile.stretchScaleMin ?? (blendProfile.bridgeBaseAlpha ? Z_BRIDGE_SCALE_MIN : SLOPE_STRETCH_SCALE_MIN);
+    const slopeStretchScaleMax = blendProfile.stretchScaleMax ?? (blendProfile.bridgeBaseAlpha ? Z_BRIDGE_SCALE_MAX : SLOPE_STRETCH_SCALE_MAX);
     let slopeStretchScale = slopeWidth > 0
       ? Math.clamp(
         1 + (slopeStretchPixels * 2) / Math.max(bounds.width, bounds.height, gridSize),
-        blendProfile.bridgeBaseAlpha ? Z_BRIDGE_SCALE_MIN : SLOPE_STRETCH_SCALE_MIN,
-        blendProfile.bridgeBaseAlpha ? Z_BRIDGE_SCALE_MAX : SLOPE_STRETCH_SCALE_MAX
+        slopeStretchScaleMin,
+        slopeStretchScaleMax
       )
       : 1;
     let slopeAlphaBase = blendProfile.slopeAlpha;
@@ -668,24 +715,25 @@ export class RegionElevationRenderer {
     let edgeStripTargetShift = { x: 0, y: 0 };
     if (projectedActive) {
       const projectedIntensity = Math.max(projectedStrength, blendProfile.projected ? 0.65 : 0);
-      slopeWidth = Math.max(slopeWidth, Math.min(blendProfile.maxWidth, gridSize * (0.18 + transitionNormalized * 0.18)));
+      const projectedWidthRatio = (blendProfile.projectedWidthBase ?? 0.18) + transitionNormalized * (blendProfile.projectedWidthElevationRatio ?? 0.18);
+      slopeWidth = Math.max(slopeWidth, Math.min(blendProfile.maxWidth, gridSize * projectedWidthRatio));
       slopeAlphaBase = Math.max(slopeAlphaBase, blendProfile.projectedAlpha ?? 0.68);
       const projectedDepth = Math.clamp(
         lift * (blendProfile.projectedDepthRatio ?? 0.65) * (0.6 + projectedIntensity * 0.55),
-        slopeWidth * 0.35,
-        gridSize * PROJECTED_PATCH_DEPTH_MAX_GRID
+        slopeWidth * (blendProfile.projectedDepthMinRatio ?? 0.35),
+        gridSize * (blendProfile.projectedDepthMaxGrid ?? PROJECTED_PATCH_DEPTH_MAX_GRID)
       );
       projectedPatchShift = {
         x: textureShift.x + overlayOffset.x + blendDirection.x * projectedDepth * sign,
         y: textureShift.y + overlayOffset.y + blendDirection.y * projectedDepth * sign
       };
-      projectedPatchScaleDelta = (overlayScale - 1) + (projectedDepth / Math.max(bounds.width, bounds.height, gridSize)) * 0.18;
+      projectedPatchScaleDelta = (overlayScale - 1) + (projectedDepth / Math.max(bounds.width, bounds.height, gridSize)) * (blendProfile.projectedScaleFactor ?? 0.18);
       projectedPatchSteps = Math.clamp(
         Math.round((blendProfile.projectedSteps ?? 8) + projectedIntensity * 4 + transitionNormalized * 2),
         PROJECTED_PATCH_STEPS_MIN,
-        PROJECTED_PATCH_STEPS_MAX
+        Math.max(PROJECTED_PATCH_STEPS_MAX, blendProfile.projectedStepsMax ?? PROJECTED_PATCH_STEPS_MAX)
       );
-      projectedPatchAlpha = Math.clamp((blendProfile.projectedAlpha ?? 0.72) * shadowStrength * (0.72 + transitionNormalized * 0.28), 0, PROJECTED_PATCH_ALPHA_MAX);
+      projectedPatchAlpha = Math.clamp((blendProfile.projectedAlpha ?? 0.72) * shadowStrength * (0.72 + transitionNormalized * 0.28), 0, blendProfile.projectedAlphaMax ?? PROJECTED_PATCH_ALPHA_MAX);
       if (edgeStripPatch) {
         edgeStripSampleWidth = Math.clamp(2 + transitionNormalized * 2, EDGE_STRIP_SAMPLE_MIN_PIXELS, EDGE_STRIP_SAMPLE_MAX_PIXELS);
         edgeStripTextureShift = textureShift;
@@ -735,7 +783,7 @@ export class RegionElevationRenderer {
       blendWidth,
       slopeWidth,
       slopeTextureShift,
-      slopeAlpha: slopeWidth > 0 ? Math.clamp(slopeAlphaBase * shadowStrength * (0.62 + transitionNormalized * 0.38), 0, SLOPE_TEXTURE_ALPHA_MAX) : 0,
+      slopeAlpha: slopeWidth > 0 ? Math.clamp(slopeAlphaBase * shadowStrength * (0.62 + transitionNormalized * 0.38), 0, blendProfile.slopeAlphaMax ?? SLOPE_TEXTURE_ALPHA_MAX) : 0,
       slopeStretchScale,
       slopeStretchSteps: slopeWidth > 0 ? Math.max(0, slopeStretchStepsBase) : 0,
       slopeStretchAlpha: slopeWidth > 0 ? Math.clamp(slopeStretchAlphaBase * (0.72 + transitionNormalized * 0.28), 0, 1) : 0,
@@ -766,17 +814,17 @@ export class RegionElevationRenderer {
       innerContactAlpha: Math.clamp((INNER_CONTACT_ALPHA_BASE + normalized * INNER_CONTACT_ALPHA_ELEVATION) * shadowStrength, 0, INNER_SHADOW_ALPHA_MAX),
       innerShadowBlur,
       innerContactBlur: Math.max(2, innerShadowBlur * 0.48),
-      softShadowAlpha: Math.clamp((SOFT_SHADOW_ALPHA_BASE + normalized * SOFT_SHADOW_ALPHA_ELEVATION) * shadowStrength, 0, SHADOW_ALPHA_MAX),
-      contactShadowAlpha: Math.clamp((CONTACT_SHADOW_ALPHA_BASE + normalized * CONTACT_SHADOW_ALPHA_ELEVATION) * shadowStrength, 0, SHADOW_ALPHA_MAX),
+      softShadowAlpha: Math.clamp((SOFT_SHADOW_ALPHA_BASE + normalized * SOFT_SHADOW_ALPHA_ELEVATION) * shadowStrength * (strongTopDownShadow ? STRONG_TOP_DOWN_SHADOW_MULTIPLIER : 1), 0, strongTopDownShadow ? 1 : SHADOW_ALPHA_MAX),
+      contactShadowAlpha: Math.clamp((CONTACT_SHADOW_ALPHA_BASE + normalized * CONTACT_SHADOW_ALPHA_ELEVATION) * shadowStrength * (strongTopDownShadow ? STRONG_TOP_DOWN_SHADOW_MULTIPLIER : 1), 0, strongTopDownShadow ? 1 : SHADOW_ALPHA_MAX),
       softShadowBlur: Math.clamp(
-        gridSize * (SOFT_SHADOW_BLUR_GRID_RATIO + normalized * SOFT_SHADOW_BLUR_ELEVATION_RATIO) * (0.8 + shadowStrength * 0.16),
+        gridSize * (SOFT_SHADOW_BLUR_GRID_RATIO + normalized * SOFT_SHADOW_BLUR_ELEVATION_RATIO) * (0.8 + shadowStrength * 0.16) * (strongTopDownShadow ? STRONG_TOP_DOWN_BLUR_MULTIPLIER : 1),
         SOFT_SHADOW_BLUR_MIN,
-        gridSize * 0.48
+        gridSize * (strongTopDownShadow ? 0.9 : 0.48)
       ),
       contactShadowBlur: Math.clamp(
-        gridSize * (CONTACT_SHADOW_BLUR_GRID_RATIO + normalized * CONTACT_SHADOW_BLUR_ELEVATION_RATIO) * (0.85 + shadowStrength * 0.12),
+        gridSize * (CONTACT_SHADOW_BLUR_GRID_RATIO + normalized * CONTACT_SHADOW_BLUR_ELEVATION_RATIO) * (0.85 + shadowStrength * 0.12) * (strongTopDownShadow ? STRONG_TOP_DOWN_BLUR_MULTIPLIER : 1),
         CONTACT_SHADOW_BLUR_MIN,
-        gridSize * 0.16
+        gridSize * (strongTopDownShadow ? 0.36 : 0.16)
       )
     };
   }
@@ -788,6 +836,7 @@ export class RegionElevationRenderer {
       case PARALLAX_MODES.ANCHORED_CARD:
       case PARALLAX_MODES.VELOCITY_CARD:
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
+      case PARALLAX_MODES.HEIGHT_DEPTH_CARD:
         return parallaxVector;
       case PARALLAX_MODES.HYBRID:
         return { x: parallaxVector.x * HYBRID_CARD_LIFT_RATIO, y: parallaxVector.y * HYBRID_CARD_LIFT_RATIO };
@@ -813,6 +862,7 @@ export class RegionElevationRenderer {
       case PARALLAX_MODES.ANCHORED_CARD:
       case PARALLAX_MODES.VELOCITY_CARD:
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
+      case PARALLAX_MODES.HEIGHT_DEPTH_CARD:
       case PARALLAX_MODES.SLOPE_ONLY:
       case PARALLAX_MODES.SHADOW:
       default:
@@ -834,6 +884,7 @@ export class RegionElevationRenderer {
       case PARALLAX_MODES.ANCHORED_CARD:
       case PARALLAX_MODES.VELOCITY_CARD:
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
+      case PARALLAX_MODES.HEIGHT_DEPTH_CARD:
         return { x: parallaxVector.x * HYBRID_CARD_LIFT_RATIO, y: parallaxVector.y * HYBRID_CARD_LIFT_RATIO };
       case PARALLAX_MODES.SHADOW:
       default:
@@ -851,6 +902,8 @@ export class RegionElevationRenderer {
         return this._velocityParallaxVector(visual, lift, sign, parallax);
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
         return this._anchoredVelocityParallaxVector(visual, lift, sign, parallax);
+      case PARALLAX_MODES.HEIGHT_DEPTH_CARD:
+        return this._heightDepthParallaxVector(visual, lift, sign, parallax);
       default:
         return baseVector;
     }
@@ -922,6 +975,24 @@ export class RegionElevationRenderer {
     return state.velocityVector;
   }
 
+  _heightDepthParallaxVector(visual, lift, sign, parallax) {
+    const focus = this._cameraFocus;
+    if (!focus) return { x: 0, y: 0 };
+    const dx = focus.x - visual.bounds.center.x;
+    const dy = focus.y - visual.bounds.center.y;
+    const distance = Math.hypot(dx, dy);
+    const direction = distance > 1 ? { x: dx / distance, y: dy / distance } : this._cameraDirection(visual.bounds);
+    const geo = sceneGeometry(this._scene);
+    const distanceFactor = Math.clamp(distance / Math.max(geo.gridSize * 4, Math.hypot(geo.width, geo.height) * 0.22), 0.25, 1.35);
+    const elevationFactor = Math.clamp(Math.abs(visual.entry.elevation) / 12, 0.25, 1.8);
+    const delta = this._cameraDelta();
+    const target = {
+      x: (direction.x * lift * distanceFactor * elevationFactor + delta.x * parallax * HEIGHT_DEPTH_DELTA_WEIGHT) * sign,
+      y: (direction.y * lift * distanceFactor * elevationFactor + delta.y * parallax * HEIGHT_DEPTH_DELTA_WEIGHT) * sign
+    };
+    return _limitVector(target, lift * HEIGHT_DEPTH_CAMERA_MULTIPLIER * Math.max(1, elevationFactor));
+  }
+
   _cameraDelta() {
     const current = this._cameraFocus;
     const previous = this._previousCameraFocus ?? current;
@@ -970,6 +1041,7 @@ export class RegionElevationRenderer {
   _shadowDirection(bounds, parallax, shadowMode, perspectivePoint) {
     switch (shadowMode) {
       case SHADOW_MODES.TOP_DOWN:
+      case SHADOW_MODES.TOP_DOWN_STRONG:
         return { x: 0, y: 0 };
       case SHADOW_MODES.FIXED_VISIBLE:
         return STATIC_SHADOW_DIRECTION;
@@ -1078,6 +1150,34 @@ export class RegionElevationRenderer {
     band.mask = transitionMask;
     band.addChild(transitionMask);
 
+    if (params.bridgeBaseAlpha > 0) {
+      band.addChild(this._createTextureSprite(texture, geo, {
+        shift: { x: 0, y: 0 },
+        alpha: params.slopeAlpha * params.bridgeBaseAlpha,
+        center: params.projectionCenter,
+        stretchScale: 1
+      }));
+    }
+
+    const stretchSteps = Math.max(0, Math.floor(params.slopeStretchSteps ?? 0));
+    if (stretchSteps > 0 && params.slopeStretchAlpha > 0) {
+      for (let step = stretchSteps; step >= 1; step--) {
+        const t = step / stretchSteps;
+        const alpha = params.slopeAlpha * params.slopeStretchAlpha * (0.28 + 0.72 * t) / stretchSteps;
+        const stretchScale = 1 + (params.slopeStretchScale - 1) * t;
+        const shift = {
+          x: params.slopeTextureShift.x * t,
+          y: params.slopeTextureShift.y * t
+        };
+        band.addChild(this._createTextureSprite(texture, geo, {
+          shift,
+          alpha,
+          center: params.projectionCenter,
+          stretchScale
+        }));
+      }
+    }
+
     const steps = Math.max(1, Math.floor(params.projectedPatchSteps ?? PROJECTED_PATCH_STEPS_MIN));
     for (let step = 1; step <= steps; step++) {
       const t = step / steps;
@@ -1166,13 +1266,8 @@ export class RegionElevationRenderer {
 
   _createRimShadowLayer(paths, offset, alpha, blur, width, insideOnly = false) {
     if (alpha <= 0 || width <= 0) return null;
-    const layer = new PIXI.Graphics();
-    layer.eventMode = "none";
-    layer.lineStyle(Math.max(1, width), 0x000000, alpha);
-    _drawPaths(layer, paths);
-    layer.position.set(offset.x, offset.y);
-    layer.filters = [_makeBlurFilter(blur)];
-    layer.blendMode = PIXI.BLEND_MODES.NORMAL;
+    const layer = this._createGeneratedShadowLayer(paths, offset, alpha, blur, { strokeWidth: Math.max(1, width) });
+    if (!layer) return null;
     if (!insideOnly) return layer;
 
     const container = new PIXI.Container();
@@ -1186,14 +1281,42 @@ export class RegionElevationRenderer {
 
   _createShadowLayer(paths, offset, alpha, blur) {
     if (alpha <= 0) return null;
-    const layer = new PIXI.Graphics();
+    return this._createGeneratedShadowLayer(paths, offset, alpha, blur);
+  }
+
+  _createGeneratedShadowLayer(paths, offset, alpha, blur, { strokeWidth = 0 } = {}) {
+    const bounds = _pathsBounds(paths);
+    if (!bounds) return null;
+    const padding = Math.ceil(Math.max(blur * 4, strokeWidth) + 4);
+    const textureWidth = Math.ceil(bounds.width + padding * 2);
+    const textureHeight = Math.ceil(bounds.height + padding * 2);
+    const ShadowGraphics = _graphicsClass();
+    const shadowShape = new ShadowGraphics();
+    shadowShape.eventMode = "none";
+    if (strokeWidth > 0) {
+      shadowShape.lineStyle(strokeWidth, 0x000000, alpha, 0.5, false, PIXI.LINE_JOIN?.ROUND ?? undefined, PIXI.LINE_CAP?.ROUND ?? undefined);
+      _drawShiftedPaths(shadowShape, paths, -bounds.minX + padding, -bounds.minY + padding);
+    } else {
+      shadowShape.beginFill(0x000000, alpha);
+      _drawShiftedPaths(shadowShape, paths, -bounds.minX + padding, -bounds.minY + padding);
+      shadowShape.endFill();
+    }
+    shadowShape.filters = [_makeBlurFilter(blur)];
+    shadowShape.filterArea = new PIXI.Rectangle(0, 0, textureWidth, textureHeight);
+
+    const texture = this._generateTexture(shadowShape, textureWidth, textureHeight);
+    shadowShape.destroy({ children: true });
+    if (!_validTexture(texture)) {
+      texture?.destroy?.(true);
+      return null;
+    }
+    if (texture.baseTexture) texture.baseTexture.scaleMode = PIXI.SCALE_MODES.LINEAR;
+
+    const layer = new PIXI.Sprite(texture);
     layer.eventMode = "none";
-    layer.beginFill(0x000000, alpha);
-    _drawPaths(layer, paths);
-    layer.endFill();
-    layer.position.set(offset.x, offset.y);
-    layer.filters = [_makeBlurFilter(blur)];
+    layer.position.set(bounds.minX - padding + offset.x, bounds.minY - padding + offset.y);
     layer.blendMode = PIXI.BLEND_MODES.NORMAL;
+    layer._seGeneratedTexture = texture;
     return layer;
   }
 
@@ -1415,6 +1538,8 @@ function _perspectivePoint(geo, bounds = null) {
   switch (point) {
     case PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE:
       return _clampPointToSceneEdge(getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT) ?? { x: geo.x + geo.width / 2, y: geo.y }, geo);
+    case PERSPECTIVE_POINTS.CAMERA_CENTER:
+      return _cameraCenter(geo);
     case PERSPECTIVE_POINTS.FURTHEST_EDGE:
       return _furthestSceneEdgePoint(geo);
     case PERSPECTIVE_POINTS.NEAREST_EDGE:
@@ -1481,6 +1606,13 @@ function _depthLiftFactor(absElevation, depthScale) {
   }
 }
 
+function _overlayScaleDepthFactor(absElevation, reference, depthScale) {
+  if (absElevation <= 0 || reference <= 0) return 0;
+  const referenceLift = _depthLiftFactor(reference, depthScale);
+  if (referenceLift <= 0) return 0;
+  return Math.clamp(_depthLiftFactor(absElevation, depthScale) / referenceLift, 0, OVERLAY_SCALE_DEPTH_MAX);
+}
+
 /** Normalize an elevation magnitude into [0, 1] using the same shape as
  *  _depthLiftFactor so transition strength tracks the chosen depth scale. */
 function _depthNormalize(magnitude, reference, depthScale) {
@@ -1501,7 +1633,7 @@ function _parallaxEnabled() {
 }
 
 function _perspectiveFollowsCamera() {
-  return [PERSPECTIVE_POINTS.FURTHEST_EDGE, PERSPECTIVE_POINTS.NEAREST_EDGE].includes(getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT));
+  return [PERSPECTIVE_POINTS.CAMERA_CENTER, PERSPECTIVE_POINTS.FURTHEST_EDGE, PERSPECTIVE_POINTS.NEAREST_EDGE].includes(getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT));
 }
 
 function _clampPointToSceneEdge(point, geo) {

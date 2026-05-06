@@ -35,6 +35,7 @@ const SELECT_GROUPS = Object.freeze({
     [PARALLAX_MODES.ANCHORED_CARD, "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard"],
     [PARALLAX_MODES.VELOCITY_CARD, "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard"],
     [PARALLAX_MODES.ANCHORED_VELOCITY_CARD, "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard"],
+    [PARALLAX_MODES.HEIGHT_DEPTH_CARD, "SCENE_ELEVATION.Settings.ParallaxModeHeightDepthCard"],
     [PARALLAX_MODES.SHADOW, "SCENE_ELEVATION.Settings.ParallaxModeShadow"]
   ],
   [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: [
@@ -49,6 +50,7 @@ const SELECT_GROUPS = Object.freeze({
     [PERSPECTIVE_POINTS.REGION_BOTTOM_LEFT, "SCENE_ELEVATION.Settings.PerspectivePointRegionBottomLeft"],
     [PERSPECTIVE_POINTS.REGION_BOTTOM_RIGHT, "SCENE_ELEVATION.Settings.PerspectivePointRegionBottomRight"],
     [PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE, "SCENE_ELEVATION.Settings.PerspectivePointSceneEdge"],
+    [PERSPECTIVE_POINTS.CAMERA_CENTER, "SCENE_ELEVATION.Settings.PerspectivePointCameraCenter"],
     [PERSPECTIVE_POINTS.FURTHEST_EDGE, "SCENE_ELEVATION.Settings.PerspectivePointFurthestEdge"],
     [PERSPECTIVE_POINTS.NEAREST_EDGE, "SCENE_ELEVATION.Settings.PerspectivePointNearestEdge"]
   ],
@@ -58,10 +60,13 @@ const SELECT_GROUPS = Object.freeze({
     [BLEND_MODES.WIDE, "SCENE_ELEVATION.Settings.BlendModeWide"],
     [BLEND_MODES.DEPTH_LIP, "SCENE_ELEVATION.Settings.BlendModeDepthLip"],
     [BLEND_MODES.PROJECTED_PATCH, "SCENE_ELEVATION.Settings.BlendModeProjectedPatch"],
+    [BLEND_MODES.CLIFF_WARP, "SCENE_ELEVATION.Settings.BlendModeCliffWarp"],
     [BLEND_MODES.SLOPE, "SCENE_ELEVATION.Settings.BlendModeSlope"],
     [BLEND_MODES.Z_BRIDGE, "SCENE_ELEVATION.Settings.BlendModeZBridge"]
   ],
   [SCENE_SETTING_KEYS.OVERLAY_SCALE]: [
+    ["shrinkMedium", "SCENE_ELEVATION.Settings.OverlayScaleShrinkMedium"],
+    ["shrinkSubtle", "SCENE_ELEVATION.Settings.OverlayScaleShrinkSubtle"],
     ["off", "SCENE_ELEVATION.Settings.OverlayScaleOff"],
     ["subtle", "SCENE_ELEVATION.Settings.OverlayScaleSubtle"],
     ["medium", "SCENE_ELEVATION.Settings.OverlayScaleMedium"],
@@ -71,7 +76,8 @@ const SELECT_GROUPS = Object.freeze({
     [SHADOW_MODES.RESPONSIVE, "SCENE_ELEVATION.Settings.ShadowModeResponsive"],
     [SHADOW_MODES.REVERSED_RESPONSIVE, "SCENE_ELEVATION.Settings.ShadowModeReversedResponsive"],
     [SHADOW_MODES.FIXED_VISIBLE, "SCENE_ELEVATION.Settings.ShadowModeFixedVisible"],
-    [SHADOW_MODES.TOP_DOWN, "SCENE_ELEVATION.Settings.ShadowModeTopDown"]
+    [SHADOW_MODES.TOP_DOWN, "SCENE_ELEVATION.Settings.ShadowModeTopDown"],
+    [SHADOW_MODES.TOP_DOWN_STRONG, "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong"]
   ],
   [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: [
     [TOKEN_ELEVATION_MODES.ALWAYS, "SCENE_ELEVATION.Settings.TokenElevationModeAlways"],
@@ -102,7 +108,8 @@ export async function openSceneElevationSettingsDialog(scene = canvas?.scene) {
 class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
   constructor(scene) {
     super({
-      window: { title: game.i18n.localize("SCENE_ELEVATION.SceneSettings.Title") },
+      window: { title: game.i18n.localize("SCENE_ELEVATION.SceneSettings.Title"), resizable: true },
+      position: { width: 440, height: 560 },
       content: _settingsForm(getSceneElevationSettings(scene)),
       buttons: [{ action: "close", label: game.i18n.localize("Close"), icon: "fa-solid fa-check", default: true }]
     });
@@ -156,6 +163,11 @@ function _settingsForm(settings) {
     ${_selectField(SCENE_SETTING_KEYS.EXTRUSION, "SCENE_ELEVATION.Settings.Extrusion", settings)}
     ${_selectField(SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, "SCENE_ELEVATION.Settings.TokenElevationMode", settings)}
     <div class="form-group">
+      <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenElevationAnimationMs")}</label>
+      <input type="number" name="${SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS}" min="0" max="600" step="10" value="${Number(settings[SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS] ?? 120)}">
+      <p class="hint">${game.i18n.localize("SCENE_ELEVATION.Settings.TokenElevationAnimationMsHint")}</p>
+    </div>
+    <div class="form-group">
       <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenScale")}</label>
       <input type="checkbox" name="${SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED}" ${settings[SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED] ? "checked" : ""}>
     </div>
@@ -195,6 +207,7 @@ function _formSettings(data, current) {
     [SCENE_SETTING_KEYS.OVERLAY_SCALE]: _choice(data, SCENE_SETTING_KEYS.OVERLAY_SCALE, Object.keys(OVERLAY_SCALE_STRENGTHS), current),
     [SCENE_SETTING_KEYS.SHADOW_MODE]: _choice(data, SCENE_SETTING_KEYS.SHADOW_MODE, Object.values(SHADOW_MODES), current),
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: _choice(data, SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, Object.values(TOKEN_ELEVATION_MODES), current),
+    [SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS) ?? current[SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS] ?? 120), 0, 600),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]: data.has(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? current[SCENE_SETTING_KEYS.TOKEN_SCALE_MAX] ?? 1.5), 1, 3),
     [SCENE_SETTING_KEYS.DEPTH_SCALE]: _choice(data, SCENE_SETTING_KEYS.DEPTH_SCALE, Object.values(DEPTH_SCALES), current),

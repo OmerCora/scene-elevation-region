@@ -96,6 +96,7 @@ Hooks.once("init", () => {
       [PARALLAX_MODES.ANCHORED_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard",
       [PARALLAX_MODES.VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard",
       [PARALLAX_MODES.ANCHORED_VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard",
+      [PARALLAX_MODES.HEIGHT_DEPTH_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeHeightDepthCard",
       [PARALLAX_MODES.SHADOW]: "SCENE_ELEVATION.Settings.ParallaxModeShadow"
     },
     onChange: () => RegionElevationRenderer.instance.update()
@@ -116,6 +117,7 @@ Hooks.once("init", () => {
       [PERSPECTIVE_POINTS.REGION_BOTTOM_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionBottomLeft",
       [PERSPECTIVE_POINTS.REGION_BOTTOM_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionBottomRight",
       [PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointSceneEdge",
+      [PERSPECTIVE_POINTS.CAMERA_CENTER]: "SCENE_ELEVATION.Settings.PerspectivePointCameraCenter",
       [PERSPECTIVE_POINTS.FURTHEST_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointFurthestEdge",
       [PERSPECTIVE_POINTS.NEAREST_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointNearestEdge"
     },
@@ -131,6 +133,7 @@ Hooks.once("init", () => {
       [BLEND_MODES.WIDE]: "SCENE_ELEVATION.Settings.BlendModeWide",
       [BLEND_MODES.DEPTH_LIP]: "SCENE_ELEVATION.Settings.BlendModeDepthLip",
       [BLEND_MODES.PROJECTED_PATCH]: "SCENE_ELEVATION.Settings.BlendModeProjectedPatch",
+      [BLEND_MODES.CLIFF_WARP]: "SCENE_ELEVATION.Settings.BlendModeCliffWarp",
       [BLEND_MODES.SLOPE]: "SCENE_ELEVATION.Settings.BlendModeSlope",
       [BLEND_MODES.Z_BRIDGE]: "SCENE_ELEVATION.Settings.BlendModeZBridge"
     },
@@ -141,6 +144,8 @@ Hooks.once("init", () => {
     hint: "SCENE_ELEVATION.Settings.OverlayScaleHint",
     scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.OVERLAY_SCALE],
     choices: {
+      shrinkMedium: "SCENE_ELEVATION.Settings.OverlayScaleShrinkMedium",
+      shrinkSubtle: "SCENE_ELEVATION.Settings.OverlayScaleShrinkSubtle",
       off: "SCENE_ELEVATION.Settings.OverlayScaleOff",
       subtle: "SCENE_ELEVATION.Settings.OverlayScaleSubtle",
       medium: "SCENE_ELEVATION.Settings.OverlayScaleMedium",
@@ -156,7 +161,8 @@ Hooks.once("init", () => {
       [SHADOW_MODES.RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeResponsive",
       [SHADOW_MODES.REVERSED_RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeReversedResponsive",
       [SHADOW_MODES.FIXED_VISIBLE]: "SCENE_ELEVATION.Settings.ShadowModeFixedVisible",
-      [SHADOW_MODES.TOP_DOWN]: "SCENE_ELEVATION.Settings.ShadowModeTopDown"
+      [SHADOW_MODES.TOP_DOWN]: "SCENE_ELEVATION.Settings.ShadowModeTopDown",
+      [SHADOW_MODES.TOP_DOWN_STRONG]: "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong"
     },
     onChange: () => RegionElevationRenderer.instance.update()
   });
@@ -176,6 +182,11 @@ Hooks.once("init", () => {
       [TOKEN_ELEVATION_MODES.PER_REGION]: "SCENE_ELEVATION.Settings.TokenElevationModePerRegion"
     },
     onChange: () => void _refreshAllTokenElevations()
+  });
+  game.settings.register(MODULE_ID, SETTINGS.TOKEN_ELEVATION_ANIMATION_MS, {
+    name: "SCENE_ELEVATION.Settings.TokenElevationAnimationMs",
+    hint: "SCENE_ELEVATION.Settings.TokenElevationAnimationMsHint",
+    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_ELEVATION_ANIMATION_MS]
   });
   game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_MAX, {
     name: "SCENE_ELEVATION.Settings.TokenScaleMax",
@@ -254,6 +265,8 @@ Hooks.once("init", () => {
 Hooks.on("canvasReady", async () => {
   RegionElevationRenderer.instance.attach(canvas.scene);
   _refreshAllTokenScales();
+  // Defer a second pass to catch any post-ready Foundry canvas refresh that resets mesh scales
+  requestAnimationFrame(_refreshAllTokenScales);
 });
 
 Hooks.on("canvasTearDown", () => {
@@ -372,7 +385,7 @@ async function _syncTokenElevation(tokenDocument, position = {}) {
   if (Math.abs(current - target) <= 0.001) return;
   _syncingTokenElevation.add(uuid);
   try {
-    await tokenDocument.update({ elevation: target });
+    await tokenDocument.update({ elevation: target }, { animation: { duration: _tokenElevationAnimationDuration() } });
     _applyTokenScale(tokenDocument.object);
   } finally {
     _syncingTokenElevation.delete(uuid);
@@ -456,6 +469,10 @@ function _tokenMovementAnimationDuration(options = {}) {
   return Number.isFinite(duration) && duration > 0 ? Math.min(duration, TOKEN_ELEVATION_SETTLE_TIMEOUT_MS) : TOKEN_ELEVATION_MIN_MOVEMENT_DELAY_MS;
 }
 
+function _tokenElevationAnimationDuration() {
+  return Math.clamp(Number(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS) ?? 120), 0, 600);
+}
+
 function _tokenMovementSettled(tokenDocument) {
   const token = tokenDocument.object;
   if (!token) return true;
@@ -482,6 +499,13 @@ async function _refreshAllTokenElevations() {
 }
 
 Hooks.on("drawToken", (token) => {
+  // Clear stale mesh cache so the upcoming refreshToken re-caches from Foundry's finalized scale
+  const m = token?.mesh;
+  if (m) {
+    delete m._seBaseScaleX;
+    delete m._seBaseScaleY;
+    delete m._seLastFactor;
+  }
   _applyTokenScale(token);
 });
 Hooks.on("refreshToken", _applyTokenScale);
