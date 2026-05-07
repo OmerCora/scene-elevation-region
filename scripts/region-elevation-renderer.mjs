@@ -446,10 +446,6 @@ export class RegionElevationRenderer {
     this.container?.destroy({ children: true });
     this.mask?.destroy();
     this._clearGeneratedTextureCache();
-    if (this._cliffShadeTex) {
-      try { this._cliffShadeTex.destroy(true); } catch (err) {}
-      this._cliffShadeTex = null;
-    }
     this.container = null;
     this.mask = null;
     this._scene = null;
@@ -703,6 +699,7 @@ export class RegionElevationRenderer {
       0,
       liftCeiling * Math.max(1, liftMultiplier)
     );
+    const shadowLift = liftMultiplier > 0 ? lift / liftMultiplier : lift;
     const parallaxLift = lift * parallaxHeightFactor;
     const heightAdjustedParallax = parallax * parallaxHeightFactor;
     const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * parallaxLift * sign, y: baseParallaxDirection.y * parallaxLift * sign } : { x: 0, y: 0 };
@@ -713,12 +710,12 @@ export class RegionElevationRenderer {
     const transitionShift = this._transitionShiftForMode(parallaxVector, parallaxMode, blendProfile);
     const longShadowBlend = Math.clamp((shadowLengthMultiplier - SHADOW_BRIDGE_THRESHOLD) / 2.6, 0, 1);
     const softShadowOffset = {
-      x: shadowDirection.x * lift * SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign,
-      y: shadowDirection.y * lift * SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign
+      x: shadowDirection.x * shadowLift * SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign,
+      y: shadowDirection.y * shadowLift * SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign
     };
     const contactShadowOffset = {
-      x: shadowDirection.x * lift * CONTACT_SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign,
-      y: shadowDirection.y * lift * CONTACT_SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign
+      x: shadowDirection.x * shadowLift * CONTACT_SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign,
+      y: shadowDirection.y * shadowLift * CONTACT_SHADOW_OFFSET_MULTIPLIER * shadowLengthMultiplier * sign
     };
     const shadowStrength = Math.clamp(entry.shadowStrength ?? SHADOW_STRENGTH_LIMITS.DEFAULT, SHADOW_STRENGTH_LIMITS.MIN, SHADOW_STRENGTH_LIMITS.MAX);
     const blackShadowRatio = fullTextureMeldShadow ? 0 : textureMeldShadow ? TEXTURE_MELD_BLACK_ALPHA_RATIO : 1;
@@ -859,8 +856,8 @@ export class RegionElevationRenderer {
       bridgeShadowOffset,
       contactShadowOffset,
       innerShadowOffset: {
-        x: shadowDirection.x * lift * INNER_SHADOW_OFFSET_MULTIPLIER,
-        y: shadowDirection.y * lift * INNER_SHADOW_OFFSET_MULTIPLIER
+        x: shadowDirection.x * shadowLift * INNER_SHADOW_OFFSET_MULTIPLIER,
+        y: shadowDirection.y * shadowLift * INNER_SHADOW_OFFSET_MULTIPLIER
       },
       innerShadowWidth,
       innerContactWidth: Math.max(4, innerShadowWidth * 0.62),
@@ -1142,16 +1139,21 @@ export class RegionElevationRenderer {
     const center = params.center;
     const sourceWidth = Math.max(1, params.cliffWarpSourceWidth || CLIFF_WARP_SOURCE_RIM_PIXELS);
     const sign = params.isHole ? -1 : 1;
+    const sampleRows = [
+      { t: 0, normalOffset: -1 },
+      { t: 1, normalOffset: 1 }
+    ];
+    const rowCount = sampleRows.length;
     const container = new PIXI.Container();
     container.eventMode = "none";
 
     for (const path of paths) {
       if (!path || path.length < 3) continue;
       const n = path.length;
-      const positions = new Float32Array(n * 4);
-      const uvs = new Float32Array(n * 4);
-      const shadeUVs = new Float32Array(n * 4);
-      const indices = new Uint16Array(n * 6);
+      const positions = new Float32Array(n * rowCount * 2);
+      const uvs = new Float32Array(n * rowCount * 2);
+      const indexArray = n * rowCount > 65535 ? Uint32Array : Uint16Array;
+      const indices = new indexArray(n * (rowCount - 1) * 6);
 
       for (let i = 0; i < n; i++) {
         const p = path[i];
@@ -1174,46 +1176,42 @@ export class RegionElevationRenderer {
         const botX = p.x;
         const botY = p.y;
 
-        positions[i * 4 + 0] = topX;
-        positions[i * 4 + 1] = topY;
-        positions[i * 4 + 2] = botX;
-        positions[i * 4 + 3] = botY;
-
-        const topSampleX = p.x;
-        const topSampleY = p.y;
-        const botSampleX = p.x + nx * sourceWidth * sign;
-        const botSampleY = p.y + ny * sourceWidth * sign;
-        uvs[i * 4 + 0] = (topSampleX - geo.x) / geo.width;
-        uvs[i * 4 + 1] = (topSampleY - geo.y) / geo.height;
-        uvs[i * 4 + 2] = (botSampleX - geo.x) / geo.width;
-        uvs[i * 4 + 3] = (botSampleY - geo.y) / geo.height;
-
-        shadeUVs[i * 4 + 0] = 0;
-        shadeUVs[i * 4 + 1] = 0;
-        shadeUVs[i * 4 + 2] = 0;
-        shadeUVs[i * 4 + 3] = 1;
+        for (let row = 0; row < rowCount; row++) {
+          const sampleRow = sampleRows[row];
+          const rowX = topX + (botX - topX) * sampleRow.t;
+          const rowY = topY + (botY - topY) * sampleRow.t;
+          const sampleX = p.x + nx * sourceWidth * sampleRow.normalOffset * sign;
+          const sampleY = p.y + ny * sourceWidth * sampleRow.normalOffset * sign;
+          const vertexOffset = (i * rowCount + row) * 2;
+          positions[vertexOffset + 0] = rowX;
+          positions[vertexOffset + 1] = rowY;
+          uvs[vertexOffset + 0] = Math.clamp((sampleX - geo.x) / geo.width, 0, 1);
+          uvs[vertexOffset + 1] = Math.clamp((sampleY - geo.y) / geo.height, 0, 1);
+        }
       }
 
       for (let i = 0; i < n; i++) {
-        const i0Top = i * 2;
-        const i0Bot = i * 2 + 1;
-        const i1Top = ((i + 1) % n) * 2;
-        const i1Bot = ((i + 1) % n) * 2 + 1;
-        const o = i * 6;
-        if (params.isHole) {
-          indices[o + 0] = i0Top;
-          indices[o + 1] = i0Bot;
-          indices[o + 2] = i1Top;
-          indices[o + 3] = i0Bot;
-          indices[o + 4] = i1Bot;
-          indices[o + 5] = i1Top;
-        } else {
-          indices[o + 0] = i0Top;
-          indices[o + 1] = i1Top;
-          indices[o + 2] = i0Bot;
-          indices[o + 3] = i0Bot;
-          indices[o + 4] = i1Top;
-          indices[o + 5] = i1Bot;
+        for (let row = 0; row < rowCount - 1; row++) {
+          const i0Top = i * rowCount + row;
+          const i0Bot = i * rowCount + row + 1;
+          const i1Top = ((i + 1) % n) * rowCount + row;
+          const i1Bot = ((i + 1) % n) * rowCount + row + 1;
+          const o = (i * (rowCount - 1) + row) * 6;
+          if (params.isHole) {
+            indices[o + 0] = i0Top;
+            indices[o + 1] = i0Bot;
+            indices[o + 2] = i1Top;
+            indices[o + 3] = i0Bot;
+            indices[o + 4] = i1Bot;
+            indices[o + 5] = i1Top;
+          } else {
+            indices[o + 0] = i0Top;
+            indices[o + 1] = i1Top;
+            indices[o + 2] = i0Bot;
+            indices[o + 3] = i0Bot;
+            indices[o + 4] = i1Top;
+            indices[o + 5] = i1Bot;
+          }
         }
       }
 
@@ -1222,15 +1220,6 @@ export class RegionElevationRenderer {
       const mesh = new Mesh(meshGeo, material);
       mesh.eventMode = "none";
       container.addChild(mesh);
-
-      const shadeTexture = this._cliffShadeTexture();
-      if (shadeTexture) {
-        const shadeGeo = new MeshGeometry(positions.slice(), shadeUVs, indices.slice());
-        const shadeMat = new MeshMaterial(shadeTexture, { alpha: 0.55 });
-        const shadeMesh = new Mesh(shadeGeo, shadeMat);
-        shadeMesh.eventMode = "none";
-        container.addChild(shadeMesh);
-      }
     }
 
     if (!container.children.length) {
@@ -1238,22 +1227,6 @@ export class RegionElevationRenderer {
       return null;
     }
     return container;
-  }
-
-  _cliffShadeTexture() {
-    if (this._cliffShadeTex && !this._cliffShadeTex.baseTexture?.destroyed) return this._cliffShadeTex;
-    const c = document.createElement("canvas");
-    c.width = 4;
-    c.height = 64;
-    const ctx = c.getContext("2d");
-    const grad = ctx.createLinearGradient(0, 0, 0, 64);
-    grad.addColorStop(0, "rgba(0,0,0,0)");
-    grad.addColorStop(0.55, "rgba(0,0,0,0.45)");
-    grad.addColorStop(1, "rgba(0,0,0,0.95)");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, 4, 64);
-    this._cliffShadeTex = PIXI.Texture.from(c);
-    return this._cliffShadeTex;
   }
 
   _createTextureSprite(texture, geo, { shift = { x: 0, y: 0 }, alpha = 1, center = null, stretchScale = 1 } = {}) {
