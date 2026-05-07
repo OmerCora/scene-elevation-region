@@ -68,6 +68,7 @@ const SELECT_GROUPS = Object.freeze({
   [SCENE_SETTING_KEYS.SHADOW_MODE]: [
     [SHADOW_MODES.OFF, "SCENE_ELEVATION.Settings.ShadowModeOff"],
     [SHADOW_MODES.RESPONSIVE, "SCENE_ELEVATION.Settings.ShadowModeResponsive"],
+    [SHADOW_MODES.RESPONSIVE_ALL_AROUND, "SCENE_ELEVATION.Settings.ShadowModeResponsiveAllAround"],
     [SHADOW_MODES.REVERSED_RESPONSIVE, "SCENE_ELEVATION.Settings.ShadowModeReversedResponsive"],
     [SHADOW_MODES.TEXTURE_MELD, "SCENE_ELEVATION.Settings.ShadowModeTextureMeld"],
     [SHADOW_MODES.FULL_TEXTURE_MELD, "SCENE_ELEVATION.Settings.ShadowModeFullTextureMeld"],

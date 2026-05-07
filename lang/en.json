@@ -94,6 +94,7 @@
       "ShadowModeHint": "How elevated region shadows choose their direction while panning.",
       "ShadowModeOff": "Off",
       "ShadowModeResponsive": "Responsive angle",
+      "ShadowModeResponsiveAllAround": "Responsive + all-around cast",
       "ShadowModeReversedResponsive": "Reversed responsive angle",
       "ShadowModeTextureMeld": "Texture-melded cast",
       "ShadowModeFullTextureMeld": "Full texture-melded cast",
@@ -133,17 +134,37 @@
           "label": "Shadow strength",
           "hint": "Multiplier for this region's short contact shadow and soft drop shadow. Set to 0 to hide shadows from this region; high values are allowed for testing stronger casts."
         },
+        "parallaxStrengthOverride": {
+          "label": "Parallax strength override",
+          "hint": "Optional parallax strength for this region only. Use scene setting keeps the scene-level parallax strength."
+        },
         "parallaxModeOverride": {
           "label": "Parallax type override",
           "hint": "Optional parallax type for this region only. Use scene setting keeps the scene-level parallax type."
+        },
+        "perspectivePointOverride": {
+          "label": "Perspective point override",
+          "hint": "Optional perspective anchor for this region only. Use scene setting keeps the scene-level perspective point."
+        },
+        "overlayScaleOverride": {
+          "label": "Overlay scale override",
+          "hint": "Optional overlay scale strength for this region only. Use scene setting keeps the scene-level overlay scale."
         },
         "shadowModeOverride": {
           "label": "Shadow type override",
           "hint": "Optional shadow type for this region only. Use scene setting keeps the scene-level shadow type."
         },
+        "shadowLengthOverride": {
+          "label": "Shadow length override",
+          "hint": "Optional shadow length multiplier for this region only. Leave blank to use the scene-level shadow length."
+        },
         "blendModeOverride": {
           "label": "Transition style override",
           "hint": "Optional elevation transition style for this region only. Use scene setting keeps the scene-level transition style."
+        },
+        "depthScaleOverride": {
+          "label": "Depth scale override",
+          "hint": "Optional depth scale for this region only. Use scene setting keeps the scene-level depth scale."
         },
         "modifyTokenElevation": {
           "label": "Modify token elevation",

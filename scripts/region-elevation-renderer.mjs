@@ -32,6 +32,9 @@ const CLIFF_WARP_DEPTH_MAX_GRID = 1.05;
 const CLIFF_WARP_TEXTURE_ALPHA_MAX = 0.92;
 const STRONG_TOP_DOWN_SHADOW_MULTIPLIER = 2.35;
 const STRONG_TOP_DOWN_BLUR_MULTIPLIER = 1.55;
+const CLIFF_WARP_TEXTURE_SHADOW_STRETCH_STEPS_MAX = 2;
+const CLIFF_WARP_TEXTURE_SHADOW_STEP_MULTIPLIER = 0.5;
+const CLIFF_WARP_TEXTURE_SHADOW_ALPHA_MULTIPLIER = 0.82;
 const SUN_EDGE_SHADOW_ALPHA_MULTIPLIER = 1.25;
 const SUN_EDGE_SHADOW_LENGTH_MULTIPLIER = 1.2;
 const TRANSITION_MASK_BLUR_RATIO = 0.35;
@@ -60,6 +63,8 @@ const SOFT_SHADOW_ALPHA_ELEVATION = 0.065;
 const CONTACT_SHADOW_ALPHA_BASE = 0.34;
 const CONTACT_SHADOW_ALPHA_ELEVATION = 0.11;
 const SHADOW_ALPHA_MAX = 0.85;
+const RESPONSIVE_ALL_AROUND_ALPHA_RATIO = 0.42;
+const RESPONSIVE_ALL_AROUND_BLUR_RATIO = 0.64;
 const SHADOW_BRIDGE_THRESHOLD = 1.08;
 const SHADOW_BRIDGE_MAX_ALPHA_RATIO = 0.42;
 const SHADOW_BRIDGE_OFFSET_RATIO = 0.52;
@@ -146,7 +151,7 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
   })
 });
 
-export function getActiveElevationRegions(scene = canvas?.scene) {
+export function getActiveElevationRegions(scene = canvas?.scene, pathCache = null) {
   const regions = scene?.regions;
   if (!regions?.size) return [];
   const entries = [];
@@ -157,15 +162,22 @@ export function getActiveElevationRegions(scene = canvas?.scene) {
     const elevation = Number(behavior.system?.elevation ?? sourceSystem.elevation ?? sourceSystem.height ?? 0);
     const shadowStrength = Number(behavior.system?.shadowStrength ?? sourceSystem.shadowStrength ?? SHADOW_STRENGTH_LIMITS.DEFAULT);
     if (!Number.isFinite(elevation)) continue;
+    const paths = pathCache ? _regionPaths(region) : null;
+    if (pathCache) pathCache.set(region, paths);
     entries.push({
       region,
       behavior,
       elevation,
       shadowStrength: Math.clamp(Number.isFinite(shadowStrength) ? shadowStrength : SHADOW_STRENGTH_LIMITS.DEFAULT, SHADOW_STRENGTH_LIMITS.MIN, SHADOW_STRENGTH_LIMITS.MAX),
-      area: _regionArea(region),
+      area: _regionArea(region, paths),
+      parallaxStrengthOverride: _keyOverride(behavior.system?.parallaxStrengthOverride ?? sourceSystem.parallaxStrengthOverride, PARALLAX_STRENGTHS),
       parallaxModeOverride: _settingOverride(behavior.system?.parallaxModeOverride ?? sourceSystem.parallaxModeOverride, PARALLAX_MODES),
+      perspectivePointOverride: _settingOverride(behavior.system?.perspectivePointOverride ?? sourceSystem.perspectivePointOverride, PERSPECTIVE_POINTS),
+      overlayScaleOverride: _keyOverride(behavior.system?.overlayScaleOverride ?? sourceSystem.overlayScaleOverride, OVERLAY_SCALE_STRENGTHS),
       shadowModeOverride: _settingOverride(behavior.system?.shadowModeOverride ?? sourceSystem.shadowModeOverride, SHADOW_MODES),
+      shadowLengthOverride: _numberOverride(behavior.system?.shadowLengthOverride ?? sourceSystem.shadowLengthOverride, 0, 8),
       blendModeOverride: _settingOverride(behavior.system?.blendModeOverride ?? sourceSystem.blendModeOverride, BLEND_MODES),
+      depthScaleOverride: _settingOverride(behavior.system?.depthScaleOverride ?? sourceSystem.depthScaleOverride, DEPTH_SCALES),
       modifyTokenElevation: behavior.system?.modifyTokenElevation !== false,
       modifyTokenScaling: behavior.system?.modifyTokenScaling !== false
     });
@@ -209,6 +221,17 @@ export function getRegionElevationAtPoint(point, scene = canvas?.scene, entries 
 function _settingOverride(value, options) {
   const override = String(value ?? "");
   return Object.values(options).includes(override) ? override : "";
+}
+
+function _keyOverride(value, options) {
+  const override = String(value ?? "");
+  return Object.prototype.hasOwnProperty.call(options, override) ? override : "";
+}
+
+function _numberOverride(value, min, max) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.clamp(number, min, max) : null;
 }
 
 function _regionContains(region, point) {
@@ -274,8 +297,8 @@ function _pathArea(path) {
   return Math.abs(area) / 2;
 }
 
-function _regionArea(region) {
-  const paths = _regionPaths(region);
+function _regionArea(region, paths = null) {
+  paths ??= _regionPaths(region);
   if (!paths.length) return Infinity;
   return paths.reduce((sum, path) => sum + _pathArea(path), 0) || Infinity;
 }
@@ -303,6 +326,35 @@ function _pathsBounds(paths) {
     height: Math.max(1, maxY - minY),
     center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
   };
+}
+
+const _pathsBoundsCache = new WeakMap();
+const _pathsSignatureCache = new WeakMap();
+
+function _cachedPathsBounds(paths) {
+  let bounds = _pathsBoundsCache.get(paths);
+  if (bounds !== undefined) return bounds;
+  bounds = _pathsBounds(paths);
+  _pathsBoundsCache.set(paths, bounds);
+  return bounds;
+}
+
+function _pathsContain(paths, point) {
+  return paths.some(path => _pointInPolygon(point, path));
+}
+
+function _pathsSignature(paths) {
+  let signature = _pathsSignatureCache.get(paths);
+  if (signature) return signature;
+  signature = paths
+    .map(path => path.map(point => `${Math.round(point.x * 100) / 100},${Math.round(point.y * 100) / 100}`).join(";"))
+    .join("|");
+  _pathsSignatureCache.set(paths, signature);
+  return signature;
+}
+
+function _textureNumber(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
 }
 
 function _cameraFocus(parent) {
@@ -361,6 +413,7 @@ export class RegionElevationRenderer {
     this._panRaf = null;
     this._parallaxState = new Map();
     this._visualParams = new Map();
+    this._generatedTextureCache = new Map();
     this._needsParallaxFrame = false;
   }
 
@@ -399,6 +452,7 @@ export class RegionElevationRenderer {
     this._destroyGeneratedTextures(this.container);
     this.container?.destroy({ children: true });
     this.mask?.destroy();
+    this._clearGeneratedTextureCache();
     this.container = null;
     this.mask = null;
     this._scene = null;
@@ -413,16 +467,18 @@ export class RegionElevationRenderer {
   update() {
     if (!this.container || !this._scene) return;
     this._parallaxState.clear();
+    this._clearRegionChildren();
+    this._clearGeneratedTextureCache();
     this._entries = this._visualEntries(this._scene);
     this._pruneParallaxState();
     this.container.visible = this._entries.length > 0;
     this._updateCameraFocus(true);
-    this._drawRegions();
+    this._drawRegions({ clear: false });
   }
 
   onPan() {
     if (!this.container?.visible) return;
-    if (!_parallaxEnabled() && !_perspectiveFollowsCamera()) return;
+    if (!this._hasActiveParallax() && !_perspectiveFollowsCamera()) return;
     if (this._panRaf) return;
     this._panRaf = requestAnimationFrame(() => {
       this._panRaf = null;
@@ -437,7 +493,7 @@ export class RegionElevationRenderer {
   }
 
   tokenParallaxOffset(tokenDocument, position = {}) {
-    if (!this.container || !this._scene || tokenDocument?.parent !== this._scene || !_parallaxEnabled()) return { x: 0, y: 0 };
+    if (!this.container || !this._scene || tokenDocument?.parent !== this._scene) return { x: 0, y: 0 };
     const gridSize = canvas.grid.size ?? 100;
     const x = Number(position.x ?? tokenDocument.x ?? 0);
     const y = Number(position.y ?? tokenDocument.y ?? 0);
@@ -480,13 +536,21 @@ export class RegionElevationRenderer {
     }
   }
 
+  _hasActiveParallax() {
+    return _parallaxEnabled() || this._entries.some(visual => _parallaxStrengthForKey(visual.entry.parallaxStrengthOverride) > 0);
+  }
+
   _visualEntries(scene) {
-    const visuals = getActiveElevationRegions(scene)
-      .map(entry => ({ entry, paths: _regionPaths(entry.region) }))
-      .filter(visual => visual.paths.length && Math.abs(visual.entry.elevation) >= MIN_ELEVATION_DELTA)
-      .map(visual => ({ ...visual, bounds: _pathsBounds(visual.paths) }))
-      .filter(visual => visual.bounds)
-      .map(visual => this._withNearestLowerLayer(visual))
+    const pathCache = new Map();
+    let visuals = getActiveElevationRegions(scene, pathCache)
+      .map(entry => {
+        const paths = pathCache.get(entry.region) ?? _regionPaths(entry.region);
+        const bounds = paths.length ? _cachedPathsBounds(paths) : null;
+        return { entry, paths, bounds };
+      })
+      .filter(visual => visual.paths.length && visual.bounds && Math.abs(visual.entry.elevation) >= MIN_ELEVATION_DELTA);
+    visuals = visuals
+      .map(visual => this._withNearestLowerLayer(visual, visuals))
       .sort((left, right) => {
         const elevation = left.entry.elevation - right.entry.elevation;
         if (Math.abs(elevation) > 0.001) return elevation;
@@ -495,17 +559,17 @@ export class RegionElevationRenderer {
     return visuals;
   }
 
-  _withNearestLowerLayer(visual) {
+  _withNearestLowerLayer(visual, visuals) {
     let lowerElevation = 0;
     let lowerArea = Infinity;
     const point = visual.bounds.center;
-    for (const candidate of getActiveElevationRegions(this._scene)) {
-      if (candidate.region === visual.entry.region) continue;
-      if (candidate.elevation >= visual.entry.elevation) continue;
-      if (!_regionContains(candidate.region, point)) continue;
-      const area = candidate.area || Infinity;
-      if (candidate.elevation > lowerElevation || (candidate.elevation === lowerElevation && area < lowerArea)) {
-        lowerElevation = candidate.elevation;
+    for (const candidate of visuals) {
+      if (candidate.entry.region === visual.entry.region) continue;
+      if (candidate.entry.elevation >= visual.entry.elevation) continue;
+      if (!_pathsContain(candidate.paths, point)) continue;
+      const area = candidate.entry.area || Infinity;
+      if (candidate.entry.elevation > lowerElevation || (candidate.entry.elevation === lowerElevation && area < lowerArea)) {
+        lowerElevation = candidate.entry.elevation;
         lowerArea = area;
       }
     }
@@ -516,8 +580,8 @@ export class RegionElevationRenderer {
     };
   }
 
-  _drawRegions() {
-    this._clearRegionChildren();
+  _drawRegions({ clear = true } = {}) {
+    if (clear) this._clearRegionChildren();
     this._visualParams.clear();
     this._needsParallaxFrame = false;
     if (!this.container || !this._entries.length) return;
@@ -532,11 +596,16 @@ export class RegionElevationRenderer {
     const depthScale = _depthScale();
     const shadowLength = _shadowLength();
     for (const visual of this._entries) {
+      const visualParallax = visual.entry.parallaxStrengthOverride ? _parallaxStrengthForKey(visual.entry.parallaxStrengthOverride) : parallax;
       const visualParallaxMode = visual.entry.parallaxModeOverride || parallaxMode;
+      const visualPerspectivePointMode = visual.entry.perspectivePointOverride || _perspectivePointMode();
       const visualBlendMode = visual.entry.blendModeOverride || blendMode;
+      const visualOverlayScaleStrength = visual.entry.overlayScaleOverride ? _overlayScaleStrengthForKey(visual.entry.overlayScaleOverride) : overlayScaleStrength;
       const visualShadowMode = visual.entry.shadowModeOverride || shadowMode;
-      const perspectivePoint = _perspectivePoint(geo, visual.bounds);
-      const params = this._regionVisualParameters(visual, geo, parallax, visualParallaxMode, visualBlendMode, overlayScaleStrength, visualShadowMode, perspectivePoint, depthScale, shadowLength);
+      const visualShadowLength = visual.entry.shadowLengthOverride ?? shadowLength;
+      const visualDepthScale = visual.entry.depthScaleOverride || depthScale;
+      const perspectivePoint = _perspectivePoint(geo, visual.bounds, visualPerspectivePointMode);
+      const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualShadowLength);
       this._visualParams.set(this._parallaxStateKey(visual), params);
       if (!params.isHole) {
         const shadow = this._createShadow(visual.paths, texture, geo, params);
@@ -615,6 +684,8 @@ export class RegionElevationRenderer {
     const fullTextureMeldShadow = shadowMode === SHADOW_MODES.FULL_TEXTURE_MELD;
     const textureShadow = textureMeldShadow || fullTextureMeldShadow;
     const strongTopDownShadow = shadowMode === SHADOW_MODES.TOP_DOWN_STRONG;
+    const responsiveAllAroundShadow = shadowMode === SHADOW_MODES.RESPONSIVE_ALL_AROUND;
+    const cliffWarpTextureShadowOptimization = textureShadow && blendMode === BLEND_MODES.CLIFF_WARP;
     const shadowAlphaMultiplier = sunShadow?.alphaMultiplier ?? 1;
     const shadowLengthMultiplier = (sunShadow?.lengthMultiplier ?? 1) * _shadowLengthMultiplier(shadowLength);
     const shadowBlurMultiplier = sunShadow?.blurMultiplier ?? 1;
@@ -686,6 +757,7 @@ export class RegionElevationRenderer {
       const cliffWarpWidthRatio = (blendProfile.cliffWarpWidthBase ?? 0.18) + transitionNormalized * (blendProfile.cliffWarpWidthElevationRatio ?? 0.18);
       slopeWidth = Math.max(slopeWidth, Math.min(blendProfile.maxWidth, gridSize * cliffWarpWidthRatio));
       slopeAlphaBase = Math.max(slopeAlphaBase, blendProfile.cliffWarpAlpha ?? 0.68);
+      if (cliffWarpTextureShadowOptimization) slopeStretchStepsBase = Math.min(slopeStretchStepsBase, CLIFF_WARP_TEXTURE_SHADOW_STRETCH_STEPS_MAX);
       const cliffWarpDepth = Math.clamp(
         lift * (blendProfile.cliffWarpDepthRatio ?? 0.65),
         slopeWidth * (blendProfile.cliffWarpDepthMinRatio ?? 0.35),
@@ -701,7 +773,9 @@ export class RegionElevationRenderer {
         CLIFF_WARP_LAYER_STEPS_MIN,
         blendProfile.cliffWarpStepsMax ?? CLIFF_WARP_LAYER_STEPS_MAX
       );
+      if (cliffWarpTextureShadowOptimization) cliffWarpSteps = Math.max(2, Math.round(cliffWarpSteps * CLIFF_WARP_TEXTURE_SHADOW_STEP_MULTIPLIER));
       cliffWarpAlpha = Math.clamp((blendProfile.cliffWarpAlpha ?? 0.72) * shadowStrength * (0.72 + transitionNormalized * 0.28), 0, blendProfile.cliffWarpAlphaMax ?? CLIFF_WARP_ALPHA_MAX);
+      if (cliffWarpTextureShadowOptimization) cliffWarpAlpha *= CLIFF_WARP_TEXTURE_SHADOW_ALPHA_MULTIPLIER;
     }
     const slopeTextureShift = slopeWidth > 0
       ? {
@@ -747,6 +821,14 @@ export class RegionElevationRenderer {
     const textureBridgeShadowAlpha = shadowBridgeBlend > 0
       ? Math.clamp(Math.max(textureSoftShadowAlphaBase, textureContactShadowAlphaBase) * TEXTURE_SHADOW_BRIDGE_ALPHA_RATIO * shadowBridgeBlend, 0, fullTextureMeldShadow ? 0.9 : 0.78)
       : 0;
+    const allAroundShadowAlpha = responsiveAllAroundShadow
+      ? Math.clamp(Math.max(softShadowAlphaBase, contactShadowAlphaBase) * RESPONSIVE_ALL_AROUND_ALPHA_RATIO, 0, SHADOW_ALPHA_MAX * 0.5)
+      : 0;
+    const allAroundShadowBlur = Math.clamp(
+      Math.max(contactShadowBlur, softShadowBlur * RESPONSIVE_ALL_AROUND_BLUR_RATIO),
+      CONTACT_SHADOW_BLUR_MIN,
+      gridSize * 0.4
+    );
     return {
       isHole,
       center: bounds.center,
@@ -776,6 +858,8 @@ export class RegionElevationRenderer {
       edgeGlueAlpha,
       edgeGlueBlur: Math.clamp(blendWidth * blendProfile.glueBlurMultiplier, 0, blendWidth * 1.7),
       softShadowOffset,
+      allAroundShadowAlpha,
+      allAroundShadowBlur,
       bridgeShadowOffset,
       contactShadowOffset,
       innerShadowOffset: {
@@ -945,6 +1029,7 @@ export class RegionElevationRenderer {
         const direction = parallax > 0 ? this._perspectiveDirection(bounds, perspectivePoint) : STATIC_SHADOW_DIRECTION;
         return { x: -direction.x, y: -direction.y };
       }
+      case SHADOW_MODES.RESPONSIVE_ALL_AROUND:
       case SHADOW_MODES.RESPONSIVE:
       default:
         return parallax > 0 ? this._perspectiveDirection(bounds, perspectivePoint) : STATIC_SHADOW_DIRECTION;
@@ -970,7 +1055,7 @@ export class RegionElevationRenderer {
   }
 
   _createShadow(paths, texture, geo, params) {
-    if (params.softShadowAlpha <= 0 && params.bridgeShadowAlpha <= 0 && params.contactShadowAlpha <= 0 && params.textureSoftShadowAlpha <= 0 && params.textureBridgeShadowAlpha <= 0 && params.textureContactShadowAlpha <= 0) return null;
+    if (params.softShadowAlpha <= 0 && params.allAroundShadowAlpha <= 0 && params.bridgeShadowAlpha <= 0 && params.contactShadowAlpha <= 0 && params.textureSoftShadowAlpha <= 0 && params.textureBridgeShadowAlpha <= 0 && params.textureContactShadowAlpha <= 0) return null;
     const shadow = new PIXI.Container();
     shadow.eventMode = "none";
     if (params.textureMeldShadow && texture) {
@@ -981,9 +1066,11 @@ export class RegionElevationRenderer {
       if (textureBridge) shadow.addChild(textureBridge);
       if (textureContact) shadow.addChild(textureContact);
     }
+    const allAround = this._createShadowLayer(paths, { x: 0, y: 0 }, params.allAroundShadowAlpha, params.allAroundShadowBlur);
     const soft = this._createShadowLayer(paths, params.softShadowOffset, params.softShadowAlpha, params.softShadowBlur);
     const bridge = this._createShadowLayer(paths, params.bridgeShadowOffset, params.bridgeShadowAlpha, params.bridgeShadowBlur);
     const contact = this._createShadowLayer(paths, params.contactShadowOffset, params.contactShadowAlpha, params.contactShadowBlur);
+    if (allAround) shadow.addChild(allAround);
     if (soft) shadow.addChild(soft);
     if (bridge) shadow.addChild(bridge);
     if (contact) shadow.addChild(contact);
@@ -1180,27 +1267,33 @@ export class RegionElevationRenderer {
   }
 
   _createGeneratedShadowLayer(paths, offset, alpha, blur, { strokeWidth = 0 } = {}) {
-    const bounds = _pathsBounds(paths);
+    const bounds = _cachedPathsBounds(paths);
     if (!bounds) return null;
     const padding = Math.ceil(Math.max(blur * 4, strokeWidth) + 4);
     const textureWidth = Math.ceil(bounds.width + padding * 2);
     const textureHeight = Math.ceil(bounds.height + padding * 2);
-    const ShadowGraphics = _graphicsClass();
-    const shadowShape = new ShadowGraphics();
-    shadowShape.eventMode = "none";
-    if (strokeWidth > 0) {
-      shadowShape.lineStyle(strokeWidth, 0x000000, alpha, 0.5, false, PIXI.LINE_JOIN?.ROUND ?? undefined, PIXI.LINE_CAP?.ROUND ?? undefined);
-      _drawShiftedPaths(shadowShape, paths, -bounds.minX + padding, -bounds.minY + padding);
-    } else {
-      shadowShape.beginFill(0x000000, alpha);
-      _drawShiftedPaths(shadowShape, paths, -bounds.minX + padding, -bounds.minY + padding);
-      shadowShape.endFill();
-    }
-    shadowShape.filters = [_makeBlurFilter(blur)];
-    shadowShape.filterArea = new PIXI.Rectangle(0, 0, textureWidth, textureHeight);
+    const cacheKey = `${textureWidth}x${textureHeight}|${_textureNumber(blur)}|${_textureNumber(strokeWidth)}|${_pathsSignature(paths)}`;
+    let texture = this._generatedTextureCache.get(cacheKey);
+    if (texture && !_validTexture(texture)) this._generatedTextureCache.delete(cacheKey);
+    if (!_validTexture(texture)) {
+      const ShadowGraphics = _graphicsClass();
+      const shadowShape = new ShadowGraphics();
+      shadowShape.eventMode = "none";
+      if (strokeWidth > 0) {
+        shadowShape.lineStyle(strokeWidth, 0x000000, 1, 0.5, false, PIXI.LINE_JOIN?.ROUND ?? undefined, PIXI.LINE_CAP?.ROUND ?? undefined);
+        _drawShiftedPaths(shadowShape, paths, -bounds.minX + padding, -bounds.minY + padding);
+      } else {
+        shadowShape.beginFill(0x000000, 1);
+        _drawShiftedPaths(shadowShape, paths, -bounds.minX + padding, -bounds.minY + padding);
+        shadowShape.endFill();
+      }
+      shadowShape.filters = [_makeBlurFilter(blur)];
+      shadowShape.filterArea = new PIXI.Rectangle(0, 0, textureWidth, textureHeight);
 
-    const texture = this._generateTexture(shadowShape, textureWidth, textureHeight);
-    shadowShape.destroy({ children: true });
+      texture = this._generateTexture(shadowShape, textureWidth, textureHeight);
+      shadowShape.destroy({ children: true });
+      if (_validTexture(texture)) this._generatedTextureCache.set(cacheKey, texture);
+    }
     if (!_validTexture(texture)) {
       texture?.destroy?.(true);
       return null;
@@ -1210,8 +1303,8 @@ export class RegionElevationRenderer {
     const layer = new PIXI.Sprite(texture);
     layer.eventMode = "none";
     layer.position.set(bounds.minX - padding + offset.x, bounds.minY - padding + offset.y);
+    layer.alpha = alpha;
     layer.blendMode = PIXI.BLEND_MODES.NORMAL;
-    layer._seGeneratedTexture = texture;
     return layer;
   }
 
@@ -1246,7 +1339,7 @@ export class RegionElevationRenderer {
   }
 
   _createFeatherMask(paths, feather) {
-    const bounds = _pathsBounds(paths);
+    const bounds = _cachedPathsBounds(paths);
     if (!bounds) return this._createMask(paths);
     const padding = Math.ceil(feather * 4 + 2);
     const width = Math.ceil(bounds.width + padding * 2);
@@ -1281,7 +1374,7 @@ export class RegionElevationRenderer {
   }
 
   _createTransitionMask(paths, width) {
-    const bounds = _pathsBounds(paths);
+    const bounds = _cachedPathsBounds(paths);
     if (!bounds) return this._createMask(paths);
     const strokeWidth = Math.max(1, width * 1.35);
     const blur = Math.max(0.5, width * TRANSITION_MASK_BLUR_RATIO);
@@ -1324,6 +1417,12 @@ export class RegionElevationRenderer {
     return null;
   }
 
+  _clearGeneratedTextureCache() {
+    if (!this._generatedTextureCache) return;
+    for (const texture of this._generatedTextureCache.values()) texture?.destroy?.(true);
+    this._generatedTextureCache.clear();
+  }
+
   _createMask(paths) {
     const MaskGraphics = _graphicsClass();
     const mask = new MaskGraphics();
@@ -1337,7 +1436,10 @@ export class RegionElevationRenderer {
 }
 
 function _parallaxStrength() {
-  const strengthKey = _parallaxStrengthKey();
+  return _parallaxStrengthForKey(_parallaxStrengthKey());
+}
+
+function _parallaxStrengthForKey(strengthKey) {
   return PARALLAX_STRENGTHS[strengthKey] ?? PARALLAX_STRENGTHS.off;
 }
 
@@ -1384,8 +1486,12 @@ function _blendMode() {
   return Object.values(BLEND_MODES).includes(mode) ? mode : BLEND_MODES.WIDE;
 }
 
-function _perspectivePoint(geo, bounds = null) {
+function _perspectivePointMode() {
   const point = getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT) ?? PERSPECTIVE_POINTS.CENTER;
+  return Object.values(PERSPECTIVE_POINTS).includes(point) ? point : PERSPECTIVE_POINTS.CENTER;
+}
+
+function _perspectivePoint(geo, bounds = null, point = _perspectivePointMode()) {
   switch (point) {
     case PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE:
       return _clampPointToSceneEdge(getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT) ?? { x: geo.x + geo.width / 2, y: geo.y }, geo);
@@ -1429,6 +1535,10 @@ function _perspectivePoint(geo, bounds = null) {
 
 function _overlayScaleStrength() {
   const scaleKey = getSceneElevationSetting(SCENE_SETTING_KEYS.OVERLAY_SCALE) ?? "off";
+  return _overlayScaleStrengthForKey(scaleKey);
+}
+
+function _overlayScaleStrengthForKey(scaleKey) {
   return OVERLAY_SCALE_STRENGTHS[scaleKey] ?? OVERLAY_SCALE_STRENGTHS.off;
 }
 

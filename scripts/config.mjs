@@ -93,6 +93,7 @@ export const PARALLAX_MODES = Object.freeze({
 export const SHADOW_MODES = Object.freeze({
   OFF: "off",
   RESPONSIVE: "responsive",
+  RESPONSIVE_ALL_AROUND: "responsiveAllAround",
   REVERSED_RESPONSIVE: "reversedResponsive",
   TEXTURE_MELD: "textureMeld",
   FULL_TEXTURE_MELD: "fullTextureMeld",

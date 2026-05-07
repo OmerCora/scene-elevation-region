@@ -11,6 +11,16 @@ import {
 const TOKEN_SCALE_FALLBACK_STRENGTH = 0.055;
 const TOKEN_ELEVATION_MIN_MOVEMENT_DELAY_MS = 250;
 const TOKEN_ELEVATION_SETTLE_TIMEOUT_MS = 900;
+const TOKEN_PARALLAX_UI_KEYS = Object.freeze([
+  "border", "nameplate", "tooltip", "elevationLabel", "elevationText", "elevationTooltip",
+  "bars", "bar1", "bar2", "resourceBars", "attributeBars", "healthBar", "healthBars",
+  "effects", "effectIcons", "statusEffects", "overlay", "overlayEffect", "controlIcon", "controlIcons", "hud", "tokenHud",
+  "targetArrows", "targetPips", "targetIcon", "targetReticle", "targetReticule", "targetCrosshair", "targetControl", "targetIndicator", "targetMarker"
+]);
+const TOKEN_PARALLAX_TARGET_NAME_PATTERN = /target|crosshair|reticle|reticule|bar|resource|health|stamina|effect|status|control|hud|overlay/i;
+const TOKEN_PARALLAX_TARGET_SCAN_LIMIT = 80;
+const TOKEN_PARALLAX_HIT_AREA_EPSILON = 0.5;
+const TOKEN_HUD_POSITION_PATCHED = "_sceneElevationRegionHudPositionPatched";
 const _syncingTokenElevation = new Set();
 const _pendingTokenElevationUpdates = new Map();
 const _tokensWithPendingMovement = new Set();
@@ -167,6 +177,7 @@ Hooks.once("init", () => {
     choices: {
       [SHADOW_MODES.OFF]: "SCENE_ELEVATION.Settings.ShadowModeOff",
       [SHADOW_MODES.RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeResponsive",
+      [SHADOW_MODES.RESPONSIVE_ALL_AROUND]: "SCENE_ELEVATION.Settings.ShadowModeResponsiveAllAround",
       [SHADOW_MODES.REVERSED_RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeReversedResponsive",
       [SHADOW_MODES.TEXTURE_MELD]: "SCENE_ELEVATION.Settings.ShadowModeTextureMeld",
       [SHADOW_MODES.FULL_TEXTURE_MELD]: "SCENE_ELEVATION.Settings.ShadowModeFullTextureMeld",
@@ -282,6 +293,9 @@ Hooks.once("init", () => {
   else console.error(`[${MODULE_ID}] Module not registered — manifest id likely doesn't match install folder.`);
 });
 
+Hooks.once("setup", _patchTokenHudPositioning);
+Hooks.once("ready", _patchTokenHudPositioning);
+
 /* -------------------------------------------- */
 /*  Canvas lifecycle                             */
 /* -------------------------------------------- */
@@ -325,7 +339,7 @@ function _tokenScaleFactor(token) {
   if (!canvas?.scene || !token?.document) return 1;
   const state = _tokenElevationState(token.document, { requireTokenScaling: true });
   if (!state.found) return 1;
-  const strengthKey = getSceneElevationSetting(SCENE_SETTING_KEYS.PARALLAX) ?? "off";
+  const strengthKey = state.entry?.parallaxStrengthOverride || getSceneElevationSetting(SCENE_SETTING_KEYS.PARALLAX) || "off";
   const parallax = PARALLAX_STRENGTHS[strengthKey] ?? PARALLAX_STRENGTHS.off;
   const max = getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? 1.5;
   const tokenScaleStrength = parallax > 0 ? parallax * 0.65 : TOKEN_SCALE_FALLBACK_STRENGTH;
@@ -397,22 +411,229 @@ function _applyTokenScale(token) {
 }
 
 function _applyTokenParallaxOffset(token) {
-  const m = token?.mesh;
-  if (!m?.position) return;
-  if (m._seBasePositionX === undefined) {
-    m._seBasePositionX = m.position.x;
-    m._seBasePositionY = m.position.y;
-  } else if (m._seLastOffset) {
-    const expectedX = m._seBasePositionX + m._seLastOffset.x;
-    const expectedY = m._seBasePositionY + m._seLastOffset.y;
-    if (Math.abs(m.position.x - expectedX) > 0.5 || Math.abs(m.position.y - expectedY) > 0.5) {
-      m._seBasePositionX = m.position.x;
-      m._seBasePositionY = m.position.y;
+  if (!token?.document) return;
+  const offset = RegionElevationRenderer.instance.tokenParallaxOffset(token.document);
+  for (const target of _tokenParallaxTargets(token)) _applyDisplayObjectParallaxOffset(target, offset);
+  _applyTokenParallaxHitArea(token, offset);
+  _refreshTokenHudOffset(token);
+}
+
+function _tokenParallaxTargets(token) {
+  const targets = [];
+  _addTokenParallaxTarget(targets, token?.mesh);
+  for (const key of TOKEN_PARALLAX_UI_KEYS) _addTokenParallaxTarget(targets, token?.[key]);
+  _addNamedTokenParallaxTargets(targets, token);
+  return _dedupeNestedTokenTargets(targets);
+}
+
+function _addTokenParallaxTarget(targets, target) {
+  if (!target?.position || typeof target.position.set !== "function") return;
+  if (!targets.includes(target)) targets.push(target);
+}
+
+function _addNamedTokenParallaxTargets(targets, token) {
+  if (!token?.children?.length) return;
+  const stack = [...token.children];
+  let scanned = 0;
+  while (stack.length && scanned < TOKEN_PARALLAX_TARGET_SCAN_LIMIT) {
+    const child = stack.pop();
+    scanned += 1;
+    if (!child || child === token) continue;
+    if (_looksLikeTokenParallaxUi(child)) _addTokenParallaxTarget(targets, child);
+    if (child.children?.length) stack.push(...child.children);
+  }
+}
+
+function _looksLikeTokenParallaxUi(displayObject) {
+  const candidates = [displayObject.name, displayObject.label, displayObject.constructor?.name].filter(value => typeof value === "string");
+  return candidates.some(value => TOKEN_PARALLAX_TARGET_NAME_PATTERN.test(value));
+}
+
+function _dedupeNestedTokenTargets(targets) {
+  return targets.filter(target => !targets.some(candidate => candidate !== target && _displayObjectContains(candidate, target)));
+}
+
+function _displayObjectContains(candidate, target) {
+  for (let parent = target?.parent; parent; parent = parent.parent) {
+    if (parent === candidate) return true;
+  }
+  return false;
+}
+
+function _applyDisplayObjectParallaxOffset(displayObject, offset) {
+  if (displayObject._seBasePositionX === undefined) {
+    displayObject._seBasePositionX = displayObject.position.x;
+    displayObject._seBasePositionY = displayObject.position.y;
+  } else if (displayObject._seLastOffset) {
+    const expectedX = displayObject._seBasePositionX + displayObject._seLastOffset.x;
+    const expectedY = displayObject._seBasePositionY + displayObject._seLastOffset.y;
+    if (Math.abs(displayObject.position.x - expectedX) > 0.5 || Math.abs(displayObject.position.y - expectedY) > 0.5) {
+      displayObject._seBasePositionX = displayObject.position.x;
+      displayObject._seBasePositionY = displayObject.position.y;
     }
   }
+  displayObject._seLastOffset = offset;
+  displayObject.position.set(displayObject._seBasePositionX + offset.x, displayObject._seBasePositionY + offset.y);
+}
+
+function _clearTokenParallaxCaches(token) {
+  for (const target of _tokenParallaxTargets(token)) _clearDisplayObjectParallaxCache(target);
+  _clearTokenParallaxHitArea(token);
+}
+
+function _clearDisplayObjectParallaxCache(displayObject) {
+  if (!displayObject) return;
+  if (displayObject?._seBasePositionX !== undefined && displayObject?._seBasePositionY !== undefined) {
+    displayObject.position?.set?.(displayObject._seBasePositionX, displayObject._seBasePositionY);
+  }
+  delete displayObject._seBasePositionX;
+  delete displayObject._seBasePositionY;
+  delete displayObject._seLastOffset;
+}
+
+function _applyTokenParallaxHitArea(token, offset) {
+  if (!token) return;
+  if (Math.hypot(offset.x, offset.y) <= TOKEN_PARALLAX_HIT_AREA_EPSILON) {
+    _clearTokenParallaxHitArea(token);
+    return;
+  }
+  const currentHitArea = token.hitArea ?? null;
+  if (token._seBaseHitArea === undefined) token._seBaseHitArea = currentHitArea;
+  else if (currentHitArea && currentHitArea !== token._seBaseHitArea && currentHitArea !== token._seShiftedHitArea) token._seBaseHitArea = currentHitArea;
+
+  const baseHitArea = token._seBaseHitArea ?? _tokenFallbackHitArea(token);
+  const shiftedHitArea = _shiftHitArea(baseHitArea, offset);
+  if (!shiftedHitArea) return;
+  token._seShiftedHitArea = shiftedHitArea;
+  token.hitArea = shiftedHitArea;
+}
+
+function _clearTokenParallaxHitArea(token) {
+  if (!token || token._seBaseHitArea === undefined) return;
+  token.hitArea = token._seBaseHitArea;
+  delete token._seBaseHitArea;
+  delete token._seShiftedHitArea;
+}
+
+function _tokenFallbackHitArea(token) {
+  const gridSize = canvas.grid?.size ?? 100;
+  const width = Number(token.w ?? (Number(token.document?.width ?? 1) * gridSize));
+  const height = Number(token.h ?? (Number(token.document?.height ?? 1) * gridSize));
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+  return new PIXI.Rectangle(0, 0, width, height);
+}
+
+function _shiftHitArea(hitArea, offset) {
+  if (!hitArea) return null;
+  if (hitArea instanceof PIXI.Rectangle) return new PIXI.Rectangle(hitArea.x + offset.x, hitArea.y + offset.y, hitArea.width, hitArea.height);
+  if (hitArea instanceof PIXI.Circle) return new PIXI.Circle(hitArea.x + offset.x, hitArea.y + offset.y, hitArea.radius);
+  if (hitArea instanceof PIXI.Ellipse) return new PIXI.Ellipse(hitArea.x + offset.x, hitArea.y + offset.y, hitArea.width, hitArea.height);
+  if (PIXI.RoundedRectangle && hitArea instanceof PIXI.RoundedRectangle) return new PIXI.RoundedRectangle(hitArea.x + offset.x, hitArea.y + offset.y, hitArea.width, hitArea.height, hitArea.radius);
+  if (hitArea instanceof PIXI.Polygon) return new PIXI.Polygon(hitArea.points.map((point, index) => point + (index % 2 === 0 ? offset.x : offset.y)));
+  return null;
+}
+
+function _patchTokenHudPositioning() {
+  const hudClasses = [CONFIG.Token?.hudClass, foundry.applications?.hud?.TokenHUD, globalThis.TokenHUD].filter(Boolean);
+  for (const hudClass of new Set(hudClasses)) _patchTokenHudClass(hudClass);
+}
+
+function _patchTokenHudClass(hudClass) {
+  const prototype = hudClass?.prototype;
+  if (!prototype || prototype[TOKEN_HUD_POSITION_PATCHED] || typeof prototype.setPosition !== "function") return;
+  const originalSetPosition = prototype.setPosition;
+  prototype.setPosition = function(position = {}) {
+    const result = originalSetPosition.call(this, position);
+    _applyTokenHudParallaxOffset(this);
+    return result;
+  };
+  Object.defineProperty(prototype, TOKEN_HUD_POSITION_PATCHED, { value: true });
+}
+
+function _refreshTokenHudOffset(token) {
+  for (const hud of _tokenHudCandidates()) {
+    if (hud?.object === token) _applyTokenHudParallaxOffset(hud);
+  }
+}
+
+function _applyTokenHudParallaxOffset(hud) {
+  const token = hud?.object;
+  const element = _tokenHudElement(hud);
+  if (!token?.document || !element) return;
   const offset = RegionElevationRenderer.instance.tokenParallaxOffset(token.document);
-  m._seLastOffset = offset;
-  m.position.set(m._seBasePositionX + offset.x, m._seBasePositionY + offset.y);
+  const screenOffset = _canvasOffsetToScreen(offset);
+  _applyTokenHudElementOffset(element, screenOffset);
+}
+
+function _tokenHudCandidates() {
+  return [canvas?.tokens?.hud, canvas?.hud?.token, ui?.hud?.token]
+    .filter((hud, index, huds) => hud && huds.indexOf(hud) === index);
+}
+
+function _tokenHudElement(hud) {
+  if (hud?.element instanceof HTMLElement) return hud.element;
+  if (hud?.element?.[0] instanceof HTMLElement) return hud.element[0];
+  if (hud?._element instanceof HTMLElement) return hud._element;
+  if (hud?._element?.[0] instanceof HTMLElement) return hud._element[0];
+  return document.getElementById("token-hud");
+}
+
+function _applyTokenHudElementOffset(element, offset) {
+  _updateTokenHudBasePosition(element);
+  if (Math.hypot(offset.x, offset.y) <= TOKEN_PARALLAX_HIT_AREA_EPSILON) {
+    _clearTokenHudElementOffset(element);
+    return;
+  }
+  element._seLastHudOffset = offset;
+  element.style.left = `${element._seBaseHudLeft + offset.x}px`;
+  element.style.top = `${element._seBaseHudTop + offset.y}px`;
+  element.style.translate = "";
+}
+
+function _updateTokenHudBasePosition(element) {
+  const currentLeft = _stylePixels(element.style.left, element.offsetLeft);
+  const currentTop = _stylePixels(element.style.top, element.offsetTop);
+  if (element._seBaseHudLeft === undefined || element._seBaseHudTop === undefined) {
+    element._seBaseHudLeft = currentLeft;
+    element._seBaseHudTop = currentTop;
+    return;
+  }
+  const lastOffset = element._seLastHudOffset;
+  if (!lastOffset) {
+    element._seBaseHudLeft = currentLeft;
+    element._seBaseHudTop = currentTop;
+    return;
+  }
+  const expectedLeft = element._seBaseHudLeft + lastOffset.x;
+  const expectedTop = element._seBaseHudTop + lastOffset.y;
+  if (Math.abs(currentLeft - expectedLeft) > 0.5 || Math.abs(currentTop - expectedTop) > 0.5) {
+    element._seBaseHudLeft = currentLeft;
+    element._seBaseHudTop = currentTop;
+  }
+}
+
+function _clearTokenHudElementOffset(element) {
+  if (element._seBaseHudLeft !== undefined && element._seBaseHudTop !== undefined) {
+    element.style.left = `${element._seBaseHudLeft}px`;
+    element.style.top = `${element._seBaseHudTop}px`;
+  }
+  element.style.translate = "";
+  delete element._seBaseHudLeft;
+  delete element._seBaseHudTop;
+  delete element._seLastHudOffset;
+}
+
+function _stylePixels(value, fallback = 0) {
+  const number = Number.parseFloat(value);
+  return Number.isFinite(number) ? number : Number(fallback) || 0;
+}
+
+function _canvasOffsetToScreen(offset) {
+  const scale = canvas.stage?.scale ?? { x: 1, y: 1 };
+  return {
+    x: offset.x * (Number(scale.x) || 1),
+    y: offset.y * (Number(scale.y) || 1)
+  };
 }
 
 function _refreshAllTokenScales() {
@@ -565,13 +786,18 @@ Hooks.on("drawToken", (token) => {
     delete m._seBaseScaleX;
     delete m._seBaseScaleY;
     delete m._seLastFactor;
-    delete m._seBasePositionX;
-    delete m._seBasePositionY;
-    delete m._seLastOffset;
   }
+  _clearTokenParallaxCaches(token);
   _applyTokenScale(token);
 });
 Hooks.on("refreshToken", _applyTokenScale);
+Hooks.on("targetToken", (_user, token) => {
+  if (!token) return;
+  requestAnimationFrame(() => {
+    _clearTokenParallaxCaches(token);
+    _applyTokenScale(token);
+  });
+});
 Hooks.on("createToken", (document) => {
   if (document.parent !== canvas?.scene) return;
   void _syncTokenElevation(document);
