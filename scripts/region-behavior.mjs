@@ -1,4 +1,4 @@
-import { BLEND_MODES, DEPTH_SCALES, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, SHADOW_STRENGTH_LIMITS } from "./config.mjs";
+import { BLEND_MODES, DEPTH_SCALES, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, shadowLengthKey } from "./config.mjs";
 
 const fields = foundry.data.fields;
 const USE_SCENE_SETTING = "";
@@ -84,6 +84,31 @@ const DEPTH_SCALE_CHOICES = Object.freeze({
   [DEPTH_SCALES.DRAMATIC]: "SCENE_ELEVATION.Settings.DepthScaleDramatic"
 });
 
+const PARALLAX_HEIGHT_CONTRAST_CHOICES = Object.freeze({
+  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
+  normal: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNormal",
+  noticeable: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNoticeable",
+  strong: "SCENE_ELEVATION.Settings.ParallaxHeightContrastStrong",
+  dramatic: "SCENE_ELEVATION.Settings.ParallaxHeightContrastDramatic",
+  extreme: "SCENE_ELEVATION.Settings.ParallaxHeightContrastExtreme"
+});
+
+const SHADOW_LENGTH_CHOICES = Object.freeze({
+  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
+  off: "SCENE_ELEVATION.Settings.ShadowLengthOff",
+  short: "SCENE_ELEVATION.Settings.ShadowLengthShort",
+  normal: "SCENE_ELEVATION.Settings.ShadowLengthNormal",
+  long: "SCENE_ELEVATION.Settings.ShadowLengthLong",
+  extreme: "SCENE_ELEVATION.Settings.ShadowLengthExtreme"
+});
+
+function _shadowLengthChoice(value) {
+  const override = String(value ?? USE_SCENE_SETTING);
+  if (!override) return USE_SCENE_SETTING;
+  if (Object.prototype.hasOwnProperty.call(SHADOW_LENGTH_CHOICES, override)) return override;
+  return Number.isFinite(Number(override)) ? shadowLengthKey(value) : USE_SCENE_SETTING;
+}
+
 /**
  * RegionBehavior subtype: scene-elevation.elevation
  *
@@ -93,6 +118,11 @@ const DEPTH_SCALE_CHOICES = Object.freeze({
  */
 export class ElevationRegionBehavior extends foundry.data.regionBehaviors.RegionBehaviorType {
   static LOCALIZATION_PREFIXES = ["SCENE_ELEVATION.RegionBehavior"];
+
+  static migrateData(data) {
+    data.shadowLengthOverride = _shadowLengthChoice(data.shadowLengthOverride);
+    return super.migrateData(data);
+  }
 
   static defineSchema() {
     return {
@@ -151,12 +181,20 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowModeOverride.hint"
       }),
       shadowLengthOverride: new fields.StringField({
-        required: false,
-        nullable: true,
+        required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
+        choices: SHADOW_LENGTH_CHOICES,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowLengthOverride.label",
         hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowLengthOverride.hint"
+      }),
+      parallaxHeightContrastOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: PARALLAX_HEIGHT_CONTRAST_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxHeightContrastOverride.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxHeightContrastOverride.hint"
       }),
       blendModeOverride: new fields.StringField({
         required: true,

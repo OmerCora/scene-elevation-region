@@ -62,6 +62,15 @@ export const PARALLAX_HEIGHT_CONTRASTS = Object.freeze({
   extreme: 4
 });
 
+/** Shadow length multipliers keyed by enum option (max 4). */
+export const SHADOW_LENGTHS = Object.freeze({
+  off: 0,
+  short: 0.5,
+  normal: 1,
+  long: 2,
+  extreme: 4
+});
+
 export const PARALLAX_LIFT_LIMITS = Object.freeze({
   minimal: 4,
   extreme: 72
@@ -162,7 +171,7 @@ export const ELEVATION_DEFAULT_SETTINGS = Object.freeze({
   [SCENE_SETTING_KEYS.BLEND_MODE]: BLEND_MODES.WIDE,
   [SCENE_SETTING_KEYS.OVERLAY_SCALE]: "subtle",
   [SCENE_SETTING_KEYS.SHADOW_MODE]: SHADOW_MODES.TOP_DOWN,
-  [SCENE_SETTING_KEYS.SHADOW_LENGTH]: 1,
+  [SCENE_SETTING_KEYS.SHADOW_LENGTH]: "normal",
   [SCENE_SETTING_KEYS.SUNRISE_HOUR]: 6,
   [SCENE_SETTING_KEYS.SUNSET_HOUR]: 18,
   [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: TOKEN_ELEVATION_MODES.PER_REGION,
@@ -272,6 +281,23 @@ export function parallaxHeightContrastKey(setting) {
   const value = parallaxHeightContrastValue(setting);
   return Object.entries(PARALLAX_HEIGHT_CONTRASTS).reduce((best, [candidate, candidateValue]) => {
     return Math.abs(candidateValue - value) < Math.abs(PARALLAX_HEIGHT_CONTRASTS[best] - value) ? candidate : best;
+  }, "normal");
+}
+
+export function shadowLengthValue(setting) {
+  if (typeof setting === "number") return Math.clamp(Number.isFinite(setting) ? setting : 1, 0, 4);
+  const numeric = Number(setting);
+  if (String(setting ?? "").trim() && Number.isFinite(numeric) && !SHADOW_LENGTHS[String(setting)]) return Math.clamp(numeric, 0, 4);
+  const value = SHADOW_LENGTHS[String(setting ?? "normal")];
+  return value ?? SHADOW_LENGTHS.normal;
+}
+
+export function shadowLengthKey(setting) {
+  const key = String(setting ?? "normal");
+  if (SHADOW_LENGTHS[key] !== undefined) return key;
+  const value = shadowLengthValue(setting);
+  return Object.entries(SHADOW_LENGTHS).reduce((best, [candidate, candidateValue]) => {
+    return Math.abs(candidateValue - value) < Math.abs(SHADOW_LENGTHS[best] - value) ? candidate : best;
   }, "normal");
 }
 

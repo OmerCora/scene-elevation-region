@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, PARALLAX_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, REGION_BEHAVIOR_TYPE, getSceneElevationSetting, parallaxHeightContrastKey } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, PARALLAX_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, REGION_BEHAVIOR_TYPE, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -210,8 +210,14 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, SETTINGS.SHADOW_LENGTH, {
     name: "SCENE_ELEVATION.Settings.ShadowLength",
     hint: "SCENE_ELEVATION.Settings.ShadowLengthHint",
-    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.SHADOW_LENGTH],
-    range: { min: 0, max: 8, step: 0.1 },
+    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.SHADOW_LENGTH],
+    choices: {
+      off: "SCENE_ELEVATION.Settings.ShadowLengthOff",
+      short: "SCENE_ELEVATION.Settings.ShadowLengthShort",
+      normal: "SCENE_ELEVATION.Settings.ShadowLengthNormal",
+      long: "SCENE_ELEVATION.Settings.ShadowLengthLong",
+      extreme: "SCENE_ELEVATION.Settings.ShadowLengthExtreme"
+    },
     onChange: () => RegionElevationRenderer.instance.update()
   });
   game.settings.register(MODULE_ID, SETTINGS.DEPTH_SCALE, {
@@ -313,6 +319,7 @@ Hooks.once("setup", _patchTokenHudPositioning);
 Hooks.once("ready", async () => {
   _patchTokenHudPositioning();
   await _migrateParallaxHeightContrastSetting();
+  await _migrateShadowLengthSetting();
 });
 
 /* -------------------------------------------- */
@@ -562,6 +569,13 @@ async function _migrateParallaxHeightContrastSetting() {
   const current = game.settings.get(MODULE_ID, SETTINGS.PARALLAX_HEIGHT_CONTRAST);
   const key = parallaxHeightContrastKey(current);
   if (current !== key) await game.settings.set(MODULE_ID, SETTINGS.PARALLAX_HEIGHT_CONTRAST, key);
+}
+
+async function _migrateShadowLengthSetting() {
+  if (!game.user?.isGM) return;
+  const current = game.settings.get(MODULE_ID, SETTINGS.SHADOW_LENGTH);
+  const key = shadowLengthKey(current);
+  if (current !== key) await game.settings.set(MODULE_ID, SETTINGS.SHADOW_LENGTH, key);
 }
 
 function _patchTokenHudClass(hudClass) {

@@ -1,4 +1,16 @@
-import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, sceneGeometry, getSceneElevationSetting, parallaxHeightContrastValue } from "./config.mjs";
+import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey } from "./config.mjs";
+
+/**
+ * Per-draw settings cache. `getSceneElevationSettings()` rebuilds via two deep clones
+ * + mergeObjects on every call; with ~7 helper calls per draw plus per-region perspective
+ * lookups this dominated the pan loop. The renderer fills this once at the top of
+ * `_drawRegions` and clears it in `finally`. All hot-path readers route through `_setting`.
+ */
+let _settingsCache = null;
+function _setting(key) {
+  if (_settingsCache) return _settingsCache[key];
+  return getSceneElevationSetting(key);
+}
 
 const MIN_ELEVATION_DELTA = 0.05;
 const OVERLAY_ELEVATION_REFERENCE = 6;
@@ -24,7 +36,6 @@ const SLOPE_TEXTURE_ALPHA_MAX = 0.72;
 const SLOPE_DROP_MIN_PIXELS = 5;
 const SLOPE_DROP_MAX_PIXELS = 14;
 const CLIFF_WARP_DROP_MAX_PIXELS = 68;
-const CLIFF_WARP_DEPTH_MAX_GRID = 1.05;
 const CLIFF_WARP_SOLID_ALPHA = 1;
 const CLIFF_WARP_SOURCE_RIM_PIXELS = 2;
 const STRONG_TOP_DOWN_SHADOW_MULTIPLIER = 2.35;
@@ -133,10 +144,6 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
     cliffWarpAlpha: CLIFF_WARP_SOLID_ALPHA,
     cliffWarpAlphaMax: CLIFF_WARP_SOLID_ALPHA,
     cliffWarpSourceWidth: CLIFF_WARP_SOURCE_RIM_PIXELS,
-    cliffWarpDepthRatio: 1.18,
-    cliffWarpDepthMaxGrid: CLIFF_WARP_DEPTH_MAX_GRID,
-    cliffWarpDepthMinRatio: 0.45,
-    cliffWarpScaleFactor: 0.48,
     cliffWarpWidthBase: 0.38,
     cliffWarpWidthElevationRatio: 0.42,
     liftMultiplier: 1.9,
@@ -168,9 +175,10 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
       perspectivePointOverride: _settingOverride(behavior.system?.perspectivePointOverride ?? sourceSystem.perspectivePointOverride, PERSPECTIVE_POINTS),
       overlayScaleOverride: _keyOverride(behavior.system?.overlayScaleOverride ?? sourceSystem.overlayScaleOverride, OVERLAY_SCALE_STRENGTHS),
       shadowModeOverride: _settingOverride(behavior.system?.shadowModeOverride ?? sourceSystem.shadowModeOverride, SHADOW_MODES),
-      shadowLengthOverride: _numberOverride(behavior.system?.shadowLengthOverride ?? sourceSystem.shadowLengthOverride, 0, 8),
+      shadowLengthOverride: _shadowLengthOverride(behavior.system?.shadowLengthOverride ?? sourceSystem.shadowLengthOverride),
       blendModeOverride: _settingOverride(behavior.system?.blendModeOverride ?? sourceSystem.blendModeOverride, BLEND_MODES),
       depthScaleOverride: _settingOverride(behavior.system?.depthScaleOverride ?? sourceSystem.depthScaleOverride, DEPTH_SCALES),
+      parallaxHeightContrastOverride: _keyOverride(behavior.system?.parallaxHeightContrastOverride ?? sourceSystem.parallaxHeightContrastOverride, PARALLAX_HEIGHT_CONTRASTS),
       modifyTokenElevation: behavior.system?.modifyTokenElevation !== false,
       modifyTokenScaling: behavior.system?.modifyTokenScaling !== false
     });
@@ -221,10 +229,11 @@ function _keyOverride(value, options) {
   return Object.prototype.hasOwnProperty.call(options, override) ? override : "";
 }
 
-function _numberOverride(value, min, max) {
-  if (value === null || value === undefined || value === "") return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? Math.clamp(number, min, max) : null;
+function _shadowLengthOverride(value) {
+  const override = String(value ?? "");
+  if (!override) return "";
+  if (Object.prototype.hasOwnProperty.call(SHADOW_LENGTHS, override)) return override;
+  return Number.isFinite(Number(override)) ? shadowLengthKey(value) : "";
 }
 
 function _regionContains(region, point) {
@@ -442,7 +451,6 @@ export class RegionElevationRenderer {
     this._panRaf = null;
     try { this.container?.parent?.removeChild(this.container); } catch (err) {}
     try { this.mask?.parent?.removeChild(this.mask); } catch (err) {}
-    this._destroyGeneratedTextures(this.container);
     this.container?.destroy({ children: true });
     this.mask?.destroy();
     this._clearGeneratedTextureCache();
@@ -579,51 +587,61 @@ export class RegionElevationRenderer {
     this._needsParallaxFrame = false;
     if (!this.container || !this._entries.length) return;
 
-    const geo = sceneGeometry(this._scene);
-    const texture = this._backgroundTexture();
-    const parallax = _parallaxStrength();
-    const parallaxHeightContrast = _parallaxHeightContrast();
-    const parallaxMode = _parallaxMode();
-    const blendMode = _blendMode();
-    const overlayScaleStrength = _overlayScaleStrength();
-    const shadowMode = _shadowMode();
-    const depthScale = _depthScale();
-    const shadowLength = _shadowLength();
-    for (const visual of this._entries) {
-      const visualParallax = visual.entry.parallaxStrengthOverride ? _parallaxStrengthForKey(visual.entry.parallaxStrengthOverride) : parallax;
-      const visualParallaxMode = visual.entry.parallaxModeOverride || parallaxMode;
-      const visualPerspectivePointMode = visual.entry.perspectivePointOverride || _perspectivePointMode();
-      const visualBlendMode = visual.entry.blendModeOverride || blendMode;
-      const visualOverlayScaleStrength = visual.entry.overlayScaleOverride ? _overlayScaleStrengthForKey(visual.entry.overlayScaleOverride) : overlayScaleStrength;
-      const visualShadowMode = visual.entry.shadowModeOverride || shadowMode;
-      const visualShadowLength = visual.entry.shadowLengthOverride ?? shadowLength;
-      const visualDepthScale = visual.entry.depthScaleOverride || depthScale;
-      const perspectivePoint = _perspectivePoint(geo, visual.bounds, visualPerspectivePointMode);
-      const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualShadowLength, parallaxHeightContrast);
-      this._visualParams.set(this._parallaxStateKey(visual), params);
-      if (!params.isHole) {
-        const shadow = this._createShadow(visual.paths, texture, geo, params);
-        if (shadow) {
-          this._applyRegionTransform(shadow, params, { includeOverlayOffset: false });
-          this.container.addChild(shadow);
+    const previousCache = _settingsCache;
+    _settingsCache = getSceneElevationSettings(this._scene);
+    try {
+      const geo = sceneGeometry(this._scene);
+      const texture = this._backgroundTexture();
+      const parallax = _parallaxStrength();
+      const parallaxHeightContrast = _parallaxHeightContrast();
+      const parallaxMode = _parallaxMode();
+      const blendMode = _blendMode();
+      const overlayScaleStrength = _overlayScaleStrength();
+      const shadowMode = _shadowMode();
+      const depthScale = _depthScale();
+      const shadowLength = _shadowLength();
+      const perspectivePointMode = _perspectivePointMode();
+      for (const visual of this._entries) {
+        const visualParallax = visual.entry.parallaxStrengthOverride ? _parallaxStrengthForKey(visual.entry.parallaxStrengthOverride) : parallax;
+        const visualParallaxMode = visual.entry.parallaxModeOverride || parallaxMode;
+        const visualPerspectivePointMode = visual.entry.perspectivePointOverride || perspectivePointMode;
+        const visualBlendMode = visual.entry.blendModeOverride || blendMode;
+        const visualOverlayScaleStrength = visual.entry.overlayScaleOverride ? _overlayScaleStrengthForKey(visual.entry.overlayScaleOverride) : overlayScaleStrength;
+        const visualShadowMode = visual.entry.shadowModeOverride || shadowMode;
+        const visualShadowLength = visual.entry.shadowLengthOverride ? shadowLengthValue(visual.entry.shadowLengthOverride) : shadowLength;
+        const visualDepthScale = visual.entry.depthScaleOverride || depthScale;
+        const visualParallaxHeightContrast = visual.entry.parallaxHeightContrastOverride ? parallaxHeightContrastValue(visual.entry.parallaxHeightContrastOverride) : parallaxHeightContrast;
+        const perspectivePoint = _perspectivePoint(geo, visual.bounds, visualPerspectivePointMode);
+        const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualShadowLength, visualParallaxHeightContrast);
+        this._visualParams.set(this._parallaxStateKey(visual), params);
+        if (!params.isHole) {
+          const shadow = this._createShadow(visual.paths, texture, geo, params);
+          if (shadow) {
+            this._applyRegionTransform(shadow, params, { includeOverlayOffset: false });
+            this.container.addChild(shadow);
+          }
+        }
+        const overlay = this._createOverlay(visual.paths, texture, geo, params);
+        if (params.isHole && overlay) this.container.addChild(overlay);
+        const slope = this._createSlopeLayer(visual.paths, texture, geo, params);
+        if (slope) this.container.addChild(slope);
+        if (!params.isHole) {
+          const edgeGlue = this._createEdgeGlue(visual.paths, params);
+          if (edgeGlue) this.container.addChild(edgeGlue);
+        }
+        if (!params.isHole && overlay) this.container.addChild(overlay);
+        if (params.isHole) {
+          const innerShadow = this._createInnerShadow(visual.paths, params);
+          if (innerShadow) this.container.addChild(innerShadow);
         }
       }
-      const overlay = this._createOverlay(visual.paths, texture, geo, params);
-      if (params.isHole && overlay) this.container.addChild(overlay);
-      const slope = this._createSlopeLayer(visual.paths, texture, geo, params);
-      if (slope) this.container.addChild(slope);
-      if (!params.isHole) {
-        const edgeGlue = this._createEdgeGlue(visual.paths, params);
-        if (edgeGlue) this.container.addChild(edgeGlue);
-      }
-      if (!params.isHole && overlay) this.container.addChild(overlay);
-      if (params.isHole) {
-        const innerShadow = this._createInnerShadow(visual.paths, params);
-        if (innerShadow) this.container.addChild(innerShadow);
-      }
+      if (this._needsParallaxFrame) this._requestParallaxFrame();
+      // Only fire visualRefresh on structural rebuilds (clear=true means update());
+      // pan-only redraws would otherwise schedule downstream token-refresh RAFs every frame.
+      if (clear) Hooks.callAll(`${MODULE_ID}.visualRefresh`);
+    } finally {
+      _settingsCache = previousCache;
     }
-    if (this._needsParallaxFrame) this._requestParallaxFrame();
-    Hooks.callAll(`${MODULE_ID}.visualRefresh`);
   }
 
   _requestParallaxFrame() {
@@ -639,17 +657,7 @@ export class RegionElevationRenderer {
     if (!this.container) return;
     while (this.container.children.length) {
       const child = this.container.removeChildAt(0);
-      this._destroyGeneratedTextures(child);
       child.destroy({ children: true });
-    }
-  }
-
-  _destroyGeneratedTextures(object) {
-    if (!object) return;
-    for (const child of object.children ?? []) this._destroyGeneratedTextures(child);
-    if (object._seGeneratedTexture) {
-      object._seGeneratedTexture.destroy(true);
-      object._seGeneratedTexture = null;
     }
   }
 
@@ -747,8 +755,6 @@ export class RegionElevationRenderer {
     let bridgeBaseAlphaBase = blendProfile.bridgeBaseAlpha ?? 0;
     let slopeTextureShiftRatio = blendProfile.slopeTextureShiftRatio;
     let cliffWarpAlpha = 0;
-    let cliffWarpShift = { x: 0, y: 0 };
-    let cliffWarpScaleDelta = 0;
     let cliffWarpSourceWidth = 0;
     if (cliffWarpActive) {
       const cliffWarpWidthRatio = (blendProfile.cliffWarpWidthBase ?? 0.18) + transitionNormalized * (blendProfile.cliffWarpWidthElevationRatio ?? 0.18);
@@ -758,16 +764,6 @@ export class RegionElevationRenderer {
       slopeStretchStepsBase = 0;
       bridgeBaseAlphaBase = 0;
       cliffWarpSourceWidth = Math.max(1, Number(blendProfile.cliffWarpSourceWidth ?? CLIFF_WARP_SOURCE_RIM_PIXELS));
-      const cliffWarpDepth = Math.clamp(
-        lift * (blendProfile.cliffWarpDepthRatio ?? 0.65),
-        slopeWidth * (blendProfile.cliffWarpDepthMinRatio ?? 0.35),
-        gridSize * (blendProfile.cliffWarpDepthMaxGrid ?? CLIFF_WARP_DEPTH_MAX_GRID)
-      );
-      cliffWarpShift = {
-        x: textureShift.x + overlayOffset.x + blendDirection.x * cliffWarpDepth * sign,
-        y: textureShift.y + overlayOffset.y + blendDirection.y * cliffWarpDepth * sign
-      };
-      cliffWarpScaleDelta = (overlayScale - 1) + (cliffWarpDepth / Math.max(bounds.width, bounds.height, gridSize)) * (blendProfile.cliffWarpScaleFactor ?? 0.18);
       cliffWarpAlpha = Math.clamp(blendProfile.cliffWarpAlpha ?? CLIFF_WARP_SOLID_ALPHA, 0, blendProfile.cliffWarpAlphaMax ?? CLIFF_WARP_SOLID_ALPHA);
     }
     const slopeTextureShift = slopeWidth > 0
@@ -840,8 +836,6 @@ export class RegionElevationRenderer {
       bridgeBaseAlpha: slopeWidth > 0 ? Math.clamp(bridgeBaseAlphaBase * (0.68 + transitionNormalized * 0.32), 0, 1) : 0,
       cliffWarp: cliffWarpActive,
       cliffWarpAlpha,
-      cliffWarpShift,
-      cliffWarpScaleDelta,
       cliffWarpSourceWidth,
       textureMeldShadow: textureShadow,
       textureSoftShadowAlpha: textureSoftShadowAlphaBase,
@@ -1049,6 +1043,7 @@ export class RegionElevationRenderer {
 
   _createShadow(paths, texture, geo, params) {
     if (params.softShadowAlpha <= 0 && params.allAroundShadowAlpha <= 0 && params.bridgeShadowAlpha <= 0 && params.contactShadowAlpha <= 0 && params.textureSoftShadowAlpha <= 0 && params.textureBridgeShadowAlpha <= 0 && params.textureContactShadowAlpha <= 0) return null;
+    if (params.cliffWarp) return this._createCliffWarpShadow(paths, params);
     const shadow = new PIXI.Container();
     shadow.eventMode = "none";
     if (params.textureMeldShadow && texture) {
@@ -1070,9 +1065,25 @@ export class RegionElevationRenderer {
     return shadow.children.length ? shadow : null;
   }
 
+  _createCliffWarpShadow(paths, params) {
+    const shadow = new PIXI.Container();
+    shadow.eventMode = "none";
+    const allAround = this._createRimShadowLayer(paths, { x: 0, y: 0 }, params.allAroundShadowAlpha, params.allAroundShadowBlur, Math.max(2, params.allAroundShadowBlur * 0.8));
+    const soft = this._createRimShadowLayer(paths, params.softShadowOffset, params.softShadowAlpha, params.softShadowBlur, Math.max(2, params.softShadowBlur * 0.7));
+    const bridge = this._createRimShadowLayer(paths, params.bridgeShadowOffset, params.bridgeShadowAlpha, params.bridgeShadowBlur, Math.max(2, params.bridgeShadowBlur * 0.75));
+    const contact = this._createRimShadowLayer(paths, params.contactShadowOffset, params.contactShadowAlpha, params.contactShadowBlur, Math.max(2, params.contactShadowBlur * 1.1));
+    if (allAround) shadow.addChild(allAround);
+    if (soft) shadow.addChild(soft);
+    if (bridge) shadow.addChild(bridge);
+    if (contact) shadow.addChild(contact);
+    return shadow.children.length ? shadow : null;
+  }
+
   _createEdgeGlue(paths, params) {
     if (params.edgeGlueAlpha <= 0 || params.edgeGlueBlur <= 0) return null;
-    const edgeGlue = this._createShadowLayer(paths, { x: 0, y: 0 }, params.edgeGlueAlpha, params.edgeGlueBlur);
+    const edgeGlue = params.cliffWarp
+      ? this._createRimShadowLayer(paths, { x: 0, y: 0 }, params.edgeGlueAlpha, params.edgeGlueBlur, Math.max(2, params.edgeGlueBlur * 0.95))
+      : this._createShadowLayer(paths, { x: 0, y: 0 }, params.edgeGlueAlpha, params.edgeGlueBlur);
     if (edgeGlue) this._applyRegionTransform(edgeGlue, params, { includeOverlayOffset: false });
     return edgeGlue;
   }
@@ -1487,7 +1498,7 @@ function _parallaxStrength() {
 }
 
 function _parallaxHeightContrast() {
-  return parallaxHeightContrastValue(getSceneElevationSetting(SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST));
+  return parallaxHeightContrastValue(_setting(SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST));
 }
 
 function _parallaxHeightContrastFactor(absElevation, reference, depthScale, contrast) {
@@ -1501,7 +1512,7 @@ function _parallaxStrengthForKey(strengthKey) {
 }
 
 function _parallaxStrengthKey() {
-  const strengthKey = getSceneElevationSetting(SCENE_SETTING_KEYS.PARALLAX) ?? "off";
+  const strengthKey = _setting(SCENE_SETTING_KEYS.PARALLAX) ?? "off";
   return Object.prototype.hasOwnProperty.call(PARALLAX_STRENGTHS, strengthKey) ? strengthKey : "off";
 }
 
@@ -1534,24 +1545,24 @@ function _vectorDirection(vector) {
 }
 
 function _parallaxMode() {
-  const mode = getSceneElevationSetting(SCENE_SETTING_KEYS.PARALLAX_MODE) ?? PARALLAX_MODES.CARD;
+  const mode = _setting(SCENE_SETTING_KEYS.PARALLAX_MODE) ?? PARALLAX_MODES.CARD;
   return Object.values(PARALLAX_MODES).includes(mode) ? mode : PARALLAX_MODES.CARD;
 }
 
 function _blendMode() {
-  const mode = getSceneElevationSetting(SCENE_SETTING_KEYS.BLEND_MODE) ?? BLEND_MODES.WIDE;
+  const mode = _setting(SCENE_SETTING_KEYS.BLEND_MODE) ?? BLEND_MODES.WIDE;
   return Object.values(BLEND_MODES).includes(mode) ? mode : BLEND_MODES.WIDE;
 }
 
 function _perspectivePointMode() {
-  const point = getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT) ?? PERSPECTIVE_POINTS.CENTER;
+  const point = _setting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT) ?? PERSPECTIVE_POINTS.CENTER;
   return Object.values(PERSPECTIVE_POINTS).includes(point) ? point : PERSPECTIVE_POINTS.CENTER;
 }
 
 function _perspectivePoint(geo, bounds = null, point = _perspectivePointMode()) {
   switch (point) {
     case PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE:
-      return _clampPointToSceneEdge(getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT) ?? { x: geo.x + geo.width / 2, y: geo.y }, geo);
+      return _clampPointToSceneEdge(_setting(SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT) ?? { x: geo.x + geo.width / 2, y: geo.y }, geo);
     case PERSPECTIVE_POINTS.CAMERA_CENTER:
       return _cameraCenter(geo);
     case PERSPECTIVE_POINTS.FURTHEST_EDGE:
@@ -1591,7 +1602,7 @@ function _perspectivePoint(geo, bounds = null, point = _perspectivePointMode()) 
 }
 
 function _overlayScaleStrength() {
-  const scaleKey = getSceneElevationSetting(SCENE_SETTING_KEYS.OVERLAY_SCALE) ?? "off";
+  const scaleKey = _setting(SCENE_SETTING_KEYS.OVERLAY_SCALE) ?? "off";
   return _overlayScaleStrengthForKey(scaleKey);
 }
 
@@ -1600,13 +1611,12 @@ function _overlayScaleStrengthForKey(scaleKey) {
 }
 
 function _shadowMode() {
-  const mode = getSceneElevationSetting(SCENE_SETTING_KEYS.SHADOW_MODE) ?? SHADOW_MODES.TOP_DOWN;
+  const mode = _setting(SCENE_SETTING_KEYS.SHADOW_MODE) ?? SHADOW_MODES.TOP_DOWN;
   return Object.values(SHADOW_MODES).includes(mode) ? mode : SHADOW_MODES.TOP_DOWN;
 }
 
 function _shadowLength() {
-  const value = Number(getSceneElevationSetting(SCENE_SETTING_KEYS.SHADOW_LENGTH) ?? 1);
-  return Math.clamp(Number.isFinite(value) ? value : 1, 0, 8);
+  return shadowLengthValue(_setting(SCENE_SETTING_KEYS.SHADOW_LENGTH));
 }
 
 function _shadowLengthMultiplier(value) {
@@ -1615,13 +1625,13 @@ function _shadowLengthMultiplier(value) {
 }
 
 function _depthScale() {
-  const scale = getSceneElevationSetting(SCENE_SETTING_KEYS.DEPTH_SCALE) ?? DEPTH_SCALES.COMPRESSED;
+  const scale = _setting(SCENE_SETTING_KEYS.DEPTH_SCALE) ?? DEPTH_SCALES.COMPRESSED;
   return Object.values(DEPTH_SCALES).includes(scale) ? scale : DEPTH_SCALES.COMPRESSED;
 }
 
 function _sunShadowState(shadowMode, geo, bounds) {
   if (shadowMode === SHADOW_MODES.SUN_AT_EDGE) {
-    const sunPoint = _clampPointToSceneEdge(getSceneElevationSetting(SCENE_SETTING_KEYS.SUN_EDGE_POINT), geo);
+    const sunPoint = _clampPointToSceneEdge(_setting(SCENE_SETTING_KEYS.SUN_EDGE_POINT), geo);
     return {
       direction: _directionAwayFromPoint(bounds.center, sunPoint),
       alphaMultiplier: SUN_EDGE_SHADOW_ALPHA_MULTIPLIER,
@@ -1653,7 +1663,7 @@ function _sunShadowState(shadowMode, geo, bounds) {
 }
 
 function _sceneHourSetting(key, fallback, min, max) {
-  const value = Number(getSceneElevationSetting(key) ?? fallback);
+  const value = Number(_setting(key) ?? fallback);
   return Math.clamp(Number.isFinite(value) ? value : fallback, min, max);
 }
 
@@ -1802,7 +1812,7 @@ function _parallaxEnabled() {
 }
 
 function _perspectiveFollowsCamera() {
-  return [PERSPECTIVE_POINTS.CAMERA_CENTER, PERSPECTIVE_POINTS.FURTHEST_EDGE, PERSPECTIVE_POINTS.NEAREST_EDGE].includes(getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT));
+  return [PERSPECTIVE_POINTS.CAMERA_CENTER, PERSPECTIVE_POINTS.FURTHEST_EDGE, PERSPECTIVE_POINTS.NEAREST_EDGE].includes(_setting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT));
 }
 
 function _clampPointToSceneEdge(point, geo) {

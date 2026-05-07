@@ -42,7 +42,7 @@
       "ParallaxMedium": "Medium",
       "ParallaxStrong": "Strong",
       "ParallaxExtreme": "Extreme",
-      "ParallaxHeightContrast": "Parallax height contrast",
+      "ParallaxHeightContrast": "Parallax Height Contrast",
       "ParallaxHeightContrastHint": "Exaggerates how much parallax differs by elevation. Normal keeps the default curve; stronger levels make low elevations drift less and high elevations drift more, especially in camera-origin and velocity parallax modes.",
       "ParallaxHeightContrastNormal": "Normal",
       "ParallaxHeightContrastNoticeable": "Noticeable",
@@ -110,7 +110,12 @@
       "ShadowModeSmallTimeSun": "Small Time sun path",
       "ShadowModeSunAtEdge": "Sun at edge",
       "ShadowLength": "Shadow Length",
-      "ShadowLengthHint": "Multiplier for cast shadow distance. Values above 1 now scale more aggressively for low-angle light; 1 keeps the default length.",
+      "ShadowLengthHint": "How far cast shadows reach. Off disables them entirely; Extreme stretches them dramatically.",
+      "ShadowLengthOff": "Off",
+      "ShadowLengthShort": "Short",
+      "ShadowLengthNormal": "Normal",
+      "ShadowLengthLong": "Long",
+      "ShadowLengthExtreme": "Extreme",
       "SunriseHour": "Sunrise hour",
       "SunriseHourHint": "Scene-local sunrise time for Small Time sun shadows. East is the right middle edge. Use decimal hours, e.g. 6.5 for 6:30 AM.",
       "SunsetHour": "Sunset hour",
@@ -163,7 +168,11 @@
         },
         "shadowLengthOverride": {
           "label": "Shadow length override",
-          "hint": "Optional shadow length multiplier for this region only. Leave blank to use the scene-level shadow length."
+          "hint": "Optional shadow length for this region only. Use scene setting keeps the scene-level shadow length."
+        },
+        "parallaxHeightContrastOverride": {
+          "label": "Parallax height contrast override",
+          "hint": "Optional parallax height contrast for this region only. Use scene setting keeps the scene-level parallax height contrast."
         },
         "blendModeOverride": {
           "label": "Transition style override",

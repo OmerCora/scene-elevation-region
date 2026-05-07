@@ -8,11 +8,13 @@ import {
   BLEND_MODES,
   OVERLAY_SCALE_STRENGTHS,
   SHADOW_MODES,
+  SHADOW_LENGTHS,
   TOKEN_ELEVATION_MODES,
   DEPTH_SCALES,
   elevationDefaultSettings,
   getSceneElevationSettings,
   parallaxHeightContrastKey,
+  shadowLengthKey,
   setSceneElevationSettings
 } from "./config.mjs";
 
@@ -85,6 +87,13 @@ const SELECT_GROUPS = Object.freeze({
     [SHADOW_MODES.TOP_DOWN_STRONG, "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong"],
     [SHADOW_MODES.SMALL_TIME_SUN, "SCENE_ELEVATION.Settings.ShadowModeSmallTimeSun"],
     [SHADOW_MODES.SUN_AT_EDGE, "SCENE_ELEVATION.Settings.ShadowModeSunAtEdge"]
+  ],
+  [SCENE_SETTING_KEYS.SHADOW_LENGTH]: [
+    ["off", "SCENE_ELEVATION.Settings.ShadowLengthOff"],
+    ["short", "SCENE_ELEVATION.Settings.ShadowLengthShort"],
+    ["normal", "SCENE_ELEVATION.Settings.ShadowLengthNormal"],
+    ["long", "SCENE_ELEVATION.Settings.ShadowLengthLong"],
+    ["extreme", "SCENE_ELEVATION.Settings.ShadowLengthExtreme"]
   ],
   [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: [
     [TOKEN_ELEVATION_MODES.ALWAYS, "SCENE_ELEVATION.Settings.TokenElevationModeAlways"],
@@ -161,7 +170,7 @@ function _settingsForm(settings) {
     ${_selectField(SCENE_SETTING_KEYS.BLEND_MODE, "SCENE_ELEVATION.Settings.TransitionMode", settings)}
     ${_selectField(SCENE_SETTING_KEYS.OVERLAY_SCALE, "SCENE_ELEVATION.Settings.OverlayScale", settings)}
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_MODE, "SCENE_ELEVATION.Settings.ShadowMode", settings)}
-    ${_numberField(SCENE_SETTING_KEYS.SHADOW_LENGTH, "SCENE_ELEVATION.Settings.ShadowLength", "SCENE_ELEVATION.Settings.ShadowLengthHint", settings, { min: 0, max: 8, step: 0.1 })}
+    ${_selectField(SCENE_SETTING_KEYS.SHADOW_LENGTH, "SCENE_ELEVATION.Settings.ShadowLength", settings)}
     ${_selectField(SCENE_SETTING_KEYS.DEPTH_SCALE, "SCENE_ELEVATION.Settings.DepthScale", settings)}
     ${_numberField(SCENE_SETTING_KEYS.SUNRISE_HOUR, "SCENE_ELEVATION.Settings.SunriseHour", "SCENE_ELEVATION.Settings.SunriseHourHint", settings, { min: 0, max: 23.75, step: 0.25 })}
     ${_numberField(SCENE_SETTING_KEYS.SUNSET_HOUR, "SCENE_ELEVATION.Settings.SunsetHour", "SCENE_ELEVATION.Settings.SunsetHourHint", settings, { min: 0.25, max: 24, step: 0.25 })}
@@ -184,7 +193,11 @@ function _settingsForm(settings) {
 }
 
 function _selectField(name, labelKey, settings) {
-  const current = name === SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST ? parallaxHeightContrastKey(settings[name]) : settings[name];
+  const current = name === SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST
+    ? parallaxHeightContrastKey(settings[name])
+    : name === SCENE_SETTING_KEYS.SHADOW_LENGTH
+      ? shadowLengthKey(settings[name])
+      : settings[name];
   const options = SELECT_GROUPS[name].map(([value, optionLabel]) => `<option value="${value}" ${value === current ? "selected" : ""}>${game.i18n.localize(optionLabel)}</option>`).join("");
   return `<div class="form-group">
     <label>${game.i18n.localize(labelKey)}</label>
@@ -220,7 +233,7 @@ function _formSettings(data, current) {
     [SCENE_SETTING_KEYS.BLEND_MODE]: _choice(data, SCENE_SETTING_KEYS.BLEND_MODE, Object.values(BLEND_MODES), current),
     [SCENE_SETTING_KEYS.OVERLAY_SCALE]: _choice(data, SCENE_SETTING_KEYS.OVERLAY_SCALE, Object.keys(OVERLAY_SCALE_STRENGTHS), current),
     [SCENE_SETTING_KEYS.SHADOW_MODE]: _choice(data, SCENE_SETTING_KEYS.SHADOW_MODE, Object.values(SHADOW_MODES), current),
-    [SCENE_SETTING_KEYS.SHADOW_LENGTH]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SHADOW_LENGTH) ?? current[SCENE_SETTING_KEYS.SHADOW_LENGTH] ?? 1), 0, 8),
+    [SCENE_SETTING_KEYS.SHADOW_LENGTH]: _shadowLengthChoice(data, current),
     [SCENE_SETTING_KEYS.SUNRISE_HOUR]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SUNRISE_HOUR) ?? current[SCENE_SETTING_KEYS.SUNRISE_HOUR] ?? 6), 0, 23.75),
     [SCENE_SETTING_KEYS.SUNSET_HOUR]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SUNSET_HOUR) ?? current[SCENE_SETTING_KEYS.SUNSET_HOUR] ?? 18), 0.25, 24),
     [SCENE_SETTING_KEYS.SUN_EDGE_POINT]: current[SCENE_SETTING_KEYS.SUN_EDGE_POINT],
@@ -241,4 +254,10 @@ function _heightContrastChoice(data, current) {
   const choices = Object.keys(PARALLAX_HEIGHT_CONTRASTS);
   const value = String(data.get(SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST) ?? "");
   return choices.includes(value) ? value : parallaxHeightContrastKey(current[SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]);
+}
+
+function _shadowLengthChoice(data, current) {
+  const choices = Object.keys(SHADOW_LENGTHS);
+  const value = String(data.get(SCENE_SETTING_KEYS.SHADOW_LENGTH) ?? "");
+  return choices.includes(value) ? value : shadowLengthKey(current[SCENE_SETTING_KEYS.SHADOW_LENGTH]);
 }
