@@ -23,18 +23,12 @@ const EDGE_GLUE_ALPHA_MAX = 0.45;
 const SLOPE_TEXTURE_ALPHA_MAX = 0.72;
 const SLOPE_DROP_MIN_PIXELS = 5;
 const SLOPE_DROP_MAX_PIXELS = 14;
-const CLIFF_WARP_ALPHA_MAX = 0.9;
-const CLIFF_WARP_LAYER_STEPS_MIN = 3;
-const CLIFF_WARP_LAYER_STEPS_MAX = 7;
 const CLIFF_WARP_DROP_MAX_PIXELS = 68;
-const CLIFF_WARP_STRETCH_STEPS = 5;
 const CLIFF_WARP_DEPTH_MAX_GRID = 1.05;
-const CLIFF_WARP_TEXTURE_ALPHA_MAX = 0.92;
+const CLIFF_WARP_SOLID_ALPHA = 1;
+const CLIFF_WARP_SOURCE_RIM_PIXELS = 2;
 const STRONG_TOP_DOWN_SHADOW_MULTIPLIER = 2.35;
 const STRONG_TOP_DOWN_BLUR_MULTIPLIER = 1.55;
-const CLIFF_WARP_TEXTURE_SHADOW_STRETCH_STEPS_MAX = 2;
-const CLIFF_WARP_TEXTURE_SHADOW_STEP_MULTIPLIER = 0.5;
-const CLIFF_WARP_TEXTURE_SHADOW_ALPHA_MULTIPLIER = 0.82;
 const SUN_EDGE_SHADOW_ALPHA_MULTIPLIER = 1.25;
 const SUN_EDGE_SHADOW_LENGTH_MULTIPLIER = 1.2;
 const TRANSITION_MASK_BLUR_RATIO = 0.35;
@@ -124,22 +118,21 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
     overlayAlpha: 0.998,
     glueAlpha: 0.26,
     glueBlurMultiplier: 0.12,
-    slopeAlpha: 0.9,
-    slopeAlphaMax: CLIFF_WARP_TEXTURE_ALPHA_MAX,
+    slopeAlpha: CLIFF_WARP_SOLID_ALPHA,
+    slopeAlphaMax: CLIFF_WARP_SOLID_ALPHA,
     slopeWidthMultiplier: 2.8,
     slopeTextureShiftRatio: 0.18,
     slopeDropPixels: 38,
     dropMaxPixels: CLIFF_WARP_DROP_MAX_PIXELS,
-    stretchAlpha: 0.86,
-    stretchSteps: CLIFF_WARP_STRETCH_STEPS,
+    stretchAlpha: 0,
+    stretchSteps: 0,
     stretchScaleMin: 1.03,
     stretchScaleMax: 1.28,
-    bridgeBaseAlpha: 0.58,
+    bridgeBaseAlpha: 0,
     cliffWarp: true,
-    cliffWarpAlpha: 0.86,
-    cliffWarpAlphaMax: CLIFF_WARP_ALPHA_MAX,
-    cliffWarpSteps: 4,
-    cliffWarpStepsMax: CLIFF_WARP_LAYER_STEPS_MAX,
+    cliffWarpAlpha: CLIFF_WARP_SOLID_ALPHA,
+    cliffWarpAlphaMax: CLIFF_WARP_SOLID_ALPHA,
+    cliffWarpSourceWidth: CLIFF_WARP_SOURCE_RIM_PIXELS,
     cliffWarpDepthRatio: 1.18,
     cliffWarpDepthMaxGrid: CLIFF_WARP_DEPTH_MAX_GRID,
     cliffWarpDepthMinRatio: 0.45,
@@ -453,6 +446,10 @@ export class RegionElevationRenderer {
     this.container?.destroy({ children: true });
     this.mask?.destroy();
     this._clearGeneratedTextureCache();
+    if (this._cliffShadeTex) {
+      try { this._cliffShadeTex.destroy(true); } catch (err) {}
+      this._cliffShadeTex = null;
+    }
     this.container = null;
     this.mask = null;
     this._scene = null;
@@ -686,7 +683,6 @@ export class RegionElevationRenderer {
     const textureShadow = textureMeldShadow || fullTextureMeldShadow;
     const strongTopDownShadow = shadowMode === SHADOW_MODES.TOP_DOWN_STRONG;
     const responsiveAllAroundShadow = shadowMode === SHADOW_MODES.RESPONSIVE_ALL_AROUND;
-    const cliffWarpTextureShadowOptimization = textureShadow && blendMode === BLEND_MODES.CLIFF_WARP;
     const shadowAlphaMultiplier = sunShadow?.alphaMultiplier ?? 1;
     const shadowLengthMultiplier = (sunShadow?.lengthMultiplier ?? 1) * _shadowLengthMultiplier(shadowLength);
     const shadowBlurMultiplier = sunShadow?.blurMultiplier ?? 1;
@@ -754,14 +750,17 @@ export class RegionElevationRenderer {
     let bridgeBaseAlphaBase = blendProfile.bridgeBaseAlpha ?? 0;
     let slopeTextureShiftRatio = blendProfile.slopeTextureShiftRatio;
     let cliffWarpAlpha = 0;
-    let cliffWarpSteps = 0;
     let cliffWarpShift = { x: 0, y: 0 };
     let cliffWarpScaleDelta = 0;
+    let cliffWarpSourceWidth = 0;
     if (cliffWarpActive) {
       const cliffWarpWidthRatio = (blendProfile.cliffWarpWidthBase ?? 0.18) + transitionNormalized * (blendProfile.cliffWarpWidthElevationRatio ?? 0.18);
       slopeWidth = Math.max(slopeWidth, Math.min(blendProfile.maxWidth, gridSize * cliffWarpWidthRatio));
-      slopeAlphaBase = Math.max(slopeAlphaBase, blendProfile.cliffWarpAlpha ?? 0.68);
-      if (cliffWarpTextureShadowOptimization) slopeStretchStepsBase = Math.min(slopeStretchStepsBase, CLIFF_WARP_TEXTURE_SHADOW_STRETCH_STEPS_MAX);
+      slopeAlphaBase = Math.max(slopeAlphaBase, blendProfile.cliffWarpAlpha ?? CLIFF_WARP_SOLID_ALPHA);
+      slopeStretchAlphaBase = 0;
+      slopeStretchStepsBase = 0;
+      bridgeBaseAlphaBase = 0;
+      cliffWarpSourceWidth = Math.max(1, Number(blendProfile.cliffWarpSourceWidth ?? CLIFF_WARP_SOURCE_RIM_PIXELS));
       const cliffWarpDepth = Math.clamp(
         lift * (blendProfile.cliffWarpDepthRatio ?? 0.65),
         slopeWidth * (blendProfile.cliffWarpDepthMinRatio ?? 0.35),
@@ -772,14 +771,7 @@ export class RegionElevationRenderer {
         y: textureShift.y + overlayOffset.y + blendDirection.y * cliffWarpDepth * sign
       };
       cliffWarpScaleDelta = (overlayScale - 1) + (cliffWarpDepth / Math.max(bounds.width, bounds.height, gridSize)) * (blendProfile.cliffWarpScaleFactor ?? 0.18);
-      cliffWarpSteps = Math.clamp(
-        Math.round((blendProfile.cliffWarpSteps ?? 4) + transitionNormalized * 1.5),
-        CLIFF_WARP_LAYER_STEPS_MIN,
-        blendProfile.cliffWarpStepsMax ?? CLIFF_WARP_LAYER_STEPS_MAX
-      );
-      if (cliffWarpTextureShadowOptimization) cliffWarpSteps = Math.max(2, Math.round(cliffWarpSteps * CLIFF_WARP_TEXTURE_SHADOW_STEP_MULTIPLIER));
-      cliffWarpAlpha = Math.clamp((blendProfile.cliffWarpAlpha ?? 0.72) * shadowStrength * (0.72 + transitionNormalized * 0.28), 0, blendProfile.cliffWarpAlphaMax ?? CLIFF_WARP_ALPHA_MAX);
-      if (cliffWarpTextureShadowOptimization) cliffWarpAlpha *= CLIFF_WARP_TEXTURE_SHADOW_ALPHA_MULTIPLIER;
+      cliffWarpAlpha = Math.clamp(blendProfile.cliffWarpAlpha ?? CLIFF_WARP_SOLID_ALPHA, 0, blendProfile.cliffWarpAlphaMax ?? CLIFF_WARP_SOLID_ALPHA);
     }
     const slopeTextureShift = slopeWidth > 0
       ? {
@@ -851,9 +843,9 @@ export class RegionElevationRenderer {
       bridgeBaseAlpha: slopeWidth > 0 ? Math.clamp(bridgeBaseAlphaBase * (0.68 + transitionNormalized * 0.32), 0, 1) : 0,
       cliffWarp: cliffWarpActive,
       cliffWarpAlpha,
-      cliffWarpSteps,
       cliffWarpShift,
       cliffWarpScaleDelta,
+      cliffWarpSourceWidth,
       textureMeldShadow: textureShadow,
       textureSoftShadowAlpha: textureSoftShadowAlphaBase,
       textureBridgeShadowAlpha,
@@ -1089,8 +1081,8 @@ export class RegionElevationRenderer {
   }
 
   _createSlopeLayer(paths, texture, geo, params) {
-    if (!texture || params.slopeAlpha <= 0 || params.slopeWidth <= 0) return null;
     if (params.cliffWarp) return this._createCliffWarpLayer(paths, texture, geo, params);
+    if (!texture || params.slopeAlpha <= 0 || params.slopeWidth <= 0) return null;
     const slope = new PIXI.Container();
     slope.eventMode = "none";
     const band = new PIXI.Container();
@@ -1136,64 +1128,132 @@ export class RegionElevationRenderer {
   }
 
   _createCliffWarpLayer(paths, texture, geo, params) {
-    if (!texture || params.slopeWidth <= 0) return null;
-    if (params.cliffWarpAlpha <= 0) return null;
-    const patch = new PIXI.Container();
-    patch.eventMode = "none";
-    const band = new PIXI.Container();
-    band.eventMode = "none";
-    const transitionMask = this._createTransitionMask(paths, params.slopeWidth);
-    band.mask = transitionMask;
-    band.addChild(transitionMask);
+    if (!texture || params.cliffWarpAlpha <= 0) return null;
+    const overlayOffset = params.overlayOffset || { x: 0, y: 0 };
+    const liftLength = Math.hypot(overlayOffset.x, overlayOffset.y);
+    if (liftLength < 0.5) return null;
 
-    if (params.bridgeBaseAlpha > 0) {
-      band.addChild(this._createTextureSprite(texture, geo, {
-        shift: { x: 0, y: 0 },
-        alpha: params.slopeAlpha * params.bridgeBaseAlpha,
-        center: params.projectionCenter,
-        stretchScale: 1
-      }));
-    }
+    const Mesh = PIXI.Mesh;
+    const MeshGeometry = PIXI.MeshGeometry;
+    const MeshMaterial = PIXI.MeshMaterial;
+    if (!Mesh || !MeshGeometry || !MeshMaterial) return null;
 
-    const stretchSteps = Math.max(0, Math.floor(params.slopeStretchSteps ?? 0));
-    if (stretchSteps > 0 && params.slopeStretchAlpha > 0) {
-      for (let step = stretchSteps; step >= 1; step--) {
-        const t = step / stretchSteps;
-        const alpha = params.slopeAlpha * params.slopeStretchAlpha * (0.28 + 0.72 * t) / stretchSteps;
-        const stretchScale = 1 + (params.slopeStretchScale - 1) * t;
-        const shift = {
-          x: params.slopeTextureShift.x * t,
-          y: params.slopeTextureShift.y * t
-        };
-        band.addChild(this._createTextureSprite(texture, geo, {
-          shift,
-          alpha,
-          center: params.projectionCenter,
-          stretchScale
-        }));
+    const overlayScale = params.overlayScale ?? 1;
+    const center = params.center;
+    const sourceWidth = Math.max(1, params.cliffWarpSourceWidth || CLIFF_WARP_SOURCE_RIM_PIXELS);
+    const sign = params.isHole ? -1 : 1;
+    const container = new PIXI.Container();
+    container.eventMode = "none";
+
+    for (const path of paths) {
+      if (!path || path.length < 3) continue;
+      const n = path.length;
+      const positions = new Float32Array(n * 4);
+      const uvs = new Float32Array(n * 4);
+      const shadeUVs = new Float32Array(n * 4);
+      const indices = new Uint16Array(n * 6);
+
+      for (let i = 0; i < n; i++) {
+        const p = path[i];
+        const prev = path[(i - 1 + n) % n];
+        const next = path[(i + 1) % n];
+        const tPrevX = p.x - prev.x;
+        const tPrevY = p.y - prev.y;
+        const tNextX = next.x - p.x;
+        const tNextY = next.y - p.y;
+        let nx = -(tPrevY + tNextY);
+        let ny = (tPrevX + tNextX);
+        const nl = Math.hypot(nx, ny);
+        if (nl > 0) { nx /= nl; ny /= nl; }
+        const toCx = center.x - p.x;
+        const toCy = center.y - p.y;
+        if (nx * toCx + ny * toCy < 0) { nx = -nx; ny = -ny; }
+
+        const topX = center.x + (p.x - center.x) * overlayScale + overlayOffset.x;
+        const topY = center.y + (p.y - center.y) * overlayScale + overlayOffset.y;
+        const botX = p.x;
+        const botY = p.y;
+
+        positions[i * 4 + 0] = topX;
+        positions[i * 4 + 1] = topY;
+        positions[i * 4 + 2] = botX;
+        positions[i * 4 + 3] = botY;
+
+        const topSampleX = p.x;
+        const topSampleY = p.y;
+        const botSampleX = p.x + nx * sourceWidth * sign;
+        const botSampleY = p.y + ny * sourceWidth * sign;
+        uvs[i * 4 + 0] = (topSampleX - geo.x) / geo.width;
+        uvs[i * 4 + 1] = (topSampleY - geo.y) / geo.height;
+        uvs[i * 4 + 2] = (botSampleX - geo.x) / geo.width;
+        uvs[i * 4 + 3] = (botSampleY - geo.y) / geo.height;
+
+        shadeUVs[i * 4 + 0] = 0;
+        shadeUVs[i * 4 + 1] = 0;
+        shadeUVs[i * 4 + 2] = 0;
+        shadeUVs[i * 4 + 3] = 1;
+      }
+
+      for (let i = 0; i < n; i++) {
+        const i0Top = i * 2;
+        const i0Bot = i * 2 + 1;
+        const i1Top = ((i + 1) % n) * 2;
+        const i1Bot = ((i + 1) % n) * 2 + 1;
+        const o = i * 6;
+        if (params.isHole) {
+          indices[o + 0] = i0Top;
+          indices[o + 1] = i0Bot;
+          indices[o + 2] = i1Top;
+          indices[o + 3] = i0Bot;
+          indices[o + 4] = i1Bot;
+          indices[o + 5] = i1Top;
+        } else {
+          indices[o + 0] = i0Top;
+          indices[o + 1] = i1Top;
+          indices[o + 2] = i0Bot;
+          indices[o + 3] = i0Bot;
+          indices[o + 4] = i1Top;
+          indices[o + 5] = i1Bot;
+        }
+      }
+
+      const meshGeo = new MeshGeometry(positions, uvs, indices);
+      const material = new MeshMaterial(texture, { alpha: params.cliffWarpAlpha });
+      const mesh = new Mesh(meshGeo, material);
+      mesh.eventMode = "none";
+      container.addChild(mesh);
+
+      const shadeTexture = this._cliffShadeTexture();
+      if (shadeTexture) {
+        const shadeGeo = new MeshGeometry(positions.slice(), shadeUVs, indices.slice());
+        const shadeMat = new MeshMaterial(shadeTexture, { alpha: 0.55 });
+        const shadeMesh = new Mesh(shadeGeo, shadeMat);
+        shadeMesh.eventMode = "none";
+        container.addChild(shadeMesh);
       }
     }
 
-    const steps = Math.max(1, Math.floor(params.cliffWarpSteps ?? CLIFF_WARP_LAYER_STEPS_MIN));
-    for (let step = 1; step <= steps; step++) {
-      const t = step / steps;
-      const eased = t * t * (3 - 2 * t);
-      const alpha = params.cliffWarpAlpha * (0.55 + 0.45 * t) / steps;
-      const shift = {
-        x: params.cliffWarpShift.x * eased,
-        y: params.cliffWarpShift.y * eased
-      };
-      const stretchScale = 1 + params.cliffWarpScaleDelta * eased;
-      band.addChild(this._createTextureSprite(texture, geo, {
-        shift,
-        alpha,
-        center: params.projectionCenter,
-        stretchScale
-      }));
+    if (!container.children.length) {
+      container.destroy({ children: true });
+      return null;
     }
+    return container;
+  }
 
-    patch.addChild(band);
-    return patch;
+  _cliffShadeTexture() {
+    if (this._cliffShadeTex && !this._cliffShadeTex.baseTexture?.destroyed) return this._cliffShadeTex;
+    const c = document.createElement("canvas");
+    c.width = 4;
+    c.height = 64;
+    const ctx = c.getContext("2d");
+    const grad = ctx.createLinearGradient(0, 0, 0, 64);
+    grad.addColorStop(0, "rgba(0,0,0,0)");
+    grad.addColorStop(0.55, "rgba(0,0,0,0.45)");
+    grad.addColorStop(1, "rgba(0,0,0,0.95)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 4, 64);
+    this._cliffShadeTex = PIXI.Texture.from(c);
+    return this._cliffShadeTex;
   }
 
   _createTextureSprite(texture, geo, { shift = { x: 0, y: 0 }, alpha = 1, center = null, stretchScale = 1 } = {}) {
@@ -1348,22 +1408,28 @@ export class RegionElevationRenderer {
     const padding = Math.ceil(feather * 4 + 2);
     const width = Math.ceil(bounds.width + padding * 2);
     const height = Math.ceil(bounds.height + padding * 2);
-    const MaskGraphics = _graphicsClass();
-    const maskShape = new MaskGraphics();
-    maskShape.eventMode = "none";
-    maskShape.beginFill(0xffffff, 1);
-    for (const path of paths) {
-      maskShape.drawPolygon(path.flatMap(point => [
-        point.x - bounds.minX + padding,
-        point.y - bounds.minY + padding
-      ]));
-    }
-    maskShape.endFill();
-    maskShape.filters = [_makeBlurFilter(feather)];
-    maskShape.filterArea = new PIXI.Rectangle(0, 0, width, height);
+    const cacheKey = `feather-mask|${width}x${height}|${_textureNumber(feather)}|${_pathsSignature(paths)}`;
+    let texture = this._generatedTextureCache.get(cacheKey);
+    if (texture && !_validTexture(texture)) this._generatedTextureCache.delete(cacheKey);
+    if (!_validTexture(texture)) {
+      const MaskGraphics = _graphicsClass();
+      const maskShape = new MaskGraphics();
+      maskShape.eventMode = "none";
+      maskShape.beginFill(0xffffff, 1);
+      for (const path of paths) {
+        maskShape.drawPolygon(path.flatMap(point => [
+          point.x - bounds.minX + padding,
+          point.y - bounds.minY + padding
+        ]));
+      }
+      maskShape.endFill();
+      maskShape.filters = [_makeBlurFilter(feather)];
+      maskShape.filterArea = new PIXI.Rectangle(0, 0, width, height);
 
-    const texture = this._generateTexture(maskShape, width, height);
-    maskShape.destroy({ children: true });
+      texture = this._generateTexture(maskShape, width, height);
+      maskShape.destroy({ children: true });
+      if (_validTexture(texture)) this._generatedTextureCache.set(cacheKey, texture);
+    }
     if (!_validTexture(texture)) {
       texture?.destroy?.(true);
       return this._createMask(paths);
@@ -1373,28 +1439,33 @@ export class RegionElevationRenderer {
     mask.eventMode = "none";
     mask.position.set(bounds.minX - padding, bounds.minY - padding);
     mask.renderable = false;
-    mask._seGeneratedTexture = texture;
     return mask;
   }
 
-  _createTransitionMask(paths, width) {
+  _createTransitionMask(paths, width, { blurRatio = TRANSITION_MASK_BLUR_RATIO, strokeScale = 1.35 } = {}) {
     const bounds = _cachedPathsBounds(paths);
     if (!bounds) return this._createMask(paths);
-    const strokeWidth = Math.max(1, width * 1.35);
-    const blur = Math.max(0.5, width * TRANSITION_MASK_BLUR_RATIO);
+    const strokeWidth = Math.max(1, width * strokeScale);
+    const blur = Math.max(0.35, width * blurRatio);
     const padding = Math.ceil(strokeWidth + blur * 4 + 2);
     const textureWidth = Math.ceil(bounds.width + padding * 2);
     const textureHeight = Math.ceil(bounds.height + padding * 2);
-    const MaskGraphics = _graphicsClass();
-    const maskShape = new MaskGraphics();
-    maskShape.eventMode = "none";
-    maskShape.lineStyle(strokeWidth, 0xffffff, 1);
-    _drawShiftedPaths(maskShape, paths, -bounds.minX + padding, -bounds.minY + padding);
-    maskShape.filters = [_makeBlurFilter(blur)];
-    maskShape.filterArea = new PIXI.Rectangle(0, 0, textureWidth, textureHeight);
+    const cacheKey = `transition-mask|${textureWidth}x${textureHeight}|${_textureNumber(strokeWidth)}|${_textureNumber(blur)}|${_pathsSignature(paths)}`;
+    let texture = this._generatedTextureCache.get(cacheKey);
+    if (texture && !_validTexture(texture)) this._generatedTextureCache.delete(cacheKey);
+    if (!_validTexture(texture)) {
+      const MaskGraphics = _graphicsClass();
+      const maskShape = new MaskGraphics();
+      maskShape.eventMode = "none";
+      maskShape.lineStyle(strokeWidth, 0xffffff, 1);
+      _drawShiftedPaths(maskShape, paths, -bounds.minX + padding, -bounds.minY + padding);
+      maskShape.filters = [_makeBlurFilter(blur)];
+      maskShape.filterArea = new PIXI.Rectangle(0, 0, textureWidth, textureHeight);
 
-    const texture = this._generateTexture(maskShape, textureWidth, textureHeight);
-    maskShape.destroy({ children: true });
+      texture = this._generateTexture(maskShape, textureWidth, textureHeight);
+      maskShape.destroy({ children: true });
+      if (_validTexture(texture)) this._generatedTextureCache.set(cacheKey, texture);
+    }
     if (!_validTexture(texture)) {
       texture?.destroy?.(true);
       return this._createFeatherMask(paths, width);
@@ -1404,7 +1475,6 @@ export class RegionElevationRenderer {
     mask.eventMode = "none";
     mask.position.set(bounds.minX - padding, bounds.minY - padding);
     mask.renderable = false;
-    mask._seGeneratedTexture = texture;
     return mask;
   }
 
