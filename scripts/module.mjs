@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, PARALLAX_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, REGION_BEHAVIOR_TYPE, getSceneElevationSetting } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, PARALLAX_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, REGION_BEHAVIOR_TYPE, getSceneElevationSetting, parallaxHeightContrastKey } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -87,6 +87,22 @@ Hooks.once("init", () => {
       medium: "SCENE_ELEVATION.Settings.ParallaxMedium",
       strong: "SCENE_ELEVATION.Settings.ParallaxStrong",
       extreme: "SCENE_ELEVATION.Settings.ParallaxExtreme"
+    },
+    onChange: () => {
+      RegionElevationRenderer.instance.update();
+      _refreshAllTokenScales();
+    }
+  });
+  game.settings.register(MODULE_ID, SETTINGS.PARALLAX_HEIGHT_CONTRAST, {
+    name: "SCENE_ELEVATION.Settings.ParallaxHeightContrast",
+    hint: "SCENE_ELEVATION.Settings.ParallaxHeightContrastHint",
+    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.PARALLAX_HEIGHT_CONTRAST],
+    choices: {
+      normal: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNormal",
+      noticeable: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNoticeable",
+      strong: "SCENE_ELEVATION.Settings.ParallaxHeightContrastStrong",
+      dramatic: "SCENE_ELEVATION.Settings.ParallaxHeightContrastDramatic",
+      extreme: "SCENE_ELEVATION.Settings.ParallaxHeightContrastExtreme"
     },
     onChange: () => {
       RegionElevationRenderer.instance.update();
@@ -294,7 +310,10 @@ Hooks.once("init", () => {
 });
 
 Hooks.once("setup", _patchTokenHudPositioning);
-Hooks.once("ready", _patchTokenHudPositioning);
+Hooks.once("ready", async () => {
+  _patchTokenHudPositioning();
+  await _migrateParallaxHeightContrastSetting();
+});
 
 /* -------------------------------------------- */
 /*  Canvas lifecycle                             */
@@ -538,6 +557,13 @@ function _patchTokenHudPositioning() {
   for (const hudClass of new Set(hudClasses)) _patchTokenHudClass(hudClass);
 }
 
+async function _migrateParallaxHeightContrastSetting() {
+  if (!game.user?.isGM) return;
+  const current = game.settings.get(MODULE_ID, SETTINGS.PARALLAX_HEIGHT_CONTRAST);
+  const key = parallaxHeightContrastKey(current);
+  if (current !== key) await game.settings.set(MODULE_ID, SETTINGS.PARALLAX_HEIGHT_CONTRAST, key);
+}
+
 function _patchTokenHudClass(hudClass) {
   const prototype = hudClass?.prototype;
   if (!prototype || prototype[TOKEN_HUD_POSITION_PATCHED] || typeof prototype.setPosition !== "function") return;
@@ -561,8 +587,9 @@ function _applyTokenHudParallaxOffset(hud) {
   const element = _tokenHudElement(hud);
   if (!token?.document || !element) return;
   const offset = RegionElevationRenderer.instance.tokenParallaxOffset(token.document);
-  const screenOffset = _canvasOffsetToScreen(offset);
-  _applyTokenHudElementOffset(element, screenOffset);
+  const viewportOffset = _tokenOffsetToViewport(token, offset);
+  const hudOffset = _viewportOffsetToOffsetParent(element, viewportOffset);
+  _applyTokenHudElementOffset(element, hudOffset);
 }
 
 function _tokenHudCandidates() {
@@ -628,11 +655,51 @@ function _stylePixels(value, fallback = 0) {
   return Number.isFinite(number) ? number : Number(fallback) || 0;
 }
 
-function _canvasOffsetToScreen(offset) {
+function _tokenOffsetToViewport(token, offset) {
+  const reference = _tokenParallaxReferenceParent(token);
+  if (typeof reference?.toGlobal === "function") {
+    try {
+      const origin = reference.toGlobal(new PIXI.Point(0, 0));
+      const shifted = reference.toGlobal(new PIXI.Point(offset.x, offset.y));
+      const viewportOffset = _rendererOffsetToCss({ x: shifted.x - origin.x, y: shifted.y - origin.y });
+      if (Number.isFinite(viewportOffset.x) && Number.isFinite(viewportOffset.y)) return viewportOffset;
+    } catch (err) {}
+  }
   const scale = canvas.stage?.scale ?? { x: 1, y: 1 };
-  return {
+  return _rendererOffsetToCss({
     x: offset.x * (Number(scale.x) || 1),
     y: offset.y * (Number(scale.y) || 1)
+  });
+}
+
+function _tokenParallaxReferenceParent(token) {
+  const meshParent = token?.mesh?.parent;
+  if (meshParent && typeof meshParent.toGlobal === "function") return meshParent;
+  if (typeof token?.toGlobal === "function") return token;
+  return canvas.stage;
+}
+
+function _rendererOffsetToCss(offset) {
+  const renderer = canvas.app?.renderer;
+  const view = renderer?.view ?? canvas.app?.view ?? canvas.app?.canvas;
+  const rect = view?.getBoundingClientRect?.();
+  const screen = renderer?.screen;
+  const scaleX = rect?.width && screen?.width ? rect.width / screen.width : 1;
+  const scaleY = rect?.height && screen?.height ? rect.height / screen.height : 1;
+  return {
+    x: offset.x * scaleX,
+    y: offset.y * scaleY
+  };
+}
+
+function _viewportOffsetToOffsetParent(element, offset) {
+  const parent = element.offsetParent ?? element.parentElement;
+  const rect = parent?.getBoundingClientRect?.();
+  const scaleX = rect?.width && parent?.offsetWidth ? rect.width / parent.offsetWidth : 1;
+  const scaleY = rect?.height && parent?.offsetHeight ? rect.height / parent.offsetHeight : 1;
+  return {
+    x: offset.x / (Number(scaleX) || 1),
+    y: offset.y / (Number(scaleY) || 1)
   };
 }
 

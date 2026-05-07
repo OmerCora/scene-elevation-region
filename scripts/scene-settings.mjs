@@ -2,6 +2,7 @@ import {
   MODULE_ID,
   SCENE_SETTING_KEYS,
   PARALLAX_STRENGTHS,
+  PARALLAX_HEIGHT_CONTRASTS,
   PARALLAX_MODES,
   PERSPECTIVE_POINTS,
   BLEND_MODES,
@@ -11,6 +12,7 @@ import {
   DEPTH_SCALES,
   elevationDefaultSettings,
   getSceneElevationSettings,
+  parallaxHeightContrastKey,
   setSceneElevationSettings
 } from "./config.mjs";
 
@@ -30,6 +32,13 @@ const SELECT_GROUPS = Object.freeze({
     [PARALLAX_MODES.VELOCITY_CARD, "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard"],
     [PARALLAX_MODES.ANCHORED_VELOCITY_CARD, "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard"],
     [PARALLAX_MODES.SHADOW, "SCENE_ELEVATION.Settings.ParallaxModeShadow"]
+  ],
+  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: [
+    ["normal", "SCENE_ELEVATION.Settings.ParallaxHeightContrastNormal"],
+    ["noticeable", "SCENE_ELEVATION.Settings.ParallaxHeightContrastNoticeable"],
+    ["strong", "SCENE_ELEVATION.Settings.ParallaxHeightContrastStrong"],
+    ["dramatic", "SCENE_ELEVATION.Settings.ParallaxHeightContrastDramatic"],
+    ["extreme", "SCENE_ELEVATION.Settings.ParallaxHeightContrastExtreme"]
   ],
   [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: [
     [PERSPECTIVE_POINTS.CENTER, "SCENE_ELEVATION.Settings.PerspectivePointCenter"],
@@ -146,6 +155,7 @@ function _settingsForm(settings) {
   return `<form class="${MODULE_ID}-scene-settings">
     <button type="button" data-action="setDefault"><i class="fa-solid fa-rotate-left"></i> ${game.i18n.localize("SCENE_ELEVATION.SceneSettings.SetToDefault")}</button>
     ${_selectField(SCENE_SETTING_KEYS.PARALLAX, "SCENE_ELEVATION.Settings.Parallax", settings)}
+    ${_selectField(SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST, "SCENE_ELEVATION.Settings.ParallaxHeightContrast", settings)}
     ${_selectField(SCENE_SETTING_KEYS.PARALLAX_MODE, "SCENE_ELEVATION.Settings.ParallaxMode", settings)}
     ${_selectField(SCENE_SETTING_KEYS.PERSPECTIVE_POINT, "SCENE_ELEVATION.Settings.PerspectivePoint", settings)}
     ${_selectField(SCENE_SETTING_KEYS.BLEND_MODE, "SCENE_ELEVATION.Settings.TransitionMode", settings)}
@@ -174,7 +184,7 @@ function _settingsForm(settings) {
 }
 
 function _selectField(name, labelKey, settings) {
-  const current = settings[name];
+  const current = name === SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST ? parallaxHeightContrastKey(settings[name]) : settings[name];
   const options = SELECT_GROUPS[name].map(([value, optionLabel]) => `<option value="${value}" ${value === current ? "selected" : ""}>${game.i18n.localize(optionLabel)}</option>`).join("");
   return `<div class="form-group">
     <label>${game.i18n.localize(labelKey)}</label>
@@ -203,6 +213,7 @@ function _populateSettingsForm(form, settings) {
 function _formSettings(data, current) {
   return {
     [SCENE_SETTING_KEYS.PARALLAX]: _choice(data, SCENE_SETTING_KEYS.PARALLAX, Object.keys(PARALLAX_STRENGTHS), current),
+    [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: _heightContrastChoice(data, current),
     [SCENE_SETTING_KEYS.PARALLAX_MODE]: _choice(data, SCENE_SETTING_KEYS.PARALLAX_MODE, Object.values(PARALLAX_MODES), current),
     [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: _choice(data, SCENE_SETTING_KEYS.PERSPECTIVE_POINT, Object.values(PERSPECTIVE_POINTS), current),
     [SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT]: current[SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT],
@@ -224,4 +235,10 @@ function _formSettings(data, current) {
 function _choice(data, key, choices, current) {
   const value = String(data.get(key) ?? current[key] ?? "");
   return choices.includes(value) ? value : current[key];
+}
+
+function _heightContrastChoice(data, current) {
+  const choices = Object.keys(PARALLAX_HEIGHT_CONTRASTS);
+  const value = String(data.get(SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST) ?? "");
+  return choices.includes(value) ? value : parallaxHeightContrastKey(current[SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]);
 }

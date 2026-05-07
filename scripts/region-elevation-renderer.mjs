@@ -1,4 +1,4 @@
-import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, sceneGeometry, getSceneElevationSetting } from "./config.mjs";
+import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, sceneGeometry, getSceneElevationSetting, parallaxHeightContrastValue } from "./config.mjs";
 
 const MIN_ELEVATION_DELTA = 0.05;
 const OVERLAY_ELEVATION_REFERENCE = 6;
@@ -589,6 +589,7 @@ export class RegionElevationRenderer {
     const geo = sceneGeometry(this._scene);
     const texture = this._backgroundTexture();
     const parallax = _parallaxStrength();
+    const parallaxHeightContrast = _parallaxHeightContrast();
     const parallaxMode = _parallaxMode();
     const blendMode = _blendMode();
     const overlayScaleStrength = _overlayScaleStrength();
@@ -605,7 +606,7 @@ export class RegionElevationRenderer {
       const visualShadowLength = visual.entry.shadowLengthOverride ?? shadowLength;
       const visualDepthScale = visual.entry.depthScaleOverride || depthScale;
       const perspectivePoint = _perspectivePoint(geo, visual.bounds, visualPerspectivePointMode);
-      const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualShadowLength);
+      const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualShadowLength, parallaxHeightContrast);
       this._visualParams.set(this._parallaxStateKey(visual), params);
       if (!params.isHole) {
         const shadow = this._createShadow(visual.paths, texture, geo, params);
@@ -664,7 +665,7 @@ export class RegionElevationRenderer {
     return _validTexture(texture) ? texture : null;
   }
 
-  _regionVisualParameters(visual, geo, parallax, parallaxMode, blendMode, overlayScaleStrength, shadowMode, perspectivePoint, depthScale = DEPTH_SCALES.COMPRESSED, shadowLength = 1) {
+  _regionVisualParameters(visual, geo, parallax, parallaxMode, blendMode, overlayScaleStrength, shadowMode, perspectivePoint, depthScale = DEPTH_SCALES.COMPRESSED, shadowLength = 1, parallaxHeightContrast = 1) {
     const gridSize = geo.gridSize;
     const { entry, bounds } = visual;
     const reference = DEPTH_SCALE_REFERENCE[depthScale] ?? DEPTH_SCALE_REFERENCE[DEPTH_SCALES.COMPRESSED];
@@ -696,6 +697,7 @@ export class RegionElevationRenderer {
     const perspectiveDistance = Math.hypot(perspectivePoint.x - bounds.center.x, perspectivePoint.y - bounds.center.y);
     const distanceBoost = _parallaxDistanceBoost(perspectiveDistance, geo);
     const liftFactor = _depthLiftFactor(absElevation, depthScale);
+    const parallaxHeightFactor = _parallaxHeightContrastFactor(absElevation, reference, depthScale, parallaxHeightContrast);
     const liftMultiplier = blendProfile.liftMultiplier ?? 1;
     const liftCeiling = depthScale === DEPTH_SCALES.COMPRESSED
       ? _parallaxLiftMaxPixels(gridSize)
@@ -705,8 +707,10 @@ export class RegionElevationRenderer {
       0,
       liftCeiling * Math.max(1, liftMultiplier)
     );
-    const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * lift * sign, y: baseParallaxDirection.y * lift * sign } : { x: 0, y: 0 };
-    const parallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, lift, sign, parallax) : { x: 0, y: 0 };
+    const parallaxLift = lift * parallaxHeightFactor;
+    const heightAdjustedParallax = parallax * parallaxHeightFactor;
+    const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * parallaxLift * sign, y: baseParallaxDirection.y * parallaxLift * sign } : { x: 0, y: 0 };
+    const parallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, parallaxLift, sign, heightAdjustedParallax) : { x: 0, y: 0 };
     const blendDirection = parallax > 0 ? (_vectorDirection(parallaxVector) ?? baseParallaxDirection) : STATIC_SHADOW_DIRECTION;
     const overlayOffset = this._overlayOffsetForMode(parallaxVector, parallaxMode);
     const textureShift = { x: 0, y: 0 };
@@ -1437,6 +1441,16 @@ export class RegionElevationRenderer {
 
 function _parallaxStrength() {
   return _parallaxStrengthForKey(_parallaxStrengthKey());
+}
+
+function _parallaxHeightContrast() {
+  return parallaxHeightContrastValue(getSceneElevationSetting(SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST));
+}
+
+function _parallaxHeightContrastFactor(absElevation, reference, depthScale, contrast) {
+  if (contrast <= 1 || absElevation <= 0) return 1;
+  const depthRatio = Math.max(0.16, _overlayScaleDepthFactor(absElevation, reference, depthScale));
+  return Math.clamp(Math.pow(depthRatio, contrast - 1), 0.18, 4);
 }
 
 function _parallaxStrengthForKey(strengthKey) {

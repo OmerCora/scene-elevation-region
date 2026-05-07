@@ -4,6 +4,7 @@ export const MODULE_ID = "scene-elevation-region";
 
 export const SETTINGS = {
   PARALLAX: "parallaxStrength",
+  PARALLAX_HEIGHT_CONTRAST: "parallaxHeightContrast",
   PARALLAX_MODE: "parallaxMode",
   PERSPECTIVE_POINT: "perspectivePoint",
   BLEND_MODE: "overlayBlendMode",
@@ -24,6 +25,7 @@ export const SCENE_SETTINGS_FLAG = "sceneSettings";
 
 export const SCENE_SETTING_KEYS = Object.freeze({
   PARALLAX: SETTINGS.PARALLAX,
+  PARALLAX_HEIGHT_CONTRAST: SETTINGS.PARALLAX_HEIGHT_CONTRAST,
   PARALLAX_MODE: SETTINGS.PARALLAX_MODE,
   PERSPECTIVE_POINT: SETTINGS.PERSPECTIVE_POINT,
   PERSPECTIVE_EDGE_POINT: "perspectiveEdgePoint",
@@ -50,6 +52,14 @@ export const PARALLAX_STRENGTHS = Object.freeze({
   medium: 0.085,
   strong: 0.15,
   extreme: 0.28
+});
+
+export const PARALLAX_HEIGHT_CONTRASTS = Object.freeze({
+  normal: 1,
+  noticeable: 1.35,
+  strong: 1.8,
+  dramatic: 2.5,
+  extreme: 4
 });
 
 export const PARALLAX_LIFT_LIMITS = Object.freeze({
@@ -146,6 +156,7 @@ export const DEPTH_SCALE_REFERENCE = Object.freeze({
 
 export const ELEVATION_DEFAULT_SETTINGS = Object.freeze({
   [SCENE_SETTING_KEYS.PARALLAX]: "medium",
+  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "normal",
   [SCENE_SETTING_KEYS.PARALLAX_MODE]: PARALLAX_MODES.ANCHORED_CARD,
   [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: PERSPECTIVE_POINTS.REGION_CENTER,
   [SCENE_SETTING_KEYS.BLEND_MODE]: BLEND_MODES.WIDE,
@@ -208,6 +219,7 @@ const MERGE_KNOWN_SCENE_SETTING_OPTIONS = Object.freeze({
 export function defaultSceneElevationSettings(scene = canvas?.scene) {
   return {
     [SCENE_SETTING_KEYS.PARALLAX]: _worldSetting(SETTINGS.PARALLAX, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PARALLAX]),
+    [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: _worldSetting(SETTINGS.PARALLAX_HEIGHT_CONTRAST, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]),
     [SCENE_SETTING_KEYS.PARALLAX_MODE]: _worldSetting(SETTINGS.PARALLAX_MODE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PARALLAX_MODE]),
     [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: _worldSetting(SETTINGS.PERSPECTIVE_POINT, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PERSPECTIVE_POINT]),
     [SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT]: _defaultPerspectiveEdgePoint(scene),
@@ -244,6 +256,23 @@ export function getSceneElevationSettings(scene = canvas?.scene) {
 
 export function getSceneElevationSetting(key, scene = canvas?.scene) {
   return getSceneElevationSettings(scene)[key];
+}
+
+export function parallaxHeightContrastValue(setting) {
+  if (typeof setting === "number") return Math.clamp(Number.isFinite(setting) ? setting : 1, 1, 4);
+  const numeric = Number(setting);
+  if (String(setting ?? "").trim() && Number.isFinite(numeric)) return Math.clamp(numeric, 1, 4);
+  const value = PARALLAX_HEIGHT_CONTRASTS[String(setting ?? "normal")];
+  return value ?? PARALLAX_HEIGHT_CONTRASTS.normal;
+}
+
+export function parallaxHeightContrastKey(setting) {
+  const key = String(setting ?? "normal");
+  if (PARALLAX_HEIGHT_CONTRASTS[key] !== undefined) return key;
+  const value = parallaxHeightContrastValue(setting);
+  return Object.entries(PARALLAX_HEIGHT_CONTRASTS).reduce((best, [candidate, candidateValue]) => {
+    return Math.abs(candidateValue - value) < Math.abs(PARALLAX_HEIGHT_CONTRASTS[best] - value) ? candidate : best;
+  }, "normal");
 }
 
 export async function setSceneElevationSettings(scene, settings) {
