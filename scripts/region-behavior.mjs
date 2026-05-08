@@ -9,6 +9,7 @@ const PRESET_CHOICES = Object.freeze({
   [ELEVATION_PRESETS.DEFAULT]: "SCENE_ELEVATION.Settings.PresetDefault",
   [ELEVATION_PRESETS.CAMERA_LIFT_DRIFT_SHADOW]: "SCENE_ELEVATION.Settings.PresetCameraLiftDriftShadow",
   [ELEVATION_PRESETS.MULTI_LAYER_DRIFT_SHADOW]: "SCENE_ELEVATION.Settings.PresetMultiLayerDriftShadow",
+  [ELEVATION_PRESETS.MULTI_LAYER_DRIFT_SHADOWLESS]: "SCENE_ELEVATION.Settings.PresetMultiLayerDriftShadowless",
   [ELEVATION_PRESETS.MOUSE_DRIFT_SHADOW]: "SCENE_ELEVATION.Settings.PresetMouseDriftShadow",
   [ELEVATION_PRESETS.RESPONSIVE_SHADOW_ONLY]: "SCENE_ELEVATION.Settings.PresetResponsiveShadowOnly",
   [ELEVATION_PRESETS.CAMERA_LIFT_TEXTURE_MELD]: "SCENE_ELEVATION.Settings.PresetCameraLiftTextureMeld"
@@ -238,6 +239,13 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         choices: PARALLAX_STRENGTH_CHOICES,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxStrengthOverride.label"
       }),
+      parallaxHeightContrastOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: PARALLAX_HEIGHT_CONTRAST_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxHeightContrastOverride.label"
+      }),
       parallaxModeOverride: new fields.StringField({
         required: true,
         blank: true,
@@ -251,6 +259,13 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         initial: USE_SCENE_SETTING,
         choices: PERSPECTIVE_POINT_CHOICES,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.perspectivePointOverride.label"
+      }),
+      blendModeOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: BLEND_MODE_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.blendModeOverride.label"
       }),
       overlayScaleOverride: new fields.StringField({
         required: true,
@@ -281,20 +296,6 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         step: SHADOW_STRENGTH_LIMITS.STEP,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowStrength.label",
         hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowStrength.hint"
-      }),
-      parallaxHeightContrastOverride: new fields.StringField({
-        required: true,
-        blank: true,
-        initial: USE_SCENE_SETTING,
-        choices: PARALLAX_HEIGHT_CONTRAST_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxHeightContrastOverride.label"
-      }),
-      blendModeOverride: new fields.StringField({
-        required: true,
-        blank: true,
-        initial: USE_SCENE_SETTING,
-        choices: BLEND_MODE_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.blendModeOverride.label"
       }),
       depthScaleOverride: new fields.StringField({
         required: true,

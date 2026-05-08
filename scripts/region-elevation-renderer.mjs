@@ -15,10 +15,10 @@ function _setting(key) {
 const MIN_ELEVATION_DELTA = 0.05;
 const CLIFF_WARP_ELEVATION_MATCH_TOLERANCE = 0.1;
 const OVERLAY_ELEVATION_REFERENCE = 6;
-const OVERLAY_LIFT_BASE = 0.045;
-const OVERLAY_LIFT_PARALLAX = 0.12;
-const OVERLAY_LIFT_MAX_GRID = 0.35;
-const OVERLAY_LIFT_MAX_PIXELS = 28;
+const OVERLAY_LIFT_BASE = 0.225;
+const OVERLAY_LIFT_PARALLAX = 0.6;
+const OVERLAY_LIFT_MAX_GRID = 1.75;
+const OVERLAY_LIFT_MAX_PIXELS = 140;
 const SMOOTH_PARALLAX_EPSILON = 0.35;
 const ANCHORED_CAMERA_MULTIPLIER = 0.75;
 const VELOCITY_CAMERA_MULTIPLIER = 0.9;
@@ -225,8 +225,8 @@ export function getRegionElevationStateAtPoint(point, scene = canvas?.scene, ent
   for (const candidate of candidates) {
     if (options.requireTokenElevation && !candidate.modifyTokenElevation) continue;
     if (options.requireTokenScaling && !candidate.modifyTokenScaling) continue;
-    if (!_regionContains(candidate.region, point)) continue;
     const candidateElevation = _entryElevationAtPoint(candidate, point);
+    if (!_regionContains(candidate.region, point, candidateElevation)) continue;
     if (options.preferHighest) {
       if (!found || candidateElevation > elevation) {
         elevation = candidateElevation;
@@ -331,13 +331,20 @@ function _entryElevationAtPoint(entry, point) {
   return base + (far - base) * t;
 }
 
-function _regionContains(region, point) {
+export function regionContainsPoint(region, point, elevation = undefined) {
+  return _regionContains(region, point, elevation);
+}
+
+function _regionContains(region, point, elevation = undefined) {
   try {
     if (region.testPoint?.({ x: point.x, y: point.y })) return true;
   } catch (err) {}
-  try {
-    if (region.testPoint?.({ x: point.x, y: point.y, elevation: point.elevation ?? 0 })) return true;
-  } catch (err) {}
+  const elevations = new Set([point.elevation, elevation, 0].filter(value => Number.isFinite(Number(value))).map(Number));
+  for (const testElevation of elevations) {
+    try {
+      if (region.testPoint?.({ x: point.x, y: point.y, elevation: testElevation })) return true;
+    } catch (err) {}
+  }
   return _regionPaths(region).some(path => _pointInPolygon(point, path));
 }
 
@@ -871,7 +878,7 @@ export class RegionElevationRenderer {
       0,
       liftCeiling * Math.max(1, liftMultiplier)
     );
-    const shadowLift = liftMultiplier > 0 ? lift / liftMultiplier : lift;
+    const shadowLift = (liftMultiplier > 0 ? lift / liftMultiplier : lift) / 5;
     const parallaxLift = lift * parallaxHeightFactor;
     const heightAdjustedParallax = parallax * parallaxHeightFactor;
     const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * parallaxLift * sign, y: baseParallaxDirection.y * parallaxLift * sign } : { x: 0, y: 0 };
