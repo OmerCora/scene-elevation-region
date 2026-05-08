@@ -133,7 +133,6 @@ Hooks.once("init", () => {
       [PARALLAX_MODES.HORIZONTAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeHorizontalScroll",
       [PARALLAX_MODES.VERTICAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeVerticalScroll",
       [PARALLAX_MODES.MOUSE]: "SCENE_ELEVATION.Settings.ParallaxModeMouse",
-      [PARALLAX_MODES.FADE_ZOOM]: "SCENE_ELEVATION.Settings.ParallaxModeFadeZoom",
       [PARALLAX_MODES.SHADOW]: "SCENE_ELEVATION.Settings.ParallaxModeShadow"
     },
     onChange: () => {
@@ -303,7 +302,7 @@ Hooks.once("init", () => {
   Object.assign(CONFIG.RegionBehavior.dataModels, {
     [REGION_BEHAVIOR_TYPE]: ElevationRegionBehavior
   });
-  CONFIG.RegionBehavior.typeIcons[REGION_BEHAVIOR_TYPE] = "fa-solid fa-mountain";
+  CONFIG.RegionBehavior.typeIcons[REGION_BEHAVIOR_TYPE] = "fa-solid fa-arrows-up-to-line";
 
   const invalidate = () => {
     if (!canvas?.scene) return;

@@ -1006,7 +1006,7 @@ export function registerElevationControls() {
     controls.elevation = {
       name: "elevation",
       title: "SCENE_ELEVATION.Control.Group",
-      icon: "fa-solid fa-mountain",
+      icon: "fa-solid fa-arrows-up-to-line",
       layer: ElevationAuthoringLayer.LAYER_NAME,
       visible: game.user.isGM,
       activeTool: TOOL_SELECT,

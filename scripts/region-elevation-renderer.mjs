@@ -28,9 +28,6 @@ const ANCHORED_VELOCITY_DRIFT_WEIGHT = 0.55;
 const LAYERED_CAMERA_MULTIPLIER = 1.12;
 const AXIS_SCROLL_CAMERA_MULTIPLIER = 1.15;
 const MOUSE_PARALLAX_MULTIPLIER = 1.45;
-const FADE_ZOOM_SCALE_BOOST = 0.18;
-const FADE_ZOOM_ALPHA_BASE = 0.78;
-const FADE_ZOOM_ALPHA_BOOST = 0.28;
 const CARD_TRANSITION_SHIFT_RATIO = 0.28;
 const TRANSITION_TEXTURE_SHIFT_RATIO = 0.55;
 const TRANSITION_WIDTH_MIN = 2;
@@ -879,7 +876,7 @@ export class RegionElevationRenderer {
     const heightAdjustedParallax = parallax * parallaxHeightFactor;
     const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * parallaxLift * sign, y: baseParallaxDirection.y * parallaxLift * sign } : { x: 0, y: 0 };
     const parallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, parallaxLift, sign, heightAdjustedParallax) : { x: 0, y: 0 };
-    const modeEffects = this._parallaxVisualEffectsForMode(visual, geo, parallaxMode, parallaxVector, parallaxLift, sign, heightAdjustedParallax, normalized);
+    const modeEffects = this._parallaxVisualEffectsForMode(visual, geo, parallaxMode, parallaxVector, parallaxLift, sign, heightAdjustedParallax, normalized, perspectivePoint);
     overlayScale *= modeEffects.overlayScaleMultiplier ?? 1;
     const overlayScaleX = overlayScale * (modeEffects.overlayScaleXMultiplier ?? 1);
     const overlayScaleY = overlayScale * (modeEffects.overlayScaleYMultiplier ?? 1);
@@ -1001,6 +998,7 @@ export class RegionElevationRenderer {
       slopeMaxProjection: entry.slopeMaxProjection,
       slopeMaxAbsElevation: Math.max(entry.maxAbsElevation ?? rawAbsElevation, MIN_ELEVATION_DELTA),
       center: bounds.center,
+      transformCenter: modeEffects.transformCenter ?? bounds.center,
       projectionCenter: useProjectionPerspective ? perspectivePoint : bounds.center,
       overlayScale,
       overlayScaleX,
@@ -1063,7 +1061,6 @@ export class RegionElevationRenderer {
       case PARALLAX_MODES.HORIZONTAL_SCROLL:
       case PARALLAX_MODES.VERTICAL_SCROLL:
       case PARALLAX_MODES.MOUSE:
-      case PARALLAX_MODES.FADE_ZOOM:
         return parallaxVector;
       case PARALLAX_MODES.SHADOW:
       default:
@@ -1080,7 +1077,6 @@ export class RegionElevationRenderer {
       case PARALLAX_MODES.HORIZONTAL_SCROLL:
       case PARALLAX_MODES.VERTICAL_SCROLL:
       case PARALLAX_MODES.MOUSE:
-      case PARALLAX_MODES.FADE_ZOOM:
         return { x: parallaxVector.x * CARD_TRANSITION_SHIFT_RATIO, y: parallaxVector.y * CARD_TRANSITION_SHIFT_RATIO };
       case PARALLAX_MODES.SHADOW:
       default:
@@ -1104,8 +1100,6 @@ export class RegionElevationRenderer {
         return this._axisScrollParallaxVector(visual, lift, sign, parallax, "y");
       case PARALLAX_MODES.MOUSE:
         return this._mouseParallaxVector(visual, lift, sign, parallax);
-      case PARALLAX_MODES.FADE_ZOOM:
-        return this._anchoredParallaxVectorWithMultiplier(visual, lift, sign, parallax, ANCHORED_CAMERA_MULTIPLIER * 0.92, "fadeZoomAnchorFocus");
       default:
         return baseVector;
     }
@@ -1149,15 +1143,10 @@ export class RegionElevationRenderer {
     }, lift);
   }
 
-  _parallaxVisualEffectsForMode(visual, geo, parallaxMode, parallaxVector, lift, sign, parallax, normalized) {
+  _parallaxVisualEffectsForMode(visual, geo, parallaxMode, parallaxVector, lift, sign, parallax, normalized, perspectivePoint) {
     const length = Math.hypot(parallaxVector.x, parallaxVector.y);
     const intensity = Math.clamp(length / Math.max(1, lift), 0, 1);
     switch (parallaxMode) {
-      case PARALLAX_MODES.FADE_ZOOM:
-        return {
-          overlayScaleMultiplier: 1 + (normalized * 0.35 + intensity * 0.65) * FADE_ZOOM_SCALE_BOOST * sign,
-          overlayAlphaMultiplier: Math.clamp(FADE_ZOOM_ALPHA_BASE + intensity * FADE_ZOOM_ALPHA_BOOST, 0.45, 1)
-        };
       default:
         return {};
     }
@@ -1242,10 +1231,11 @@ export class RegionElevationRenderer {
   }
 
   _applyRegionTransform(displayObject, params, { includeOverlayOffset = true } = {}) {
-    displayObject.pivot.set(params.center.x, params.center.y);
+    const center = params.transformCenter ?? params.center;
+    displayObject.pivot.set(center.x, center.y);
     displayObject.position.set(
-      params.center.x + (includeOverlayOffset ? params.overlayOffset.x : 0),
-      params.center.y + (includeOverlayOffset ? params.overlayOffset.y : 0)
+      center.x + (includeOverlayOffset ? params.overlayOffset.x : 0),
+      center.y + (includeOverlayOffset ? params.overlayOffset.y : 0)
     );
     displayObject.scale.set(params.overlayScaleX ?? params.overlayScale, params.overlayScaleY ?? params.overlayScale);
     displayObject.rotation = params.overlayRotation ?? 0;
