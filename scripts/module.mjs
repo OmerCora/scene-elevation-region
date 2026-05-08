@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, PARALLAX_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, REGION_BEHAVIOR_TYPE, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, REGION_BEHAVIOR_TYPE, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -8,7 +8,6 @@ import {
   getActiveElevationRegions
 } from "./region-elevation-renderer.mjs";
 
-const TOKEN_SCALE_FALLBACK_STRENGTH = 0.055;
 const TOKEN_ELEVATION_MIN_MOVEMENT_DELAY_MS = 250;
 const TOKEN_ELEVATION_SETTLE_TIMEOUT_MS = 900;
 const TOKEN_PARALLAX_UI_KEYS = Object.freeze([
@@ -234,6 +233,16 @@ Hooks.once("init", () => {
       _refreshAllTokenScales();
     }
   });
+  game.settings.register(MODULE_ID, SETTINGS.ELEVATION_SCALE, {
+    name: "SCENE_ELEVATION.Settings.ElevationScale",
+    hint: "SCENE_ELEVATION.Settings.ElevationScaleHint",
+    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.ELEVATION_SCALE],
+    range: { min: 1, max: 5, step: 0.25 },
+    onChange: () => {
+      RegionElevationRenderer.instance.update();
+      _refreshAllTokenScales();
+    }
+  });
   game.settings.register(MODULE_ID, SETTINGS.SUNRISE_HOUR, {
     name: "SCENE_ELEVATION.Settings.SunriseHour",
     hint: "SCENE_ELEVATION.Settings.SunriseHourHint",
@@ -355,6 +364,30 @@ Hooks.on("updateScene", (scene, change) => {
   _refreshAllTokenScales();
 });
 
+Hooks.on("renderRegionConfig", _insertRegionBehaviorDivider);
+Hooks.on("renderRegionBehaviorConfig", _insertRegionBehaviorDivider);
+
+function _insertRegionBehaviorDivider(app, html) {
+  const root = _renderedHtmlElement(html) ?? app?.element;
+  if (!root?.querySelectorAll) return;
+  const fields = root.querySelectorAll('[name="system.slopeDirection"], [name$=".slopeDirection"]');
+  for (const field of fields) {
+    const formGroup = field.closest?.(".form-group") ?? field.parentElement;
+    if (!formGroup || formGroup.nextElementSibling?.classList?.contains(`${MODULE_ID}-region-settings-divider`)) continue;
+    const divider = document.createElement("div");
+    divider.className = `${MODULE_ID}-region-settings-divider`;
+    divider.setAttribute("aria-hidden", "true");
+    formGroup.after(divider);
+  }
+  app?.setPosition?.({ height: "auto" });
+}
+
+function _renderedHtmlElement(html) {
+  if (html instanceof HTMLElement) return html;
+  if (html?.[0] instanceof HTMLElement) return html[0];
+  return null;
+}
+
 /* -------------------------------------------- */
 /*  Token elevation scaling                      */
 /* -------------------------------------------- */
@@ -363,17 +396,42 @@ function _tokenScaleFactor(token) {
   if (!game.modules.get(MODULE_ID)?.active) return 1;
   if (!getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED)) return 1;
   if (!canvas?.scene || !token?.document) return 1;
-  const state = _tokenElevationState(token.document, { requireTokenScaling: true });
+  const entries = getActiveElevationRegions(canvas.scene);
+  const state = _tokenElevationState(token.document, { requireTokenScaling: true }, {}, entries);
   if (!state.found) return 1;
-  const strengthKey = state.entry?.parallaxStrengthOverride || getSceneElevationSetting(SCENE_SETTING_KEYS.PARALLAX) || "off";
-  const parallax = PARALLAX_STRENGTHS[strengthKey] ?? PARALLAX_STRENGTHS.off;
-  const max = getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? 1.5;
-  const tokenScaleStrength = parallax > 0 ? parallax * 0.65 : TOKEN_SCALE_FALLBACK_STRENGTH;
-  const factor = 1 + state.elevation * tokenScaleStrength;
+  const maxSetting = Number(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? 1.5);
+  const max = Math.max(1, Number.isFinite(maxSetting) ? maxSetting : 1.5);
+  const normalized = _normalizedTokenScaleElevation(state.elevation, _tokenScalingElevationRange(entries));
+  const factor = normalized >= 0
+    ? 1 + normalized * (max - 1)
+    : 1 + normalized * (1 - (1 / max));
   return Math.clamp(factor, 1 / max, max);
 }
 
-function _tokenElevationState(tokenDocument, options = {}, position = {}) {
+function _normalizedTokenScaleElevation(elevation, range) {
+  const value = Number(elevation ?? 0);
+  if (!Number.isFinite(value) || Math.abs(value) <= 0.001) return 0;
+  if (value > 0) {
+    const highest = Math.max(0, Number(range?.highest ?? 0));
+    return highest > 0 ? Math.clamp(value / highest, 0, 1) : 0;
+  }
+  const lowest = Math.min(0, Number(range?.lowest ?? 0));
+  return lowest < 0 ? -Math.clamp(Math.abs(value) / Math.abs(lowest), 0, 1) : 0;
+}
+
+function _tokenScalingElevationRange(sceneOrEntries = canvas?.scene) {
+  const entries = (Array.isArray(sceneOrEntries) ? sceneOrEntries : getActiveElevationRegions(sceneOrEntries))
+    .filter(entry => entry.modifyTokenScaling !== false);
+  let lowest = 0;
+  let highest = 0;
+  for (const entry of entries) {
+    lowest = Math.min(lowest, Number(entry.lowestElevation ?? entry.elevation ?? 0));
+    highest = Math.max(highest, Number(entry.highestElevation ?? entry.elevation ?? 0));
+  }
+  return { lowest, highest };
+}
+
+function _tokenElevationState(tokenDocument, options = {}, position = {}, entries = null) {
   const gridSize = canvas.grid.size ?? 100;
   const x = Number(position.x ?? tokenDocument.x ?? 0);
   const y = Number(position.y ?? tokenDocument.y ?? 0);
@@ -381,7 +439,7 @@ function _tokenElevationState(tokenDocument, options = {}, position = {}) {
   const height = Number(position.height ?? tokenDocument.height ?? 1);
   const cx = x + (width * gridSize) / 2;
   const cy = y + (height * gridSize) / 2;
-  return getRegionElevationStateAtPoint({ x: cx, y: cy }, canvas.scene, null, options);
+  return getRegionElevationStateAtPoint({ x: cx, y: cy }, canvas.scene, entries, options);
 }
 
 function _highestTokenElevationState(tokenDocument, position = {}) {
@@ -430,10 +488,55 @@ function _applyTokenScale(token) {
         );
       }
     }
+    _applyNegativeRegionTokenVisibilityFloor(token);
     _applyTokenParallaxOffset(token);
   } catch (err) {
     // Silent — drawToken can fire before our module/canvas is fully initialised.
   }
+}
+
+function _applyNegativeRegionTokenVisibilityFloor(token) {
+  const mesh = token?.mesh;
+  if (!mesh || !token?.document || !canvas?.scene) return;
+  const state = _tokenElevationState(token.document);
+  const tokenElevation = Number(token.document.elevation ?? 0);
+  const regionElevation = Number(state.elevation ?? 0);
+  const standingOnNegativeRegion = state.found
+    && regionElevation < 0
+    && Number.isFinite(tokenElevation)
+    && tokenElevation >= regionElevation - 0.1;
+  if (!standingOnNegativeRegion) {
+    _clearNegativeRegionTokenVisibilityFloor(token);
+    return;
+  }
+  const documentElevation = Number(token.document.elevation ?? mesh._seVisibilityFloorElevation ?? 0);
+  const visibleElevation = Math.max(0, Number.isFinite(documentElevation) ? documentElevation : 0);
+  if (mesh._seVisibilityFloorElevation === undefined) {
+    mesh._seVisibilityFloorHadElevation = "elevation" in mesh;
+    mesh._seVisibilityFloorElevation = mesh.elevation;
+    mesh._seVisibilityFloorZIndex = mesh.zIndex;
+  }
+  mesh.elevation = visibleElevation;
+  const zIndex = Number(mesh.zIndex ?? 0);
+  mesh.zIndex = Math.max(0, Number.isFinite(zIndex) ? zIndex : 0);
+  mesh.parent?.sortableChildren && (mesh.parent.sortDirty = true);
+  if (canvas.primary) canvas.primary.sortDirty = true;
+}
+
+function _clearNegativeRegionTokenVisibilityFloor(token) {
+  const mesh = token?.mesh;
+  if (!mesh || mesh._seVisibilityFloorElevation === undefined) return;
+  if (mesh._seVisibilityFloorHadElevation) {
+    const documentElevation = Number(token?.document?.elevation ?? mesh._seVisibilityFloorElevation ?? 0);
+    mesh.elevation = Number.isFinite(documentElevation) ? documentElevation : 0;
+  }
+  else delete mesh.elevation;
+  if (mesh._seVisibilityFloorZIndex !== undefined) mesh.zIndex = mesh._seVisibilityFloorZIndex;
+  delete mesh._seVisibilityFloorZIndex;
+  delete mesh._seVisibilityFloorHadElevation;
+  delete mesh._seVisibilityFloorElevation;
+  mesh.parent?.sortableChildren && (mesh.parent.sortDirty = true);
+  if (canvas?.primary) canvas.primary.sortDirty = true;
 }
 
 function _applyTokenParallaxOffset(token) {

@@ -11,6 +11,7 @@ import {
   SHADOW_LENGTHS,
   TOKEN_ELEVATION_MODES,
   DEPTH_SCALES,
+  elevationScaleValue,
   elevationDefaultSettings,
   getSceneElevationSettings,
   parallaxHeightContrastKey,
@@ -172,6 +173,7 @@ function _settingsForm(settings) {
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_MODE, "SCENE_ELEVATION.Settings.ShadowMode", settings)}
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_LENGTH, "SCENE_ELEVATION.Settings.ShadowLength", settings)}
     ${_selectField(SCENE_SETTING_KEYS.DEPTH_SCALE, "SCENE_ELEVATION.Settings.DepthScale", settings)}
+    ${_numberField(SCENE_SETTING_KEYS.ELEVATION_SCALE, "SCENE_ELEVATION.Settings.ElevationScale", "SCENE_ELEVATION.Settings.ElevationScaleHint", settings, { min: 1, max: 5, step: 0.25 })}
     ${_numberField(SCENE_SETTING_KEYS.SUNRISE_HOUR, "SCENE_ELEVATION.Settings.SunriseHour", "SCENE_ELEVATION.Settings.SunriseHourHint", settings, { min: 0, max: 23.75, step: 0.25 })}
     ${_numberField(SCENE_SETTING_KEYS.SUNSET_HOUR, "SCENE_ELEVATION.Settings.SunsetHour", "SCENE_ELEVATION.Settings.SunsetHourHint", settings, { min: 0.25, max: 24, step: 0.25 })}
     ${_selectField(SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, "SCENE_ELEVATION.Settings.TokenElevationMode", settings)}
@@ -234,6 +236,7 @@ function _formSettings(data, current) {
     [SCENE_SETTING_KEYS.OVERLAY_SCALE]: _choice(data, SCENE_SETTING_KEYS.OVERLAY_SCALE, Object.keys(OVERLAY_SCALE_STRENGTHS), current),
     [SCENE_SETTING_KEYS.SHADOW_MODE]: _choice(data, SCENE_SETTING_KEYS.SHADOW_MODE, Object.values(SHADOW_MODES), current),
     [SCENE_SETTING_KEYS.SHADOW_LENGTH]: _shadowLengthChoice(data, current),
+    [SCENE_SETTING_KEYS.ELEVATION_SCALE]: elevationScaleValue(data.get(SCENE_SETTING_KEYS.ELEVATION_SCALE) ?? current[SCENE_SETTING_KEYS.ELEVATION_SCALE]),
     [SCENE_SETTING_KEYS.SUNRISE_HOUR]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SUNRISE_HOUR) ?? current[SCENE_SETTING_KEYS.SUNRISE_HOUR] ?? 6), 0, 23.75),
     [SCENE_SETTING_KEYS.SUNSET_HOUR]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SUNSET_HOUR) ?? current[SCENE_SETTING_KEYS.SUNSET_HOUR] ?? 18), 0.25, 24),
     [SCENE_SETTING_KEYS.SUN_EDGE_POINT]: current[SCENE_SETTING_KEYS.SUN_EDGE_POINT],

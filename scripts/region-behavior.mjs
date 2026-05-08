@@ -186,6 +186,48 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeDirection.label",
         hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeDirection.hint"
       }),
+      parallaxStrengthOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: PARALLAX_STRENGTH_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxStrengthOverride.label"
+      }),
+      parallaxModeOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: PARALLAX_MODE_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxModeOverride.label"
+      }),
+      perspectivePointOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: PERSPECTIVE_POINT_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.perspectivePointOverride.label"
+      }),
+      overlayScaleOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: OVERLAY_SCALE_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.overlayScaleOverride.label"
+      }),
+      shadowModeOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: SHADOW_MODE_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowModeOverride.label"
+      }),
+      shadowLengthOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: SHADOW_LENGTH_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowLengthOverride.label"
+      }),
       shadowStrength: new fields.NumberField({
         required: true,
         initial: SHADOW_STRENGTH_LIMITS.DEFAULT,
@@ -195,77 +237,26 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowStrength.label",
         hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowStrength.hint"
       }),
-      parallaxStrengthOverride: new fields.StringField({
-        required: true,
-        blank: true,
-        initial: USE_SCENE_SETTING,
-        choices: PARALLAX_STRENGTH_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxStrengthOverride.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxStrengthOverride.hint"
-      }),
-      parallaxModeOverride: new fields.StringField({
-        required: true,
-        blank: true,
-        initial: USE_SCENE_SETTING,
-        choices: PARALLAX_MODE_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxModeOverride.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxModeOverride.hint"
-      }),
-      perspectivePointOverride: new fields.StringField({
-        required: true,
-        blank: true,
-        initial: USE_SCENE_SETTING,
-        choices: PERSPECTIVE_POINT_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.perspectivePointOverride.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.perspectivePointOverride.hint"
-      }),
-      overlayScaleOverride: new fields.StringField({
-        required: true,
-        blank: true,
-        initial: USE_SCENE_SETTING,
-        choices: OVERLAY_SCALE_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.overlayScaleOverride.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.overlayScaleOverride.hint"
-      }),
-      shadowModeOverride: new fields.StringField({
-        required: true,
-        blank: true,
-        initial: USE_SCENE_SETTING,
-        choices: SHADOW_MODE_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowModeOverride.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowModeOverride.hint"
-      }),
-      shadowLengthOverride: new fields.StringField({
-        required: true,
-        blank: true,
-        initial: USE_SCENE_SETTING,
-        choices: SHADOW_LENGTH_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowLengthOverride.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowLengthOverride.hint"
-      }),
       parallaxHeightContrastOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
         choices: PARALLAX_HEIGHT_CONTRAST_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxHeightContrastOverride.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxHeightContrastOverride.hint"
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxHeightContrastOverride.label"
       }),
       blendModeOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
         choices: BLEND_MODE_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.blendModeOverride.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.blendModeOverride.hint"
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.blendModeOverride.label"
       }),
       depthScaleOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
         choices: DEPTH_SCALE_CHOICES,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.depthScaleOverride.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.depthScaleOverride.hint"
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.depthScaleOverride.label"
       }),
       modifyTokenElevation: new fields.BooleanField({
         required: true,

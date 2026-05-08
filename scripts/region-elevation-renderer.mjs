@@ -1,4 +1,4 @@
-import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, elevationScaleValue, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey } from "./config.mjs";
 
 /**
  * Per-draw settings cache. `getSceneElevationSettings()` rebuilds via two deep clones
@@ -764,11 +764,13 @@ export class RegionElevationRenderer {
     const gridSize = geo.gridSize;
     const { entry, bounds } = visual;
     const reference = DEPTH_SCALE_REFERENCE[depthScale] ?? DEPTH_SCALE_REFERENCE[DEPTH_SCALES.COMPRESSED];
+    const elevationScale = elevationScaleValue(_setting(SCENE_SETTING_KEYS.ELEVATION_SCALE));
     const visualElevation = visual.visualElevation ?? entry.elevation;
-    const absElevation = entry.slope ? (entry.maxAbsElevation ?? Math.abs(visualElevation)) : Math.abs(visualElevation);
+    const rawAbsElevation = entry.slope ? (entry.maxAbsElevation ?? Math.abs(visualElevation)) : Math.abs(visualElevation);
+    const absElevation = rawAbsElevation / elevationScale;
     const magnitude = Math.min(absElevation, reference);
     const normalized = Math.clamp(_depthNormalize(magnitude, reference, depthScale), 0.1, 1);
-    const absDelta = Math.abs(visual.elevationDelta ?? entry.elevation);
+    const absDelta = Math.abs(visual.elevationDelta ?? entry.elevation) / elevationScale;
     const deltaMagnitude = Math.min(absDelta, reference);
     const transitionNormalized = Math.clamp(_depthNormalize(deltaMagnitude, reference, depthScale), 0.1, 1);
     const isHole = entry.slope ? entry.highestElevation < 0 : visualElevation < 0;
@@ -923,7 +925,7 @@ export class RegionElevationRenderer {
       slopeVector: entry.slopeVector,
       slopeMinProjection: entry.slopeMinProjection,
       slopeMaxProjection: entry.slopeMaxProjection,
-      slopeMaxAbsElevation: Math.max(entry.maxAbsElevation ?? absElevation, MIN_ELEVATION_DELTA),
+      slopeMaxAbsElevation: Math.max(entry.maxAbsElevation ?? rawAbsElevation, MIN_ELEVATION_DELTA),
       center: bounds.center,
       projectionCenter: useProjectionPerspective ? perspectivePoint : bounds.center,
       overlayScale,

@@ -89,6 +89,8 @@
       "DepthScaleCompressed": "Compressed (sqrt)",
       "DepthScaleLinear": "Linear (proportional)",
       "DepthScaleDramatic": "Dramatic (super-linear)",
+      "ElevationScale": "Elevation units per grid",
+      "ElevationScaleHint": "How many elevation units equal one grid distance for visual height. 1 means 1 elevation equals 1 grid; 5 means 5 elevation equals 1 grid.",
       "OverlayScale": "Overlay Scale",
       "OverlayScaleHint": "Scale elevated overlays as positive elevation increases, making higher layers feel closer to the viewport.",
       "OverlayScaleShrinkMedium": "Shrink medium",
@@ -159,39 +161,39 @@
           "hint": "Multiplier for this region's short contact shadow and soft drop shadow. Set to 0 to hide shadows from this region; high values are allowed for testing stronger casts."
         },
         "parallaxStrengthOverride": {
-          "label": "Parallax strength override",
+          "label": "Parallax strength",
           "hint": "Optional parallax strength for this region only. Use scene setting keeps the scene-level parallax strength."
         },
         "parallaxModeOverride": {
-          "label": "Parallax type override",
+          "label": "Parallax type",
           "hint": "Optional parallax type for this region only. Use scene setting keeps the scene-level parallax type."
         },
         "perspectivePointOverride": {
-          "label": "Perspective point override",
+          "label": "Perspective point",
           "hint": "Optional perspective anchor for this region only. Use scene setting keeps the scene-level perspective point."
         },
         "overlayScaleOverride": {
-          "label": "Overlay scale override",
+          "label": "Overlay scale",
           "hint": "Optional overlay scale strength for this region only. Use scene setting keeps the scene-level overlay scale."
         },
         "shadowModeOverride": {
-          "label": "Shadow type override",
+          "label": "Shadow type",
           "hint": "Optional shadow type for this region only. Use scene setting keeps the scene-level shadow type."
         },
         "shadowLengthOverride": {
-          "label": "Shadow length override",
+          "label": "Shadow length",
           "hint": "Optional shadow length for this region only. Use scene setting keeps the scene-level shadow length."
         },
         "parallaxHeightContrastOverride": {
-          "label": "Parallax height contrast override",
+          "label": "Parallax height contrast",
           "hint": "Optional parallax height contrast for this region only. Use scene setting keeps the scene-level parallax height contrast."
         },
         "blendModeOverride": {
-          "label": "Transition style override",
+          "label": "Transition style",
           "hint": "Optional elevation transition style for this region only. Use scene setting keeps the scene-level transition style."
         },
         "depthScaleOverride": {
-          "label": "Depth scale override",
+          "label": "Depth scale",
           "hint": "Optional depth scale for this region only. Use scene setting keeps the scene-level depth scale."
         },
         "modifyTokenElevation": {
