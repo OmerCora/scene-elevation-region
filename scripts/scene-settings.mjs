@@ -117,6 +117,11 @@ const SELECT_GROUPS = Object.freeze({
 
 export async function openSceneElevationSettingsDialog(scene = canvas?.scene) {
   if (!scene) return;
+  const existing = foundry.applications.instances.get(`${MODULE_ID}-settings-dialog`);
+  if (existing?.rendered) {
+    await existing.close();
+    return;
+  }
   const dialog = new SceneElevationSettingsDialog(scene);
   await dialog.render({ force: true });
   return dialog;
@@ -125,9 +130,10 @@ export async function openSceneElevationSettingsDialog(scene = canvas?.scene) {
 class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
   constructor(scene) {
     super({
+      id: `${MODULE_ID}-settings-dialog`,
       classes: [MODULE_ID, `${MODULE_ID}-scene-settings-dialog`],
       window: { title: game.i18n.localize("SCENE_ELEVATION.SceneSettings.Title"), resizable: true },
-      position: { width: 460, height: 620 },
+      position: { width: 600, height: 620 },
       content: `<div class="${MODULE_ID}-scene-settings-scroll">${_settingsForm(getSceneElevationSettings(scene))}</div>`,
       buttons: [{ action: "close", label: game.i18n.localize("Close"), icon: "fa-solid fa-check", default: true }]
     });
@@ -183,8 +189,9 @@ class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
 
 function _settingsForm(settings) {
   return `<form class="${MODULE_ID}-scene-settings">
-    <button type="button" data-action="setDefault"><i class="fa-solid fa-rotate-left"></i> ${game.i18n.localize("SCENE_ELEVATION.SceneSettings.SetToDefault")}</button>
+    <button type="button" data-action="setDefault" style="margin-bottom: 4px; width: 100%;"><i class="fa-solid fa-rotate-left"></i> ${game.i18n.localize("SCENE_ELEVATION.SceneSettings.SetToDefault")}</button>
     ${_selectField(SCENE_SETTING_KEYS.PRESET, "SCENE_ELEVATION.Settings.Preset", settings)}
+    <div class="${MODULE_ID}-scene-settings-divider" aria-hidden="true"></div>
     ${_selectField(SCENE_SETTING_KEYS.PARALLAX, "SCENE_ELEVATION.Settings.Parallax", settings)}
     ${_selectField(SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST, "SCENE_ELEVATION.Settings.ParallaxHeightContrast", settings)}
     ${_selectField(SCENE_SETTING_KEYS.PARALLAX_MODE, "SCENE_ELEVATION.Settings.ParallaxMode", settings)}
@@ -195,16 +202,16 @@ function _settingsForm(settings) {
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_LENGTH, "SCENE_ELEVATION.Settings.ShadowLength", settings)}
     ${_selectField(SCENE_SETTING_KEYS.DEPTH_SCALE, "SCENE_ELEVATION.Settings.DepthScale", settings)}
     ${_selectField(SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, "SCENE_ELEVATION.Settings.TokenElevationMode", settings)}
-    <div class="form-group">
+    <div class="form-group" style="margin-bottom: 4px;">
       <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenElevationAnimationMs")}</label>
       <input type="number" name="${SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS}" min="0" max="600" step="10" value="${Number(settings[SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS] ?? 120)}">
       <p class="hint">${game.i18n.localize("SCENE_ELEVATION.Settings.TokenElevationAnimationMsHint")}</p>
     </div>
-    <div class="form-group">
+    <div class="form-group" style="margin-bottom: 4px;">
       <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenScale")}</label>
       <input type="checkbox" name="${SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED}" ${settings[SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED] ? "checked" : ""}>
     </div>
-    <div class="form-group">
+    <div class="form-group" style="margin-bottom: 4px;">
       <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenScaleMax")}</label>
       <input type="number" name="${SCENE_SETTING_KEYS.TOKEN_SCALE_MAX}" min="1" max="3" step="0.05" value="${Number(settings[SCENE_SETTING_KEYS.TOKEN_SCALE_MAX] ?? 1.5)}">
       <p class="hint">${game.i18n.localize("SCENE_ELEVATION.Settings.TokenScaleMaxHint")}</p>
@@ -221,7 +228,9 @@ function _selectField(name, labelKey, settings) {
       ? shadowLengthKey(settings[name])
       : settings[name];
   const options = SELECT_GROUPS[name].map(([value, optionLabel]) => `<option value="${value}" ${value === current ? "selected" : ""}>${game.i18n.localize(optionLabel)}</option>`).join("");
-  return `<div class="form-group">
+  const classes = `form-group${name === SCENE_SETTING_KEYS.PRESET ? ` ${MODULE_ID}-scene-settings-preset` : ""}`;
+  const extraStyle = name === SCENE_SETTING_KEYS.PRESET ? " margin-top: 4px;" : "";
+  return `<div class="${classes}" style="margin-bottom: 4px;${extraStyle}">
     <label>${game.i18n.localize(labelKey)}</label>
     <select name="${name}">${options}</select>
   </div>`;
@@ -229,7 +238,7 @@ function _selectField(name, labelKey, settings) {
 
 function _numberField(name, labelKey, hintKey, settings, { min, max, step }) {
   const value = Number(settings[name] ?? 0);
-  return `<div class="form-group">
+  return `<div class="form-group" style="margin-bottom: 4px;">
     <label>${game.i18n.localize(labelKey)}</label>
     <input type="number" name="${name}" min="${min}" max="${max}" step="${step}" value="${Number.isFinite(value) ? value : 0}">
     <p class="hint">${game.i18n.localize(hintKey)}</p>

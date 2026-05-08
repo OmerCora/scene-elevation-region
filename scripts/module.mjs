@@ -480,12 +480,12 @@ function _highestTokenElevationState(tokenDocument, position = {}) {
   }
 }
 
-function _applyTokenScale(token) {
+function _applyTokenScale(token, { forceScale = false } = {}) {
   if (!token?.mesh) return;
   const uuid = token.document?.uuid ?? token.document?.id;
   try {
     const m = token.mesh;
-    const skipScale = uuid && _tokensWithPendingMovement.has(uuid);
+    const skipScale = !forceScale && uuid && _tokensWithPendingMovement.has(uuid);
     if (!skipScale) {
       // Cache the engine-set base scale once, then drive absolute scale =
       // base * factor. This avoids the previous bug where successive refreshes
@@ -526,11 +526,17 @@ function _applyNegativeRegionTokenVisibilityFloor(token) {
   const state = _tokenElevationState(token.document);
   const tokenElevation = Number(token.document.elevation ?? 0);
   const regionElevation = Number(state.elevation ?? 0);
+  const uuid = token.document?.uuid ?? token.document?.id;
+  const movingFromNegativeIntoVisibleElevation = !!uuid
+    && _tokensWithPendingMovement.has(uuid)
+    && Number.isFinite(tokenElevation)
+    && tokenElevation < -0.001
+    && (!state.found || regionElevation >= -0.001);
   const standingOnNegativeRegion = state.found
     && regionElevation < 0
     && Number.isFinite(tokenElevation)
     && tokenElevation >= regionElevation - 0.1;
-  if (!standingOnNegativeRegion) {
+  if (!standingOnNegativeRegion && !movingFromNegativeIntoVisibleElevation) {
     _clearNegativeRegionTokenVisibilityFloor(token);
     return;
   }
@@ -540,10 +546,16 @@ function _applyNegativeRegionTokenVisibilityFloor(token) {
     mesh._seVisibilityFloorHadElevation = "elevation" in mesh;
     mesh._seVisibilityFloorElevation = mesh.elevation;
     mesh._seVisibilityFloorZIndex = mesh.zIndex;
+    mesh._seVisibilityFloorTokenHadElevation = "elevation" in token;
+    mesh._seVisibilityFloorTokenElevation = token.elevation;
+    mesh._seVisibilityFloorTokenZIndex = token.zIndex;
   }
+  _setWritableObjectProperty(token, "elevation", visibleElevation);
   mesh.elevation = visibleElevation;
   const zIndex = Number(mesh.zIndex ?? 0);
+  _setWritableObjectProperty(token, "zIndex", Math.max(0, Number(token.zIndex ?? 0) || 0));
   mesh.zIndex = Math.max(0, Number.isFinite(zIndex) ? zIndex : 0);
+  _setWritableObjectProperty(token, "sortDirty", true);
   mesh.parent?.sortableChildren && (mesh.parent.sortDirty = true);
   if (canvas.primary) canvas.primary.sortDirty = true;
 }
@@ -556,12 +568,32 @@ function _clearNegativeRegionTokenVisibilityFloor(token) {
     mesh.elevation = Number.isFinite(documentElevation) ? documentElevation : 0;
   }
   else delete mesh.elevation;
+  if (mesh._seVisibilityFloorTokenHadElevation) {
+    const documentElevation = Number(token?.document?.elevation ?? mesh._seVisibilityFloorTokenElevation ?? 0);
+    _setWritableObjectProperty(token, "elevation", Number.isFinite(documentElevation) ? documentElevation : 0);
+  }
+  else if (token && mesh._seVisibilityFloorTokenElevation !== undefined) delete token.elevation;
   if (mesh._seVisibilityFloorZIndex !== undefined) mesh.zIndex = mesh._seVisibilityFloorZIndex;
+  if (mesh._seVisibilityFloorTokenZIndex !== undefined && token) _setWritableObjectProperty(token, "zIndex", mesh._seVisibilityFloorTokenZIndex);
   delete mesh._seVisibilityFloorZIndex;
+  delete mesh._seVisibilityFloorTokenZIndex;
+  delete mesh._seVisibilityFloorTokenHadElevation;
+  delete mesh._seVisibilityFloorTokenElevation;
   delete mesh._seVisibilityFloorHadElevation;
   delete mesh._seVisibilityFloorElevation;
+  _setWritableObjectProperty(token, "sortDirty", true);
   mesh.parent?.sortableChildren && (mesh.parent.sortDirty = true);
   if (canvas?.primary) canvas.primary.sortDirty = true;
+}
+
+function _setWritableObjectProperty(object, key, value) {
+  if (!object || !(key in object)) return false;
+  try {
+    object[key] = value;
+    return true;
+  } catch (err) {
+    return false;
+  }
 }
 
 function _applyTokenParallaxOffset(token) {
@@ -890,15 +922,14 @@ function _queueTokenElevationAfterMovement(tokenDocument, change = {}, options =
   if (pending) cancelAnimationFrame(pending.frame);
   _tokensWithPendingMovement.add(uuid);
   const finalPosition = _tokenMovementPosition(tokenDocument, change);
+  void _promoteNegativeTokenElevationForVisibleMovement(tokenDocument, finalPosition);
 
   // Immediately apply scale for the destination position so there is no
   // jarring snap after the elevation-sync delay.  Scale is computed from
   // tokenDocument.x/y which Foundry has already set to the new position.
   const _immediateToken = tokenDocument.object;
   if (_immediateToken) {
-    _tokensWithPendingMovement.delete(uuid);
-    _applyTokenScale(_immediateToken);
-    _tokensWithPendingMovement.add(uuid);
+    _applyTokenScale(_immediateToken, { forceScale: true });
   }
 
   const started = performance.now();
@@ -924,6 +955,24 @@ function _queueTokenElevationAfterMovement(tokenDocument, change = {}, options =
   };
   const frame = requestAnimationFrame(waitForMovement);
   _pendingTokenElevationUpdates.set(uuid, { frame });
+}
+
+async function _promoteNegativeTokenElevationForVisibleMovement(tokenDocument, position = {}) {
+  const uuid = tokenDocument?.uuid ?? tokenDocument?.id;
+  if (!uuid || _syncingTokenElevation.has(uuid)) return;
+  const current = Number(tokenDocument.elevation ?? 0);
+  if (!Number.isFinite(current) || current >= -0.001) return;
+  const state = _highestTokenElevationState(tokenDocument, position);
+  if (state.skip) return;
+  const target = state.found ? state.elevation : 0;
+  if (!Number.isFinite(target) || target < -0.001) return;
+  _syncingTokenElevation.add(uuid);
+  try {
+    await tokenDocument.update({ elevation: target }, { animation: { duration: 0 } });
+    _applyTokenScale(tokenDocument.object, { forceScale: true });
+  } finally {
+    _syncingTokenElevation.delete(uuid);
+  }
 }
 
 function _markTokenMovementStarting(tokenDocument) {

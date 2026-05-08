@@ -38,19 +38,25 @@
 }
 
 .scene-elevation-region-scene-settings {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
+	display: block;
 	overflow: visible;
 	padding-bottom: 4px;
 }
 
-.scene-elevation-region-scene-settings > .form-group {
-	margin-bottom: 0;
+#scene-elevation-region-settings-dialog .scene-elevation-region-scene-settings .form-group {
+	margin: 0 0 4px 0 !important;
+	padding-top: 0 !important;
 }
 
-.scene-elevation-region-scene-settings > button[data-action="setDefault"] {
-	margin-bottom: 0;
+#scene-elevation-region-settings-dialog .scene-elevation-region-scene-settings > button[data-action="setDefault"] {
+	margin: 0 0 4px 0 !important;
+	width: 100%;
+}
+
+.scene-elevation-region-scene-settings-divider {
+	width: 100%;
+	margin: 16px 0 24px 0;
+	border-top: 1px solid rgba(128, 128, 128, 0.45);
 }
 
 .scene-elevation-region-region-settings-divider {
