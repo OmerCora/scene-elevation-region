@@ -86,7 +86,7 @@
       "BlendModeCliffWarp": "3D cliff warp",
       "DepthScale": "Depth Scale",
       "DepthScaleHint": "How strongly perceived height scales with elevation. Compressed (default) keeps the legacy soft curve. Linear makes elevation 4 feel double elevation 2 and elevation 20 feel ten times elevation 2. Dramatic adds a super-linear boost for towering cliffs.",
-      "DepthScaleCompressed": "Compressed (legacy sqrt)",
+      "DepthScaleCompressed": "Compressed (sqrt)",
       "DepthScaleLinear": "Linear (proportional)",
       "DepthScaleDramatic": "Dramatic (super-linear)",
       "OverlayScale": "Overlay Scale",
@@ -144,19 +144,15 @@
         },
         "slope": {
           "label": "Slope",
-          "hint": "Use a sloped elevation instead of one flat elevation for the whole region. Toggling this on or off starts both slope endpoints at the current flat elevation."
+          "hint": "Use a sloped elevation instead of one flat elevation for the whole region. The elevation delta is added in the slope direction and can be negative."
         },
-        "slopeLowestElevation": {
-          "label": "Lowest elevation",
-          "hint": "The elevation at the low end of the slope."
-        },
-        "slopeHighestElevation": {
-          "label": "Highest elevation",
-          "hint": "The elevation at the high end of the slope."
+        "slopeHeight": {
+          "label": "Elevation delta",
+          "hint": "Amount added to Elevation at the far end of the slope. Use a negative value to slope downward."
         },
         "slopeDirection": {
           "label": "Slope direction",
-          "hint": "Direction toward the highest elevation in degrees. 0 points north/up, 90 east/right, 180 south/down, and 270 west/left."
+          "hint": "Direction toward Elevation plus the elevation delta. 0 points north/up, 90 east/right, 180 south/down, and 270 west/left."
         },
         "shadowStrength": {
           "label": "Shadow strength",

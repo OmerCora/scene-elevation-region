@@ -13,6 +13,7 @@ function _setting(key) {
 }
 
 const MIN_ELEVATION_DELTA = 0.05;
+const CLIFF_WARP_ELEVATION_MATCH_TOLERANCE = 0.1;
 const OVERLAY_ELEVATION_REFERENCE = 6;
 const OVERLAY_LIFT_BASE = 0.045;
 const OVERLAY_LIFT_PARALLAX = 0.12;
@@ -161,15 +162,12 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
     const sourceSystem = behavior._source?.system ?? {};
     const flatElevation = _finiteNumber(behavior.system?.elevation ?? sourceSystem.elevation ?? sourceSystem.height, 0);
     const slope = (behavior.system?.slope ?? sourceSystem.slope) === true;
-    let lowestElevation = _finiteNumber(behavior.system?.slopeLowestElevation ?? sourceSystem.slopeLowestElevation, flatElevation);
-    let highestElevation = _finiteNumber(behavior.system?.slopeHighestElevation ?? sourceSystem.slopeHighestElevation, flatElevation);
-    if (!slope) {
-      lowestElevation = flatElevation;
-      highestElevation = flatElevation;
-    } else if (lowestElevation > highestElevation) {
-      [lowestElevation, highestElevation] = [highestElevation, lowestElevation];
-    }
-    const elevation = slope ? (lowestElevation + highestElevation) / 2 : flatElevation;
+    const slopeHeight = slope ? _slopeHeightValue(behavior.system, sourceSystem, flatElevation) : 0;
+    const slopeBaseElevation = flatElevation;
+    const slopeFarElevation = slopeBaseElevation + slopeHeight;
+    const lowestElevation = slope ? Math.min(slopeBaseElevation, slopeFarElevation) : flatElevation;
+    const highestElevation = slope ? Math.max(slopeBaseElevation, slopeFarElevation) : flatElevation;
+    const elevation = slope ? (slopeBaseElevation + slopeFarElevation) / 2 : flatElevation;
     const shadowStrength = Number(behavior.system?.shadowStrength ?? sourceSystem.shadowStrength ?? SHADOW_STRENGTH_LIMITS.DEFAULT);
     if (!Number.isFinite(elevation)) continue;
     const paths = (pathCache || slope) ? _regionPaths(region) : null;
@@ -184,6 +182,9 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
       elevation,
       maxAbsElevation: slope ? Math.max(Math.abs(lowestElevation), Math.abs(highestElevation), Math.abs(elevation)) : Math.abs(elevation),
       slope,
+      slopeBaseElevation,
+      slopeFarElevation,
+      slopeHeight,
       lowestElevation,
       highestElevation,
       slopeDirection,
@@ -264,6 +265,16 @@ function _finiteNumber(value, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function _slopeHeightValue(system, sourceSystem, flatElevation) {
+  const explicit = Number(system?.slopeHeight ?? sourceSystem.slopeHeight);
+  if (Number.isFinite(explicit)) return explicit;
+  const lowest = _finiteNumber(system?.slopeLowestElevation ?? sourceSystem.slopeLowestElevation, flatElevation);
+  const highest = _finiteNumber(system?.slopeHighestElevation ?? sourceSystem.slopeHighestElevation, flatElevation);
+  const lowDelta = lowest - flatElevation;
+  const highDelta = highest - flatElevation;
+  return Math.abs(highDelta) >= Math.abs(lowDelta) ? highDelta : lowDelta;
+}
+
 function _normalizeDegrees(value) {
   const number = _finiteNumber(value, 0);
   return ((number % 360) + 360) % 360;
@@ -294,7 +305,9 @@ function _entryElevationAtPoint(entry, point) {
   if (!Number.isFinite(range) || Math.abs(range) < 1e-6) return entry.elevation ?? 0;
   const projection = point.x * entry.slopeVector.x + point.y * entry.slopeVector.y;
   const t = Math.clamp((projection - entry.slopeMinProjection) / range, 0, 1);
-  return entry.lowestElevation + (entry.highestElevation - entry.lowestElevation) * t;
+  const base = entry.slopeBaseElevation ?? entry.lowestElevation;
+  const far = entry.slopeFarElevation ?? entry.highestElevation;
+  return base + (far - base) * t;
 }
 
 function _regionContains(region, point) {
@@ -678,6 +691,7 @@ export class RegionElevationRenderer {
       const depthScale = _depthScale();
       const shadowLength = _shadowLength();
       const perspectivePointMode = _perspectivePointMode();
+      const visualParams = [];
       for (const visual of this._entries) {
         const visualParallax = visual.entry.parallaxStrengthOverride ? _parallaxStrengthForKey(visual.entry.parallaxStrengthOverride) : parallax;
         const visualParallaxMode = visual.entry.parallaxModeOverride || parallaxMode;
@@ -691,10 +705,13 @@ export class RegionElevationRenderer {
         const perspectivePoint = _perspectivePoint(geo, visual.bounds, visualPerspectivePointMode);
         const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualShadowLength, visualParallaxHeightContrast);
         this._visualParams.set(this._parallaxStateKey(visual), params);
+        visualParams.push({ visual, params });
+      }
+      for (const { visual, params } of visualParams) {
         if (!params.isHole) {
           const shadow = this._createShadow(visual.paths, texture, geo, params);
           if (shadow) {
-            this._applyRegionTransform(shadow, params, { includeOverlayOffset: false });
+            if (!shadow._sceneElevationPreTransformed) this._applyRegionTransform(shadow, params, { includeOverlayOffset: false });
             this.container.addChild(shadow);
           }
         }
@@ -897,10 +914,12 @@ export class RegionElevationRenderer {
       gridSize * 0.4
     );
     return {
+      entry,
       isHole,
-      slope: entry.slope && Math.abs(entry.highestElevation - entry.lowestElevation) >= MIN_ELEVATION_DELTA,
-      slopeLowestElevation: entry.lowestElevation,
-      slopeHighestElevation: entry.highestElevation,
+      slope: entry.slope && Math.abs(entry.slopeHeight) >= MIN_ELEVATION_DELTA,
+      slopeBaseElevation: entry.slopeBaseElevation,
+      slopeFarElevation: entry.slopeFarElevation,
+      slopeHeight: entry.slopeHeight,
       slopeVector: entry.slopeVector,
       slopeMinProjection: entry.slopeMinProjection,
       slopeMaxProjection: entry.slopeMaxProjection,
@@ -920,6 +939,7 @@ export class RegionElevationRenderer {
       slopeStretchAlpha: slopeWidth > 0 ? Math.clamp(slopeStretchAlphaBase * (0.72 + transitionNormalized * 0.28), 0, 1) : 0,
       bridgeBaseAlpha: slopeWidth > 0 ? Math.clamp(bridgeBaseAlphaBase * (0.68 + transitionNormalized * 0.32), 0, 1) : 0,
       cliffWarp: cliffWarpActive,
+      edgeOnlyShadow: blendMode === BLEND_MODES.WIDE || cliffWarpActive,
       cliffWarpAlpha,
       cliffWarpSourceWidth,
       textureMeldShadow: textureShadow,
@@ -1093,29 +1113,176 @@ export class RegionElevationRenderer {
 
   _slopeElevationAtPoint(point, params) {
     const range = params.slopeMaxProjection - params.slopeMinProjection;
-    if (!Number.isFinite(range) || Math.abs(range) < 1e-6) return params.slopeLowestElevation;
+    if (!Number.isFinite(range) || Math.abs(range) < 1e-6) return params.slopeBaseElevation;
     const projection = point.x * params.slopeVector.x + point.y * params.slopeVector.y;
     const t = Math.clamp((projection - params.slopeMinProjection) / range, 0, 1);
-    return params.slopeLowestElevation + (params.slopeHighestElevation - params.slopeLowestElevation) * t;
+    return params.slopeBaseElevation + (params.slopeFarElevation - params.slopeBaseElevation) * t;
   }
 
   _slopeElevationFactorAtPoint(point, params) {
+    return this._slopeElevationFactorForElevation(this._slopeElevationAtPoint(point, params), params);
+  }
+
+  _slopeElevationFactorForElevation(elevation, params) {
     const maxAbs = Math.max(params.slopeMaxAbsElevation ?? 0, MIN_ELEVATION_DELTA);
-    return Math.clamp(this._slopeElevationAtPoint(point, params) / maxAbs, -1, 1);
+    return Math.clamp(elevation / maxAbs, -1, 1);
+  }
+
+  _slopeSupportMotionAtPoint(point, params) {
+    const elevation = this._slopeElevationAtPoint(point, params);
+    const support = this._supportingNeighborAtPoint(point, params.entry, elevation);
+    if (!support) return null;
+
+    const relative = elevation - support.elevation;
+    if (Math.abs(relative) <= CLIFF_WARP_ELEVATION_MATCH_TOLERANCE) {
+      return { support, progress: 0, endpointFactor: this._slopeElevationFactorForElevation(elevation, params) };
+    }
+
+    const direction = Math.sign(relative);
+    const endpoints = [
+      { elevation: params.slopeBaseElevation, relative: params.slopeBaseElevation - support.elevation },
+      { elevation: params.slopeFarElevation, relative: params.slopeFarElevation - support.elevation }
+    ].filter(endpoint => Math.sign(endpoint.relative) === direction);
+    const endpoint = endpoints.reduce((largest, value) => {
+      return Math.abs(value.relative) > Math.abs(largest.relative) ? value : largest;
+    }, { elevation, relative });
+    const range = Math.max(
+      Math.abs(endpoint.relative) - CLIFF_WARP_ELEVATION_MATCH_TOLERANCE,
+      MIN_ELEVATION_DELTA
+    );
+    const adjusted = Math.abs(relative) - CLIFF_WARP_ELEVATION_MATCH_TOLERANCE;
+    return {
+      support,
+      progress: Math.clamp(adjusted / range, 0, 1),
+      endpointFactor: this._slopeElevationFactorForElevation(endpoint.elevation, params)
+    };
+  }
+
+  _supportingNeighborAtPoint(point, entry, localElevation = null) {
+    if (!entry) return null;
+    const sampleDistance = 2;
+    const samplePoints = [
+      point,
+      { x: point.x + sampleDistance, y: point.y },
+      { x: point.x - sampleDistance, y: point.y },
+      { x: point.x, y: point.y + sampleDistance },
+      { x: point.x, y: point.y - sampleDistance },
+      { x: point.x + sampleDistance, y: point.y + sampleDistance },
+      { x: point.x - sampleDistance, y: point.y - sampleDistance },
+      { x: point.x + sampleDistance, y: point.y - sampleDistance },
+      { x: point.x - sampleDistance, y: point.y + sampleDistance }
+    ];
+    let best = null;
+    for (const visual of this._entries) {
+      const candidate = visual.entry;
+      if (!candidate || candidate === entry || candidate.region === entry.region) continue;
+      if (!samplePoints.some(samplePoint => _regionContains(candidate.region, samplePoint))) continue;
+      const candidateElevation = _entryElevationAtPoint(candidate, point);
+      if (!Number.isFinite(candidateElevation)) continue;
+      const distance = Number.isFinite(localElevation) ? Math.abs(candidateElevation - localElevation) : 0;
+      const area = candidate.area || Infinity;
+      const sameDistance = best && Math.abs(distance - best.distance) <= 0.001;
+      const better = !best
+        || distance < best.distance - 0.001
+        || (sameDistance && (candidateElevation > best.elevation + 0.001 || (Math.abs(candidateElevation - best.elevation) <= 0.001 && area < best.area)));
+      if (!better) continue;
+      best = {
+        elevation: candidateElevation,
+        distance,
+        area,
+        visual,
+        params: this._visualParams.get(this._parallaxStateKey(visual)) ?? null
+      };
+    }
+    return best ? { elevation: best.elevation, visual: best.visual, params: best.params } : null;
+  }
+
+  _overlayPointAtFactor(point, params, factor) {
+    const center = params.center ?? point;
+    const overlayOffset = params.overlayOffset ?? { x: 0, y: 0 };
+    const scale = 1 + ((params.overlayScale ?? 1) - 1) * factor;
+    return {
+      x: center.x + (point.x - center.x) * scale + overlayOffset.x * factor,
+      y: center.y + (point.y - center.y) * scale + overlayOffset.y * factor
+    };
+  }
+
+  _supportOverlayPointAtPoint(point, support, fallbackParams) {
+    const supportParams = support.params;
+    if (!supportParams) return this._overlayPointAtFactor(point, fallbackParams, this._slopeElevationFactorForElevation(support.elevation, fallbackParams));
+    const factor = supportParams.slope ? this._slopeElevationFactorAtPoint(point, supportParams) : 1;
+    return this._overlayPointAtFactor(point, supportParams, factor);
+  }
+
+  _supportOverlayOffsetAtPoint(point, support, fallbackParams) {
+    const supportParams = support.params;
+    if (!supportParams) {
+      const factor = this._slopeElevationFactorForElevation(support.elevation, fallbackParams);
+      return { x: fallbackParams.overlayOffset.x * factor, y: fallbackParams.overlayOffset.y * factor };
+    }
+    const factor = supportParams.slope ? this._slopeElevationFactorAtPoint(point, supportParams) : 1;
+    return { x: supportParams.overlayOffset.x * factor, y: supportParams.overlayOffset.y * factor };
   }
 
   _slopeOverlayOffsetAtPoint(point, params) {
-    const factor = this._slopeElevationFactorAtPoint(point, params);
-    return { x: params.overlayOffset.x * factor, y: params.overlayOffset.y * factor };
+    const motion = this._slopeSupportMotionAtPoint(point, params);
+    if (!motion) {
+      const factor = this._slopeElevationFactorAtPoint(point, params);
+      return { x: params.overlayOffset.x * factor, y: params.overlayOffset.y * factor };
+    }
+    const baseline = this._supportOverlayOffsetAtPoint(point, motion.support, params);
+    const target = {
+      x: params.overlayOffset.x * motion.endpointFactor,
+      y: params.overlayOffset.y * motion.endpointFactor
+    };
+    return {
+      x: baseline.x + (target.x - baseline.x) * motion.progress,
+      y: baseline.y + (target.y - baseline.y) * motion.progress
+    };
   }
 
   _slopedOverlayPoint(point, params) {
-    const factor = this._slopeElevationFactorAtPoint(point, params);
-    const scale = 1 + (params.overlayScale - 1) * factor;
+    const motion = this._slopeSupportMotionAtPoint(point, params);
+    if (!motion) return this._overlayPointAtFactor(point, params, this._slopeElevationFactorAtPoint(point, params));
+    const baseline = this._supportOverlayPointAtPoint(point, motion.support, params);
+    const target = this._overlayPointAtFactor(point, params, motion.endpointFactor);
     return {
-      x: params.center.x + (point.x - params.center.x) * scale + params.overlayOffset.x * factor,
-      y: params.center.y + (point.y - params.center.y) * scale + params.overlayOffset.y * factor
+      x: baseline.x + (target.x - baseline.x) * motion.progress,
+      y: baseline.y + (target.y - baseline.y) * motion.progress
     };
+  }
+
+  _slopedOverlayPaths(paths, params) {
+    if (!params.slope) return paths;
+    return paths.map(path => path.map(point => this._slopedOverlayPoint(point, params)));
+  }
+
+  _cliffWarpLiftFractionAtPoint(point, outwardNormal, params) {
+    const entry = params.entry;
+    if (!entry) return 1;
+    const localElevation = params.slope ? this._slopeElevationAtPoint(point, params) : entry.elevation;
+    if (!Number.isFinite(localElevation)) return 1;
+    return this._hasMatchingElevationNeighbor(point, outwardNormal, entry, localElevation, params) ? 0 : 1;
+  }
+
+  _hasMatchingElevationNeighbor(point, outwardNormal, entry, localElevation, params) {
+    const sampleDistance = Math.max(2, Number(params.cliffWarpSourceWidth ?? CLIFF_WARP_SOURCE_RIM_PIXELS));
+    const samplePoints = [
+      point,
+      { x: point.x + outwardNormal.x * sampleDistance, y: point.y + outwardNormal.y * sampleDistance },
+      { x: point.x + outwardNormal.x * sampleDistance * 2, y: point.y + outwardNormal.y * sampleDistance * 2 }
+    ];
+    for (const visual of this._entries) {
+      const candidate = visual.entry;
+      if (!candidate || candidate === entry || candidate.region === entry.region) continue;
+      for (const samplePoint of samplePoints) {
+        if (!_regionContains(candidate.region, samplePoint)) continue;
+        const candidateElevation = _entryElevationAtPoint(candidate, samplePoint);
+        if (!Number.isFinite(candidateElevation)) continue;
+        if (candidateElevation >= localElevation - CLIFF_WARP_ELEVATION_MATCH_TOLERANCE) return true;
+      }
+    }
+    return false;
   }
 
   _shadowDirection(bounds, parallax, shadowMode, perspectivePoint) {
@@ -1156,6 +1323,7 @@ export class RegionElevationRenderer {
   _createShadow(paths, texture, geo, params) {
     if (params.softShadowAlpha <= 0 && params.allAroundShadowAlpha <= 0 && params.bridgeShadowAlpha <= 0 && params.contactShadowAlpha <= 0 && params.textureSoftShadowAlpha <= 0 && params.textureBridgeShadowAlpha <= 0 && params.textureContactShadowAlpha <= 0) return null;
     if (params.cliffWarp) return this._createCliffWarpShadow(paths, params);
+    if (params.edgeOnlyShadow) return this._createEdgeTransitionShadow(paths, params);
     const shadow = new PIXI.Container();
     shadow.eventMode = "none";
     if (params.textureMeldShadow && texture) {
@@ -1180,23 +1348,42 @@ export class RegionElevationRenderer {
   _createCliffWarpShadow(paths, params) {
     const shadow = new PIXI.Container();
     shadow.eventMode = "none";
-    const allAround = this._createRimShadowLayer(paths, { x: 0, y: 0 }, params.allAroundShadowAlpha, params.allAroundShadowBlur, Math.max(2, params.allAroundShadowBlur * 0.8));
-    const soft = this._createRimShadowLayer(paths, params.softShadowOffset, params.softShadowAlpha, params.softShadowBlur, Math.max(2, params.softShadowBlur * 0.7));
-    const bridge = this._createRimShadowLayer(paths, params.bridgeShadowOffset, params.bridgeShadowAlpha, params.bridgeShadowBlur, Math.max(2, params.bridgeShadowBlur * 0.75));
-    const contact = this._createRimShadowLayer(paths, params.contactShadowOffset, params.contactShadowAlpha, params.contactShadowBlur, Math.max(2, params.contactShadowBlur * 1.1));
+    const shadowPaths = this._slopedOverlayPaths(paths, params);
+    const allAround = this._createLiveRimShadowLayer(shadowPaths, { x: 0, y: 0 }, params.allAroundShadowAlpha, params.allAroundShadowBlur, Math.max(2, params.allAroundShadowBlur * 0.8), true);
+    const soft = this._createLiveRimShadowLayer(shadowPaths, params.softShadowOffset, params.softShadowAlpha, params.softShadowBlur, Math.max(2, params.softShadowBlur * 0.7), true);
+    const bridge = this._createLiveRimShadowLayer(shadowPaths, params.bridgeShadowOffset, params.bridgeShadowAlpha, params.bridgeShadowBlur, Math.max(2, params.bridgeShadowBlur * 0.75), true);
+    const contact = this._createLiveRimShadowLayer(shadowPaths, params.contactShadowOffset, params.contactShadowAlpha, params.contactShadowBlur, Math.max(2, params.contactShadowBlur * 1.1), true);
     if (allAround) shadow.addChild(allAround);
     if (soft) shadow.addChild(soft);
     if (bridge) shadow.addChild(bridge);
     if (contact) shadow.addChild(contact);
+    if (params.slope) shadow._sceneElevationPreTransformed = true;
+    return shadow.children.length ? shadow : null;
+  }
+
+  _createEdgeTransitionShadow(paths, params) {
+    const shadow = new PIXI.Container();
+    shadow.eventMode = "none";
+    const width = Math.max(2, params.blendWidth || params.slopeWidth || params.contactShadowBlur || 2);
+    const shadowPaths = this._slopedOverlayPaths(paths, params);
+    const allAround = this._createLiveRimShadowLayer(shadowPaths, { x: 0, y: 0 }, params.allAroundShadowAlpha, params.allAroundShadowBlur, Math.max(width, params.allAroundShadowBlur * 0.8), true);
+    const soft = this._createLiveRimShadowLayer(shadowPaths, params.softShadowOffset, params.softShadowAlpha, params.softShadowBlur, Math.max(width, params.softShadowBlur * 0.7), true);
+    const bridge = this._createLiveRimShadowLayer(shadowPaths, params.bridgeShadowOffset, params.bridgeShadowAlpha, params.bridgeShadowBlur, Math.max(width, params.bridgeShadowBlur * 0.75), true);
+    const contact = this._createLiveRimShadowLayer(shadowPaths, params.contactShadowOffset, params.contactShadowAlpha, params.contactShadowBlur, Math.max(width, params.contactShadowBlur * 1.1), true);
+    if (allAround) shadow.addChild(allAround);
+    if (soft) shadow.addChild(soft);
+    if (bridge) shadow.addChild(bridge);
+    if (contact) shadow.addChild(contact);
+    if (params.slope) shadow._sceneElevationPreTransformed = true;
     return shadow.children.length ? shadow : null;
   }
 
   _createEdgeGlue(paths, params) {
     if (params.edgeGlueAlpha <= 0 || params.edgeGlueBlur <= 0) return null;
-    const edgeGlue = params.cliffWarp
-      ? this._createRimShadowLayer(paths, { x: 0, y: 0 }, params.edgeGlueAlpha, params.edgeGlueBlur, Math.max(2, params.edgeGlueBlur * 0.95))
-      : this._createShadowLayer(paths, { x: 0, y: 0 }, params.edgeGlueAlpha, params.edgeGlueBlur);
-    if (edgeGlue) this._applyRegionTransform(edgeGlue, params, { includeOverlayOffset: false });
+    const edgeGlueWidth = Math.max(2, params.blendWidth || params.slopeWidth || params.edgeGlueBlur * 0.95);
+    const gluePaths = this._slopedOverlayPaths(paths, params);
+    const edgeGlue = this._createLiveRimShadowLayer(gluePaths, { x: 0, y: 0 }, params.edgeGlueAlpha, params.edgeGlueBlur, edgeGlueWidth, true);
+    if (edgeGlue && !params.slope) this._applyRegionTransform(edgeGlue, params, { includeOverlayOffset: false });
     return edgeGlue;
   }
 
@@ -1272,73 +1459,73 @@ export class RegionElevationRenderer {
 
     for (const path of paths) {
       if (!path || path.length < 3) continue;
-      const n = path.length;
-      const positions = new Float32Array(n * rowCount * 2);
-      const uvs = new Float32Array(n * rowCount * 2);
-      const indexArray = n * rowCount > 65535 ? Uint32Array : Uint16Array;
-      const indices = new indexArray(n * (rowCount - 1) * 6);
+      const positions = [];
+      const uvs = [];
+      const indices = [];
 
-      for (let i = 0; i < n; i++) {
-        const p = path[i];
-        const prev = path[(i - 1 + n) % n];
-        const next = path[(i + 1) % n];
-        const tPrevX = p.x - prev.x;
-        const tPrevY = p.y - prev.y;
-        const tNextX = next.x - p.x;
-        const tNextY = next.y - p.y;
-        let nx = -(tPrevY + tNextY);
-        let ny = (tPrevX + tNextX);
-        const nl = Math.hypot(nx, ny);
-        if (nl > 0) { nx /= nl; ny /= nl; }
-        const toCx = center.x - p.x;
-        const toCy = center.y - p.y;
-        if (nx * toCx + ny * toCy < 0) { nx = -nx; ny = -ny; }
-
-        const topX = center.x + (p.x - center.x) * overlayScale + overlayOffset.x;
-        const topY = center.y + (p.y - center.y) * overlayScale + overlayOffset.y;
-        const botX = p.x;
-        const botY = p.y;
-
-        for (let row = 0; row < rowCount; row++) {
-          const sampleRow = sampleRows[row];
-          const rowX = topX + (botX - topX) * sampleRow.t;
-          const rowY = topY + (botY - topY) * sampleRow.t;
-          const sampleX = p.x + nx * sourceWidth * sampleRow.normalOffset * sign;
-          const sampleY = p.y + ny * sourceWidth * sampleRow.normalOffset * sign;
-          const vertexOffset = (i * rowCount + row) * 2;
-          positions[vertexOffset + 0] = rowX;
-          positions[vertexOffset + 1] = rowY;
-          uvs[vertexOffset + 0] = Math.clamp((sampleX - geo.x) / geo.width, 0, 1);
-          uvs[vertexOffset + 1] = Math.clamp((sampleY - geo.y) / geo.height, 0, 1);
+      for (let edgeIndex = 0; edgeIndex < path.length; edgeIndex++) {
+        const startPoint = path[edgeIndex];
+        const endPoint = path[(edgeIndex + 1) % path.length];
+        const edgeX = endPoint.x - startPoint.x;
+        const edgeY = endPoint.y - startPoint.y;
+        const edgeLength = Math.hypot(edgeX, edgeY);
+        if (edgeLength < 0.001) continue;
+        const midpoint = { x: (startPoint.x + endPoint.x) / 2, y: (startPoint.y + endPoint.y) / 2 };
+        let inwardNormalX = -edgeY / edgeLength;
+        let inwardNormalY = edgeX / edgeLength;
+        const centerDirectionX = center.x - midpoint.x;
+        const centerDirectionY = center.y - midpoint.y;
+        if (inwardNormalX * centerDirectionX + inwardNormalY * centerDirectionY < 0) {
+          inwardNormalX = -inwardNormalX;
+          inwardNormalY = -inwardNormalY;
         }
-      }
+        const outwardNormal = { x: -inwardNormalX, y: -inwardNormalY };
+        const startLiftFraction = this._cliffWarpLiftFractionAtPoint(startPoint, outwardNormal, params);
+        const endLiftFraction = this._cliffWarpLiftFractionAtPoint(endPoint, outwardNormal, params);
+        const midpointLiftFraction = this._cliffWarpLiftFractionAtPoint(midpoint, outwardNormal, params);
+        if (Math.max(startLiftFraction, endLiftFraction, midpointLiftFraction) <= 0.001) continue;
 
-      for (let i = 0; i < n; i++) {
-        for (let row = 0; row < rowCount - 1; row++) {
-          const i0Top = i * rowCount + row;
-          const i0Bot = i * rowCount + row + 1;
-          const i1Top = ((i + 1) % n) * rowCount + row;
-          const i1Bot = ((i + 1) % n) * rowCount + row + 1;
-          const o = (i * (rowCount - 1) + row) * 6;
-          if (params.isHole) {
-            indices[o + 0] = i0Top;
-            indices[o + 1] = i0Bot;
-            indices[o + 2] = i1Top;
-            indices[o + 3] = i0Bot;
-            indices[o + 4] = i1Bot;
-            indices[o + 5] = i1Top;
-          } else {
-            indices[o + 0] = i0Top;
-            indices[o + 1] = i1Top;
-            indices[o + 2] = i0Bot;
-            indices[o + 3] = i0Bot;
-            indices[o + 4] = i1Top;
-            indices[o + 5] = i1Bot;
+        const baseIndex = positions.length / 2;
+        const edgePoints = [startPoint, endPoint];
+        const liftFractions = [startLiftFraction, endLiftFraction];
+        for (let pointIndex = 0; pointIndex < edgePoints.length; pointIndex++) {
+          const point = edgePoints[pointIndex];
+          const liftFraction = liftFractions[pointIndex];
+          const fullTop = params.slope
+            ? this._slopedOverlayPoint(point, params)
+            : {
+              x: center.x + (point.x - center.x) * overlayScale + overlayOffset.x,
+              y: center.y + (point.y - center.y) * overlayScale + overlayOffset.y
+            };
+          const fullTopX = fullTop.x;
+          const fullTopY = fullTop.y;
+          const topX = point.x + (fullTopX - point.x) * liftFraction;
+          const topY = point.y + (fullTopY - point.y) * liftFraction;
+          const bottomX = point.x;
+          const bottomY = point.y;
+          for (let row = 0; row < rowCount; row++) {
+            const sampleRow = sampleRows[row];
+            const rowX = topX + (bottomX - topX) * sampleRow.t;
+            const rowY = topY + (bottomY - topY) * sampleRow.t;
+            const sampleX = point.x + inwardNormalX * sourceWidth * sampleRow.normalOffset * sign;
+            const sampleY = point.y + inwardNormalY * sourceWidth * sampleRow.normalOffset * sign;
+            positions.push(rowX, rowY);
+            uvs.push(
+              Math.clamp((sampleX - geo.x) / geo.width, 0, 1),
+              Math.clamp((sampleY - geo.y) / geo.height, 0, 1)
+            );
           }
         }
+        if (params.isHole) {
+          indices.push(baseIndex, baseIndex + 1, baseIndex + 2, baseIndex + 1, baseIndex + 3, baseIndex + 2);
+        } else {
+          indices.push(baseIndex, baseIndex + 2, baseIndex + 1, baseIndex + 1, baseIndex + 2, baseIndex + 3);
+        }
       }
 
-      const meshGeo = new MeshGeometry(positions, uvs, indices);
+      if (!indices.length) continue;
+      const indexArray = positions.length / 2 > 65535 ? Uint32Array : Uint16Array;
+      const meshGeo = new MeshGeometry(new Float32Array(positions), new Float32Array(uvs), new indexArray(indices));
       const material = new MeshMaterial(texture, { alpha: params.cliffWarpAlpha });
       const mesh = new Mesh(meshGeo, material);
       mesh.eventMode = "none";
@@ -1387,6 +1574,27 @@ export class RegionElevationRenderer {
     if (alpha <= 0 || width <= 0) return null;
     const layer = this._createGeneratedShadowLayer(paths, offset, alpha, blur, { strokeWidth: Math.max(1, width) });
     if (!layer) return null;
+    if (!insideOnly) return layer;
+
+    const container = new PIXI.Container();
+    container.eventMode = "none";
+    const mask = this._createMask(paths);
+    layer.mask = mask;
+    container.addChild(mask);
+    container.addChild(layer);
+    return container;
+  }
+
+  _createLiveRimShadowLayer(paths, offset, alpha, blur, width, insideOnly = false) {
+    if (alpha <= 0 || width <= 0) return null;
+    const layer = new PIXI.Graphics();
+    layer.eventMode = "none";
+    layer.lineStyle(Math.max(1, width), 0x000000, 1, 0.5, false, PIXI.LINE_JOIN?.ROUND ?? undefined, PIXI.LINE_CAP?.ROUND ?? undefined);
+    _drawPaths(layer, paths);
+    layer.position.set(offset.x, offset.y);
+    layer.alpha = alpha;
+    layer.blendMode = PIXI.BLEND_MODES.NORMAL;
+    if (blur > 0) layer.filters = [_makeBlurFilter(blur)];
     if (!insideOnly) return layer;
 
     const container = new PIXI.Container();

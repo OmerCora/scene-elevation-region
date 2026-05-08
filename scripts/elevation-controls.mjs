@@ -457,7 +457,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     icon.className = `fa-solid ${elevation > 0 ? "fa-arrow-up" : elevation < 0 ? "fa-arrow-down" : "fa-minus"}`;
     const value = document.createElement("span");
     value.textContent = entry.slope
-      ? `${_formatElevationLabel(elevation)} (${_formatElevationLabel(entry.lowestElevation)}-${_formatElevationLabel(entry.highestElevation)})`
+      ? `${_formatElevationLabel(elevation)} (${_formatElevationLabel(entry.flatElevation)}${entry.slopeHeight >= 0 ? "+" : ""}${_formatElevationLabel(entry.slopeHeight)})`
       : _formatElevationLabel(elevation);
     label.replaceChildren(icon, value);
     label.style.left = `${event.clientX + 14}px`;
@@ -698,8 +698,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
         system: {
           elevation: 1,
           slope: false,
-          slopeLowestElevation: 1,
-          slopeHighestElevation: 1,
+          slopeHeight: 0,
           slopeDirection: 0,
           shadowStrength: SHADOW_STRENGTH_LIMITS.DEFAULT,
           parallaxStrengthOverride: "",

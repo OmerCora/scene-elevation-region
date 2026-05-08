@@ -128,10 +128,12 @@ function _slopeDirection(value) {
   return ((number % 360) + 360) % 360;
 }
 
-function _syncSlopeElevations(data) {
-  const elevation = _numberValue(data.elevation, 0);
-  data.slopeLowestElevation = elevation;
-  data.slopeHighestElevation = elevation;
+function _legacySlopeHeight(data, elevation) {
+  const lowest = _numberValue(data.slopeLowestElevation, elevation);
+  const highest = _numberValue(data.slopeHighestElevation, elevation);
+  const lowDelta = lowest - elevation;
+  const highDelta = highest - elevation;
+  return Math.abs(highDelta) >= Math.abs(lowDelta) ? highDelta : lowDelta;
 }
 
 /**
@@ -147,10 +149,12 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
   static migrateData(data) {
     data.shadowLengthOverride = _shadowLengthChoice(data.shadowLengthOverride);
     data.slope = _booleanValue(data.slope, false);
-    if (data.slopeLowestElevation === undefined) data.slopeLowestElevation = _numberValue(data.elevation, 1);
-    if (data.slopeHighestElevation === undefined) data.slopeHighestElevation = _numberValue(data.elevation, 1);
+    const elevation = _numberValue(data.elevation, 1);
+    if (data.slopeHeight === undefined) data.slopeHeight = _legacySlopeHeight(data, elevation);
+    data.slopeHeight = data.slope ? _numberValue(data.slopeHeight, 0) : 0;
     data.slopeDirection = _slopeDirection(data.slopeDirection);
-    if (!data.slope) _syncSlopeElevations(data);
+    delete data.slopeLowestElevation;
+    delete data.slopeHighestElevation;
     return super.migrateData(data);
   }
 
@@ -167,17 +171,11 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slope.label",
         hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slope.hint"
       }),
-      slopeLowestElevation: new fields.NumberField({
+      slopeHeight: new fields.NumberField({
         required: true,
-        initial: 1,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeLowestElevation.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeLowestElevation.hint"
-      }),
-      slopeHighestElevation: new fields.NumberField({
-        required: true,
-        initial: 1,
-        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeHighestElevation.label",
-        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeHighestElevation.hint"
+        initial: 0,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeHeight.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeHeight.hint"
       }),
       slopeDirection: new fields.NumberField({
         required: true,
@@ -297,10 +295,8 @@ export function registerRegionHooks(invalidate) {
     const previousSlope = document.system?.slope === true;
     const nextSlope = slopeChanged ? _booleanValue(foundry.utils.getProperty(changes, "system.slope"), previousSlope) : previousSlope;
     const slopeActuallyChanged = slopeChanged && nextSlope !== previousSlope;
-    const elevation = _numberValue(foundry.utils.getProperty(changes, "system.elevation") ?? document.system?.elevation, 0);
     if (slopeActuallyChanged || (!nextSlope && elevationChanged)) {
-      foundry.utils.setProperty(changes, "system.slopeLowestElevation", elevation);
-      foundry.utils.setProperty(changes, "system.slopeHighestElevation", elevation);
+      foundry.utils.setProperty(changes, "system.slopeHeight", 0);
     }
     if (directionChanged) foundry.utils.setProperty(changes, "system.slopeDirection", _slopeDirection(foundry.utils.getProperty(changes, "system.slopeDirection")));
   });
