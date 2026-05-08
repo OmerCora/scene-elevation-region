@@ -709,6 +709,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
           shadowLengthOverride: "",
           blendModeOverride: "",
           depthScaleOverride: "",
+          elevationScaleOverride: "",
           modifyTokenElevation: true,
           modifyTokenScaling: true
         }

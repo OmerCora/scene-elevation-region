@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, REGION_BEHAVIOR_TYPE, elevationPresetValues, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, REGION_BEHAVIOR_TYPE, elevationPresetValues, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -32,6 +32,7 @@ const REGION_PRESET_FIELD_MAP = Object.freeze({
   [SCENE_SETTING_KEYS.DEPTH_SCALE]: "depthScaleOverride"
 });
 const REGION_PRESET_CONTROL_FIELDS = new Set(Object.values(REGION_PRESET_FIELD_MAP));
+const REGION_SCENE_SETTING_RESET_FIELDS = new Set([...REGION_PRESET_CONTROL_FIELDS, "elevationScaleOverride"]);
 const _syncingTokenElevation = new Set();
 const _pendingTokenElevationUpdates = new Map();
 const _tokensWithPendingMovement = new Set();
@@ -125,10 +126,14 @@ Hooks.once("init", () => {
     hint: "SCENE_ELEVATION.Settings.ParallaxModeHint",
     scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.PARALLAX_MODE],
     choices: {
-      [PARALLAX_MODES.CARD]: "SCENE_ELEVATION.Settings.ParallaxModeCard",
       [PARALLAX_MODES.ANCHORED_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard",
       [PARALLAX_MODES.VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard",
       [PARALLAX_MODES.ANCHORED_VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard",
+      [PARALLAX_MODES.LAYERED]: "SCENE_ELEVATION.Settings.ParallaxModeLayered",
+      [PARALLAX_MODES.HORIZONTAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeHorizontalScroll",
+      [PARALLAX_MODES.VERTICAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeVerticalScroll",
+      [PARALLAX_MODES.MOUSE]: "SCENE_ELEVATION.Settings.ParallaxModeMouse",
+      [PARALLAX_MODES.FADE_ZOOM]: "SCENE_ELEVATION.Settings.ParallaxModeFadeZoom",
       [PARALLAX_MODES.SHADOW]: "SCENE_ELEVATION.Settings.ParallaxModeShadow"
     },
     onChange: () => {
@@ -244,6 +249,19 @@ Hooks.once("init", () => {
       _refreshAllTokenScales();
     }
   });
+  game.settings.register(MODULE_ID, SETTINGS.ELEVATION_SCALE, {
+    name: "SCENE_ELEVATION.Settings.ElevationScale",
+    hint: "SCENE_ELEVATION.Settings.ElevationScaleHint",
+    scope: "world",
+    config: true,
+    type: Number,
+    default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.ELEVATION_SCALE],
+    range: { min: ELEVATION_SCALE_LIMITS.MIN, max: ELEVATION_SCALE_LIMITS.MAX, step: ELEVATION_SCALE_LIMITS.STEP },
+    onChange: () => {
+      RegionElevationRenderer.instance.update();
+      _refreshAllTokenScales();
+    }
+  });
   game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_ENABLED, {
     name: "SCENE_ELEVATION.Settings.TokenScale",
     hint: "SCENE_ELEVATION.Settings.TokenScaleHint",
@@ -354,17 +372,22 @@ Hooks.on("renderRegionBehaviorConfig", _insertRegionBehaviorDivider);
 function _insertRegionBehaviorDivider(app, html) {
   const root = _renderedHtmlElement(html) ?? app?.element;
   if (!root?.querySelectorAll) return;
-  const fields = root.querySelectorAll('[name="system.slopeDirection"], [name$=".slopeDirection"]');
+  _insertRegionDividerAfterField(root, "slopeDirection", `${MODULE_ID}-region-settings-divider`);
+  _insertRegionDividerAfterField(root, "depthScaleOverride", `${MODULE_ID}-region-settings-preset-end-divider`);
+  _wireRegionPresetControls(root);
+  app?.setPosition?.({ height: "auto" });
+}
+
+function _insertRegionDividerAfterField(root, fieldName, className) {
+  const fields = root.querySelectorAll(`[name="system.${fieldName}"], [name$=".${fieldName}"]`);
   for (const field of fields) {
     const formGroup = field.closest?.(".form-group") ?? field.parentElement;
-    if (!formGroup || formGroup.nextElementSibling?.classList?.contains(`${MODULE_ID}-region-settings-divider`)) continue;
+    if (!formGroup || formGroup.nextElementSibling?.classList?.contains(className)) continue;
     const divider = document.createElement("div");
-    divider.className = `${MODULE_ID}-region-settings-divider`;
+    divider.className = className;
     divider.setAttribute("aria-hidden", "true");
     formGroup.after(divider);
   }
-  _wireRegionPresetControls(root);
-  app?.setPosition?.({ height: "auto" });
 }
 
 function _renderedHtmlElement(html) {
@@ -384,6 +407,12 @@ function _wireRegionPresetControls(root) {
     if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
     const fieldName = _regionBehaviorFieldName(target.name);
     if (fieldName === "presetOverride") {
+      if (!target.value) {
+        for (const overrideField of REGION_SCENE_SETTING_RESET_FIELDS) {
+          const el = _regionBehaviorField(root, overrideField);
+          if (el) el.value = "";
+        }
+      }
       _applyRegionPresetToForm(root, target.value);
       return;
     }

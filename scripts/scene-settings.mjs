@@ -11,8 +11,10 @@ import {
   SHADOW_LENGTHS,
   TOKEN_ELEVATION_MODES,
   DEPTH_SCALES,
+  ELEVATION_SCALE_LIMITS,
   ELEVATION_PRESETS,
   ELEVATION_PRESET_SETTING_KEYS,
+  elevationScaleValue,
   elevationPresetKey,
   elevationPresetValues,
   elevationDefaultSettings,
@@ -38,10 +40,14 @@ const SELECT_GROUPS = Object.freeze({
     ["extreme", "SCENE_ELEVATION.Settings.ParallaxExtreme"]
   ],
   [SCENE_SETTING_KEYS.PARALLAX_MODE]: [
-    [PARALLAX_MODES.CARD, "SCENE_ELEVATION.Settings.ParallaxModeCard"],
     [PARALLAX_MODES.ANCHORED_CARD, "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard"],
     [PARALLAX_MODES.VELOCITY_CARD, "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard"],
     [PARALLAX_MODES.ANCHORED_VELOCITY_CARD, "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard"],
+    [PARALLAX_MODES.LAYERED, "SCENE_ELEVATION.Settings.ParallaxModeLayered"],
+    [PARALLAX_MODES.HORIZONTAL_SCROLL, "SCENE_ELEVATION.Settings.ParallaxModeHorizontalScroll"],
+    [PARALLAX_MODES.VERTICAL_SCROLL, "SCENE_ELEVATION.Settings.ParallaxModeVerticalScroll"],
+    [PARALLAX_MODES.MOUSE, "SCENE_ELEVATION.Settings.ParallaxModeMouse"],
+    [PARALLAX_MODES.FADE_ZOOM, "SCENE_ELEVATION.Settings.ParallaxModeFadeZoom"],
     [PARALLAX_MODES.SHADOW, "SCENE_ELEVATION.Settings.ParallaxModeShadow"]
   ],
   [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: [
@@ -150,7 +156,9 @@ class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
       void this._applyFormSettings();
     });
     form.addEventListener("input", event => {
-      if (event.target instanceof HTMLInputElement && event.target.type === "number") this._queueApplyFormSettings();
+      if (!(event.target instanceof HTMLInputElement)) return;
+      if (event.target.type === "range") _syncRangeOutput(form, event.target);
+      if (["number", "range"].includes(event.target.type)) this._queueApplyFormSettings();
     });
     form.querySelector('[data-action="setDefault"]')?.addEventListener("click", event => {
       event.preventDefault();
@@ -201,6 +209,8 @@ function _settingsForm(settings) {
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_MODE, "SCENE_ELEVATION.Settings.ShadowMode", settings)}
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_LENGTH, "SCENE_ELEVATION.Settings.ShadowLength", settings)}
     ${_selectField(SCENE_SETTING_KEYS.DEPTH_SCALE, "SCENE_ELEVATION.Settings.DepthScale", settings)}
+    <div class="${MODULE_ID}-scene-settings-preset-end-divider" aria-hidden="true"></div>
+    ${_rangeField(SCENE_SETTING_KEYS.ELEVATION_SCALE, "SCENE_ELEVATION.Settings.ElevationScale", "SCENE_ELEVATION.Settings.ElevationScaleHint", settings, ELEVATION_SCALE_LIMITS)}
     ${_selectField(SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, "SCENE_ELEVATION.Settings.TokenElevationMode", settings)}
     <div class="form-group" style="margin-bottom: 4px;">
       <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenElevationAnimationMs")}</label>
@@ -229,7 +239,7 @@ function _selectField(name, labelKey, settings) {
       : settings[name];
   const options = SELECT_GROUPS[name].map(([value, optionLabel]) => `<option value="${value}" ${value === current ? "selected" : ""}>${game.i18n.localize(optionLabel)}</option>`).join("");
   const classes = `form-group${name === SCENE_SETTING_KEYS.PRESET ? ` ${MODULE_ID}-scene-settings-preset` : ""}`;
-  const extraStyle = name === SCENE_SETTING_KEYS.PRESET ? " margin-top: 4px;" : "";
+  const extraStyle = name === SCENE_SETTING_KEYS.PRESET ? " margin-top: 20px;" : "";
   return `<div class="${classes}" style="margin-bottom: 4px;${extraStyle}">
     <label>${game.i18n.localize(labelKey)}</label>
     <select name="${name}">${options}</select>
@@ -245,12 +255,25 @@ function _numberField(name, labelKey, hintKey, settings, { min, max, step }) {
   </div>`;
 }
 
+function _rangeField(name, labelKey, hintKey, settings, { MIN: min, MAX: max, STEP: step, DEFAULT: defaultValue }) {
+  const value = elevationScaleValue(settings[name] ?? defaultValue);
+  return `<div class="form-group" style="margin-bottom: 4px;">
+    <label>${game.i18n.localize(labelKey)}</label>
+    <div style="display: grid; grid-template-columns: 1fr 3ch; gap: 8px; align-items: center;">
+      <input type="range" name="${name}" min="${min}" max="${max}" step="${step}" value="${value}">
+      <output data-for="${name}">${value}</output>
+    </div>
+    <p class="hint">${game.i18n.localize(hintKey)}</p>
+  </div>`;
+}
+
 function _populateSettingsForm(form, settings) {
   for (const [key, value] of Object.entries(settings)) {
     const field = form.elements.namedItem(key);
     if (!field) continue;
     if (field instanceof HTMLInputElement && field.type === "checkbox") field.checked = !!value;
     else field.value = value;
+    if (field instanceof HTMLInputElement && field.type === "range") _syncRangeOutput(form, field);
   }
 }
 
@@ -273,8 +296,14 @@ function _formSettings(data, current, scene) {
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS) ?? current[SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS] ?? 120), 0, 600),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]: data.has(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? current[SCENE_SETTING_KEYS.TOKEN_SCALE_MAX] ?? 1.5), 1, 3),
+    [SCENE_SETTING_KEYS.ELEVATION_SCALE]: elevationScaleValue(data.get(SCENE_SETTING_KEYS.ELEVATION_SCALE) ?? current[SCENE_SETTING_KEYS.ELEVATION_SCALE]),
     [SCENE_SETTING_KEYS.DEPTH_SCALE]: presetValues[SCENE_SETTING_KEYS.DEPTH_SCALE] ?? _choice(data, SCENE_SETTING_KEYS.DEPTH_SCALE, Object.values(DEPTH_SCALES), current, DEPTH_SCALES.COMPRESSED)
   };
+}
+
+function _syncRangeOutput(form, field) {
+  const output = form.querySelector(`output[data-for="${field.name}"]`);
+  if (output) output.value = field.value;
 }
 
 function _choice(data, key, choices, current, fallback = choices[0]) {

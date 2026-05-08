@@ -55,11 +55,15 @@
       "ParallaxHeightContrastDramatic": "Dramatic",
       "ParallaxHeightContrastExtreme": "Extreme",
       "ParallaxMode": "Parallax Type",
-      "ParallaxModeHint": "Where camera movement is applied while panning. Camera-origin and velocity modes are useful comparisons for Region Center perspective because they reduce center-crossing snap.",
-      "ParallaxModeCard": "Raised card lift",
+      "ParallaxModeHint": "How elevated overlays react to camera or pointer movement. Includes camera-origin, velocity drift, multi-layer, axis-only, mouse, fade/zoom, and shadow-only modes.",
       "ParallaxModeAnchoredCard": "Camera-origin card lift",
       "ParallaxModeVelocityCard": "Camera velocity drift",
       "ParallaxModeAnchoredVelocityCard": "Camera lift + velocity drift",
+      "ParallaxModeLayered": "Multi-layer drift",
+      "ParallaxModeHorizontalScroll": "Horizontal scroll parallax",
+      "ParallaxModeVerticalScroll": "Vertical scroll parallax",
+      "ParallaxModeMouse": "Mouse-based floating depth",
+      "ParallaxModeFadeZoom": "Fade-in zoom parallax",
       "ParallaxModeShadow": "Responsive shadow only",
       "PerspectivePoint": "Perspective Point",
       "PerspectivePointHint": "Anchor used by parallax and responsive shadows. Scene anchors keep one shared direction; far anchors sit one scene width or height outside the map; Region anchors place the point on each Region; Point on scene edge uses a draggable handle in Elevation select mode; Furthest and nearest edge follow the camera center.",
@@ -94,6 +98,8 @@
       "DepthScaleCompressed": "Compressed (sqrt)",
       "DepthScaleLinear": "Linear (proportional)",
       "DepthScaleDramatic": "Dramatic (super-linear)",
+      "ElevationScale": "Elevation Scale",
+      "ElevationScaleHint": "Multiplies visual elevation depth without changing token elevation values. 1 keeps the current scaling; 5 makes elevation 2 render like elevation 10.",
       "OverlayScale": "Overlay Scale",
       "OverlayScaleHint": "Scale elevated overlays as positive elevation increases, making higher layers feel closer to the viewport.",
       "OverlayScaleShrinkMedium": "Shrink medium",
@@ -197,6 +203,10 @@
         "depthScaleOverride": {
           "label": "Depth scale",
           "hint": "Optional depth scale for this region only. Use scene setting keeps the scene-level depth scale."
+        },
+        "elevationScaleOverride": {
+          "label": "Elevation scale",
+          "hint": "Optional visual elevation multiplier for this region only. Use scene setting keeps the scene-level elevation scale."
         },
         "modifyTokenElevation": {
           "label": "Modify token elevation",

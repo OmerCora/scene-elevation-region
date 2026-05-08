@@ -1,4 +1,4 @@
-import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey, elevationScaleValue } from "./config.mjs";
 
 /**
  * Per-draw settings cache. `getSceneElevationSettings()` rebuilds via two deep clones
@@ -25,6 +25,12 @@ const VELOCITY_CAMERA_MULTIPLIER = 0.9;
 const VELOCITY_PARALLAX_DECAY = 0.82;
 const ANCHORED_VELOCITY_ANCHOR_WEIGHT = 0.6;
 const ANCHORED_VELOCITY_DRIFT_WEIGHT = 0.55;
+const LAYERED_CAMERA_MULTIPLIER = 1.12;
+const AXIS_SCROLL_CAMERA_MULTIPLIER = 1.15;
+const MOUSE_PARALLAX_MULTIPLIER = 1.45;
+const FADE_ZOOM_SCALE_BOOST = 0.18;
+const FADE_ZOOM_ALPHA_BASE = 0.78;
+const FADE_ZOOM_ALPHA_BOOST = 0.28;
 const CARD_TRANSITION_SHIFT_RATIO = 0.28;
 const TRANSITION_TEXTURE_SHIFT_RATIO = 0.55;
 const TRANSITION_WIDTH_MIN = 2;
@@ -204,6 +210,7 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
       shadowLengthOverride: _shadowLengthOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.SHADOW_LENGTH, behavior.system?.shadowLengthOverride ?? sourceSystem.shadowLengthOverride)),
       blendModeOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.BLEND_MODE, behavior.system?.blendModeOverride ?? sourceSystem.blendModeOverride), BLEND_MODES),
       depthScaleOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.DEPTH_SCALE, behavior.system?.depthScaleOverride ?? sourceSystem.depthScaleOverride), DEPTH_SCALES),
+      elevationScaleOverride: _elevationScaleOverride(behavior.system?.elevationScaleOverride ?? sourceSystem.elevationScaleOverride),
       parallaxHeightContrastOverride: _keyOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST, behavior.system?.parallaxHeightContrastOverride ?? sourceSystem.parallaxHeightContrastOverride), PARALLAX_HEIGHT_CONTRASTS),
       modifyTokenElevation: behavior.system?.modifyTokenElevation !== false,
       modifyTokenScaling: behavior.system?.modifyTokenScaling !== false
@@ -261,6 +268,11 @@ function _shadowLengthOverride(value) {
   if (!override) return "";
   if (Object.prototype.hasOwnProperty.call(SHADOW_LENGTHS, override)) return override;
   return Number.isFinite(Number(override)) ? shadowLengthKey(value) : "";
+}
+
+function _elevationScaleOverride(value) {
+  if (String(value ?? "").trim() === "") return null;
+  return elevationScaleValue(value);
 }
 
 function _regionPresetOverride(value) {
@@ -514,6 +526,9 @@ export class RegionElevationRenderer {
     this._visualParams = new Map();
     this._generatedTextureCache = new Map();
     this._needsParallaxFrame = false;
+    this._pointerEventTarget = null;
+    this._pointerMoveHandler = null;
+    this._pointerFocus = null;
   }
 
   attach(scene) {
@@ -536,6 +551,10 @@ export class RegionElevationRenderer {
     canvas.primary.addChild(mask);
     canvas.primary.addChild(container);
 
+    this._pointerMoveHandler = event => this._onPointerMove(event);
+    this._pointerEventTarget = canvas.app?.view ?? canvas.app?.renderer?.view ?? canvas.app?.canvas ?? null;
+    this._pointerEventTarget?.addEventListener?.("pointermove", this._pointerMoveHandler, { passive: true });
+
     this._scene = scene;
     this.container = container;
     this.mask = mask;
@@ -546,6 +565,7 @@ export class RegionElevationRenderer {
   detach() {
     if (this._panRaf) cancelAnimationFrame(this._panRaf);
     this._panRaf = null;
+    try { this._pointerEventTarget?.removeEventListener?.("pointermove", this._pointerMoveHandler); } catch (err) {}
     try { this.container?.parent?.removeChild(this.container); } catch (err) {}
     try { this.mask?.parent?.removeChild(this.mask); } catch (err) {}
     this.container?.destroy({ children: true });
@@ -560,6 +580,9 @@ export class RegionElevationRenderer {
     this._parallaxState.clear();
     this._visualParams.clear();
     this._needsParallaxFrame = false;
+    this._pointerEventTarget = null;
+    this._pointerMoveHandler = null;
+    this._pointerFocus = null;
   }
 
   update() {
@@ -629,6 +652,34 @@ export class RegionElevationRenderer {
     return changed;
   }
 
+  _onPointerMove(event) {
+    if (!this.container?.visible || !this._usesPointerParallax()) return;
+    const focus = this._pointerFocusFromEvent(event);
+    if (!focus) return;
+    const changed = !this._pointerFocus
+      || Math.abs(focus.x - this._pointerFocus.x) > 0.5
+      || Math.abs(focus.y - this._pointerFocus.y) > 0.5;
+    this._pointerFocus = focus;
+    if (changed) this._requestParallaxFrame();
+  }
+
+  _pointerFocusFromEvent(event) {
+    if (!this.container || !Number.isFinite(event?.clientX) || !Number.isFinite(event?.clientY)) return null;
+    const renderer = canvas.app?.renderer;
+    const parent = this.container.parent ?? canvas.stage;
+    const global = new PIXI.Point();
+    try {
+      renderer?.events?.mapPositionToPoint?.(global, event.clientX, event.clientY);
+    } catch (err) {}
+    if (!Number.isFinite(global.x) || !Number.isFinite(global.y) || (global.x === 0 && global.y === 0)) {
+      const rect = renderer?.view?.getBoundingClientRect?.() ?? canvas.app?.view?.getBoundingClientRect?.();
+      if (!rect) return null;
+      global.set(event.clientX - rect.left, event.clientY - rect.top);
+    }
+    const point = parent.toLocal(global);
+    return Number.isFinite(point.x) && Number.isFinite(point.y) ? { x: point.x, y: point.y } : null;
+  }
+
   _pruneParallaxState() {
     const activeKeys = new Set(this._entries.map(visual => this._parallaxStateKey(visual)));
     for (const key of this._parallaxState.keys()) {
@@ -638,6 +689,11 @@ export class RegionElevationRenderer {
 
   _hasActiveParallax() {
     return _parallaxEnabled() || this._entries.some(visual => _parallaxStrengthForKey(visual.entry.parallaxStrengthOverride) > 0);
+  }
+
+  _usesPointerParallax() {
+    return _parallaxMode() === PARALLAX_MODES.MOUSE
+      || this._entries.some(visual => visual.entry.parallaxModeOverride === PARALLAX_MODES.MOUSE);
   }
 
   _visualEntries(scene) {
@@ -701,6 +757,7 @@ export class RegionElevationRenderer {
       const overlayScaleStrength = _overlayScaleStrength();
       const shadowMode = _shadowMode();
       const depthScale = _depthScale();
+      const elevationScale = _elevationScale();
       const shadowLength = _shadowLength();
       const perspectivePointMode = _perspectivePointMode();
       const visualParams = [];
@@ -713,9 +770,10 @@ export class RegionElevationRenderer {
         const visualShadowMode = visual.entry.shadowModeOverride || shadowMode;
         const visualShadowLength = visual.entry.shadowLengthOverride ? shadowLengthValue(visual.entry.shadowLengthOverride) : shadowLength;
         const visualDepthScale = visual.entry.depthScaleOverride || depthScale;
+        const visualElevationScale = visual.entry.elevationScaleOverride ?? elevationScale;
         const visualParallaxHeightContrast = visual.entry.parallaxHeightContrastOverride ? parallaxHeightContrastValue(visual.entry.parallaxHeightContrastOverride) : parallaxHeightContrast;
         const perspectivePoint = _perspectivePoint(geo, visual.bounds, visualPerspectivePointMode);
-        const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualShadowLength, visualParallaxHeightContrast);
+        const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualElevationScale, visualShadowLength, visualParallaxHeightContrast);
         this._visualParams.set(this._parallaxStateKey(visual), params);
         visualParams.push({ visual, params });
       }
@@ -772,16 +830,17 @@ export class RegionElevationRenderer {
     return _validTexture(texture) ? texture : null;
   }
 
-  _regionVisualParameters(visual, geo, parallax, parallaxMode, blendMode, overlayScaleStrength, shadowMode, perspectivePoint, depthScale = DEPTH_SCALES.COMPRESSED, shadowLength = 1, parallaxHeightContrast = 1) {
+  _regionVisualParameters(visual, geo, parallax, parallaxMode, blendMode, overlayScaleStrength, shadowMode, perspectivePoint, depthScale = DEPTH_SCALES.COMPRESSED, elevationScale = 1, shadowLength = 1, parallaxHeightContrast = 1) {
     const gridSize = geo.gridSize;
     const { entry, bounds } = visual;
     const reference = DEPTH_SCALE_REFERENCE[depthScale] ?? DEPTH_SCALE_REFERENCE[DEPTH_SCALES.COMPRESSED];
+    const visualElevationScale = elevationScaleValue(elevationScale);
     const visualElevation = visual.visualElevation ?? entry.elevation;
     const rawAbsElevation = entry.slope ? (entry.maxAbsElevation ?? Math.abs(visualElevation)) : Math.abs(visualElevation);
-    const absElevation = rawAbsElevation;
+    const absElevation = rawAbsElevation * visualElevationScale;
     const magnitude = Math.min(absElevation, reference);
     const normalized = Math.clamp(_depthNormalize(magnitude, reference, depthScale), 0.1, 1);
-    const absDelta = Math.abs(visual.elevationDelta ?? entry.elevation);
+    const absDelta = Math.abs(visual.elevationDelta ?? entry.elevation) * visualElevationScale;
     const deltaMagnitude = Math.min(absDelta, reference);
     const transitionNormalized = Math.clamp(_depthNormalize(deltaMagnitude, reference, depthScale), 0.1, 1);
     const isHole = entry.slope ? entry.highestElevation < 0 : visualElevation < 0;
@@ -801,7 +860,7 @@ export class RegionElevationRenderer {
     const sign = isHole ? -1 : 1;
     const overlayScaleDepth = _overlayScaleDepthFactor(absElevation, reference, depthScale);
     const overlayScaleDelta = overlayScaleDepth * (overlayScaleStrength + (blendProfile.overlayScaleBonus ?? 0)) * sign;
-    const overlayScale = 1 + overlayScaleDelta;
+    let overlayScale = 1 + overlayScaleDelta;
     const perspectiveDistance = Math.hypot(perspectivePoint.x - bounds.center.x, perspectivePoint.y - bounds.center.y);
     const distanceBoost = _parallaxDistanceBoost(perspectiveDistance, geo);
     const liftFactor = _depthLiftFactor(absElevation, depthScale);
@@ -820,9 +879,13 @@ export class RegionElevationRenderer {
     const heightAdjustedParallax = parallax * parallaxHeightFactor;
     const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * parallaxLift * sign, y: baseParallaxDirection.y * parallaxLift * sign } : { x: 0, y: 0 };
     const parallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, parallaxLift, sign, heightAdjustedParallax) : { x: 0, y: 0 };
+    const modeEffects = this._parallaxVisualEffectsForMode(visual, geo, parallaxMode, parallaxVector, parallaxLift, sign, heightAdjustedParallax, normalized);
+    overlayScale *= modeEffects.overlayScaleMultiplier ?? 1;
+    const overlayScaleX = overlayScale * (modeEffects.overlayScaleXMultiplier ?? 1);
+    const overlayScaleY = overlayScale * (modeEffects.overlayScaleYMultiplier ?? 1);
     const blendDirection = parallax > 0 ? (_vectorDirection(parallaxVector) ?? baseParallaxDirection) : STATIC_SHADOW_DIRECTION;
     const overlayOffset = this._overlayOffsetForMode(parallaxVector, parallaxMode);
-    const textureShift = { x: 0, y: 0 };
+    const textureShift = modeEffects.textureShift ?? { x: 0, y: 0 };
     const transitionShift = this._transitionShiftForMode(parallaxVector, parallaxMode, blendProfile);
     const longShadowBlend = Math.clamp((shadowLengthMultiplier - SHADOW_BRIDGE_THRESHOLD) / 2.6, 0, 1);
     const softShadowOffset = {
@@ -940,6 +1003,11 @@ export class RegionElevationRenderer {
       center: bounds.center,
       projectionCenter: useProjectionPerspective ? perspectivePoint : bounds.center,
       overlayScale,
+      overlayScaleX,
+      overlayScaleY,
+      overlayRotation: modeEffects.overlayRotation ?? 0,
+      overlaySkewX: modeEffects.overlaySkewX ?? 0,
+      overlaySkewY: modeEffects.overlaySkewY ?? 0,
       overlayOffset,
       textureShift,
       transitionShift,
@@ -959,7 +1027,7 @@ export class RegionElevationRenderer {
       textureSoftShadowAlpha: textureSoftShadowAlphaBase,
       textureBridgeShadowAlpha,
       textureContactShadowAlpha: textureContactShadowAlphaBase,
-      overlayAlpha: blendWidth > 0 ? blendProfile.overlayAlpha : 1,
+      overlayAlpha: Math.clamp((blendWidth > 0 ? blendProfile.overlayAlpha : 1) * (modeEffects.overlayAlphaMultiplier ?? 1), 0, 1),
       edgeGlueAlpha,
       edgeGlueBlur: Math.clamp(blendWidth * blendProfile.glueBlurMultiplier, 0, blendWidth * 1.7),
       softShadowOffset,
@@ -988,10 +1056,14 @@ export class RegionElevationRenderer {
 
   _overlayOffsetForMode(parallaxVector, parallaxMode) {
     switch (parallaxMode) {
-      case PARALLAX_MODES.CARD:
       case PARALLAX_MODES.ANCHORED_CARD:
       case PARALLAX_MODES.VELOCITY_CARD:
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
+      case PARALLAX_MODES.LAYERED:
+      case PARALLAX_MODES.HORIZONTAL_SCROLL:
+      case PARALLAX_MODES.VERTICAL_SCROLL:
+      case PARALLAX_MODES.MOUSE:
+      case PARALLAX_MODES.FADE_ZOOM:
         return parallaxVector;
       case PARALLAX_MODES.SHADOW:
       default:
@@ -1001,10 +1073,14 @@ export class RegionElevationRenderer {
 
   _transitionShiftForMode(parallaxVector, parallaxMode, blendProfile) {
     switch (parallaxMode) {
-      case PARALLAX_MODES.CARD:
       case PARALLAX_MODES.ANCHORED_CARD:
       case PARALLAX_MODES.VELOCITY_CARD:
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
+      case PARALLAX_MODES.LAYERED:
+      case PARALLAX_MODES.HORIZONTAL_SCROLL:
+      case PARALLAX_MODES.VERTICAL_SCROLL:
+      case PARALLAX_MODES.MOUSE:
+      case PARALLAX_MODES.FADE_ZOOM:
         return { x: parallaxVector.x * CARD_TRANSITION_SHIFT_RATIO, y: parallaxVector.y * CARD_TRANSITION_SHIFT_RATIO };
       case PARALLAX_MODES.SHADOW:
       default:
@@ -1020,21 +1096,71 @@ export class RegionElevationRenderer {
         return this._velocityParallaxVector(visual, lift, sign, parallax);
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
         return this._anchoredVelocityParallaxVector(visual, lift, sign, parallax);
+      case PARALLAX_MODES.LAYERED:
+        return this._layeredParallaxVector(visual, lift, sign, parallax);
+      case PARALLAX_MODES.HORIZONTAL_SCROLL:
+        return this._axisScrollParallaxVector(visual, lift, sign, parallax, "x");
+      case PARALLAX_MODES.VERTICAL_SCROLL:
+        return this._axisScrollParallaxVector(visual, lift, sign, parallax, "y");
+      case PARALLAX_MODES.MOUSE:
+        return this._mouseParallaxVector(visual, lift, sign, parallax);
+      case PARALLAX_MODES.FADE_ZOOM:
+        return this._anchoredParallaxVectorWithMultiplier(visual, lift, sign, parallax, ANCHORED_CAMERA_MULTIPLIER * 0.92, "fadeZoomAnchorFocus");
       default:
         return baseVector;
     }
   }
 
   _anchoredParallaxVector(visual, lift, sign, parallax) {
+    return this._anchoredParallaxVectorWithMultiplier(visual, lift, sign, parallax, ANCHORED_CAMERA_MULTIPLIER, "anchorFocus");
+  }
+
+  _anchoredParallaxVectorWithMultiplier(visual, lift, sign, parallax, multiplier, anchorKey) {
     const focus = this._cameraFocus;
     if (!focus) return { x: 0, y: 0 };
     const state = this._parallaxStateFor(visual);
-    state.anchorFocus ??= { x: focus.x, y: focus.y };
+    state[anchorKey] ??= { x: focus.x, y: focus.y };
+    const anchor = state[anchorKey];
     const vector = {
-      x: (focus.x - state.anchorFocus.x) * parallax * ANCHORED_CAMERA_MULTIPLIER * sign,
-      y: (focus.y - state.anchorFocus.y) * parallax * ANCHORED_CAMERA_MULTIPLIER * sign
+      x: (focus.x - anchor.x) * parallax * multiplier * sign,
+      y: (focus.y - anchor.y) * parallax * multiplier * sign
     };
     return _limitVector(vector, lift);
+  }
+
+  _layeredParallaxVector(visual, lift, sign, parallax) {
+    return this._anchoredParallaxVectorWithMultiplier(visual, lift, sign, parallax, LAYERED_CAMERA_MULTIPLIER, "layeredAnchorFocus");
+  }
+
+  _axisScrollParallaxVector(visual, lift, sign, parallax, axis, anchorKey = `${axis}ScrollAnchorFocus`, multiplier = AXIS_SCROLL_CAMERA_MULTIPLIER) {
+    const vector = this._anchoredParallaxVectorWithMultiplier(visual, lift, sign, parallax, multiplier, anchorKey);
+    if (axis === "x") return { x: vector.x, y: 0 };
+    if (axis === "y") return { x: 0, y: vector.y };
+    return vector;
+  }
+
+  _mouseParallaxVector(visual, lift, sign, parallax) {
+    const pointer = this._pointerFocus;
+    const focus = this._cameraFocus;
+    if (!pointer || !focus) return { x: 0, y: 0 };
+    return _limitVector({
+      x: (pointer.x - focus.x) * parallax * MOUSE_PARALLAX_MULTIPLIER * sign,
+      y: (pointer.y - focus.y) * parallax * MOUSE_PARALLAX_MULTIPLIER * sign
+    }, lift);
+  }
+
+  _parallaxVisualEffectsForMode(visual, geo, parallaxMode, parallaxVector, lift, sign, parallax, normalized) {
+    const length = Math.hypot(parallaxVector.x, parallaxVector.y);
+    const intensity = Math.clamp(length / Math.max(1, lift), 0, 1);
+    switch (parallaxMode) {
+      case PARALLAX_MODES.FADE_ZOOM:
+        return {
+          overlayScaleMultiplier: 1 + (normalized * 0.35 + intensity * 0.65) * FADE_ZOOM_SCALE_BOOST * sign,
+          overlayAlphaMultiplier: Math.clamp(FADE_ZOOM_ALPHA_BASE + intensity * FADE_ZOOM_ALPHA_BOOST, 0.45, 1)
+        };
+      default:
+        return {};
+    }
   }
 
   _anchoredVelocityParallaxVector(visual, lift, sign, parallax) {
@@ -1121,7 +1247,9 @@ export class RegionElevationRenderer {
       params.center.x + (includeOverlayOffset ? params.overlayOffset.x : 0),
       params.center.y + (includeOverlayOffset ? params.overlayOffset.y : 0)
     );
-    displayObject.scale.set(params.overlayScale);
+    displayObject.scale.set(params.overlayScaleX ?? params.overlayScale, params.overlayScaleY ?? params.overlayScale);
+    displayObject.rotation = params.overlayRotation ?? 0;
+    displayObject.skew?.set?.(params.overlaySkewX ?? 0, params.overlaySkewY ?? 0);
   }
 
   _slopeElevationAtPoint(point, params) {
@@ -1696,18 +1824,13 @@ export class RegionElevationRenderer {
     this._applyRegionTransform(overlay, params);
 
     if (texture) {
-      const sprite = new PIXI.Sprite(texture);
-      sprite.eventMode = "none";
-      sprite.position.set(geo.x + params.textureShift.x, geo.y + params.textureShift.y);
-      sprite.width = geo.width;
-      sprite.height = geo.height;
-      sprite.alpha = params.overlayAlpha;
       const mask = params.blendWidth > 0
         ? this._createFeatherMask(paths, params.blendWidth)
         : this._createMask(paths);
-      sprite.mask = mask;
+      const textureLayer = this._createOverlayTextureLayer(texture, geo, params);
+      textureLayer.mask = mask;
       overlay.addChild(mask);
-      overlay.addChild(sprite);
+      overlay.addChild(textureLayer);
     } else {
       const fallback = new PIXI.Graphics();
       fallback.eventMode = "none";
@@ -1718,6 +1841,19 @@ export class RegionElevationRenderer {
     }
 
     return overlay;
+  }
+
+  _createOverlayTextureLayer(texture, geo, params) {
+    const layer = new PIXI.Container();
+    layer.eventMode = "none";
+    const sprite = new PIXI.Sprite(texture);
+    sprite.eventMode = "none";
+    sprite.position.set(geo.x + params.textureShift.x, geo.y + params.textureShift.y);
+    sprite.width = geo.width;
+    sprite.height = geo.height;
+    sprite.alpha = params.overlayAlpha;
+    layer.addChild(sprite);
+    return layer;
   }
 
   _createSlopedOverlay(paths, texture, geo, params) {
@@ -1926,8 +2062,8 @@ function _vectorDirection(vector) {
 }
 
 function _parallaxMode() {
-  const mode = _setting(SCENE_SETTING_KEYS.PARALLAX_MODE) ?? PARALLAX_MODES.CARD;
-  return Object.values(PARALLAX_MODES).includes(mode) ? mode : PARALLAX_MODES.CARD;
+  const mode = _setting(SCENE_SETTING_KEYS.PARALLAX_MODE) ?? PARALLAX_MODES.ANCHORED_CARD;
+  return Object.values(PARALLAX_MODES).includes(mode) ? mode : PARALLAX_MODES.ANCHORED_CARD;
 }
 
 function _blendMode() {
@@ -2008,6 +2144,10 @@ function _shadowLengthMultiplier(value) {
 function _depthScale() {
   const scale = _setting(SCENE_SETTING_KEYS.DEPTH_SCALE) ?? DEPTH_SCALES.COMPRESSED;
   return Object.values(DEPTH_SCALES).includes(scale) ? scale : DEPTH_SCALES.COMPRESSED;
+}
+
+function _elevationScale() {
+  return elevationScaleValue(_setting(SCENE_SETTING_KEYS.ELEVATION_SCALE));
 }
 
 function _sunShadowState(shadowMode, geo, bounds) {

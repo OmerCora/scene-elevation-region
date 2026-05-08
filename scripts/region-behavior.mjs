@@ -1,4 +1,4 @@
-import { BLEND_MODES, DEPTH_SCALES, ELEVATION_PRESETS, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, shadowLengthKey } from "./config.mjs";
+import { BLEND_MODES, DEPTH_SCALES, ELEVATION_PRESETS, ELEVATION_SCALE_LIMITS, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, shadowLengthKey } from "./config.mjs";
 
 const fields = foundry.data.fields;
 const USE_SCENE_SETTING = "";
@@ -23,10 +23,14 @@ const PARALLAX_STRENGTH_CHOICES = Object.freeze({
 
 const PARALLAX_MODE_CHOICES = Object.freeze({
   [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  [PARALLAX_MODES.CARD]: "SCENE_ELEVATION.Settings.ParallaxModeCard",
   [PARALLAX_MODES.ANCHORED_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard",
   [PARALLAX_MODES.VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard",
   [PARALLAX_MODES.ANCHORED_VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard",
+  [PARALLAX_MODES.LAYERED]: "SCENE_ELEVATION.Settings.ParallaxModeLayered",
+  [PARALLAX_MODES.HORIZONTAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeHorizontalScroll",
+  [PARALLAX_MODES.VERTICAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeVerticalScroll",
+  [PARALLAX_MODES.MOUSE]: "SCENE_ELEVATION.Settings.ParallaxModeMouse",
+  [PARALLAX_MODES.FADE_ZOOM]: "SCENE_ELEVATION.Settings.ParallaxModeFadeZoom",
   [PARALLAX_MODES.SHADOW]: "SCENE_ELEVATION.Settings.ParallaxModeShadow"
 });
 
@@ -90,6 +94,14 @@ const DEPTH_SCALE_CHOICES = Object.freeze({
   [DEPTH_SCALES.DRAMATIC]: "SCENE_ELEVATION.Settings.DepthScaleDramatic"
 });
 
+const ELEVATION_SCALE_CHOICES = Object.freeze(Object.fromEntries([
+  [USE_SCENE_SETTING, "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting"],
+  ...Array.from({ length: ELEVATION_SCALE_LIMITS.MAX - ELEVATION_SCALE_LIMITS.MIN + 1 }, (_, index) => {
+    const value = String(ELEVATION_SCALE_LIMITS.MIN + index);
+    return [value, value];
+  })
+]));
+
 const PARALLAX_HEIGHT_CONTRAST_CHOICES = Object.freeze({
   [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
   normal: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNormal",
@@ -119,6 +131,14 @@ function _presetOverrideChoice(value) {
   const preset = String(value ?? USE_SCENE_SETTING);
   if (!preset) return USE_SCENE_SETTING;
   return Object.values(ELEVATION_PRESETS).includes(preset) ? preset : ELEVATION_PRESETS.CUSTOM;
+}
+
+function _elevationScaleOverrideChoice(value) {
+  const override = String(value ?? USE_SCENE_SETTING).trim();
+  if (!override) return USE_SCENE_SETTING;
+  const number = Number(override);
+  if (!Number.isInteger(number)) return USE_SCENE_SETTING;
+  return number >= ELEVATION_SCALE_LIMITS.MIN && number <= ELEVATION_SCALE_LIMITS.MAX ? String(number) : USE_SCENE_SETTING;
 }
 
 function _numberValue(value, fallback = 0) {
@@ -160,6 +180,7 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
 
   static migrateData(data) {
     data.presetOverride = _presetOverrideChoice(data.presetOverride);
+    data.elevationScaleOverride = _elevationScaleOverrideChoice(data.elevationScaleOverride);
     if (data.shadowModeOverride && !Object.values(SHADOW_MODES).includes(String(data.shadowModeOverride))) data.shadowModeOverride = SHADOW_MODES.TOP_DOWN;
     data.shadowLengthOverride = _shadowLengthChoice(data.shadowLengthOverride);
     data.slope = _booleanValue(data.slope, false);
@@ -278,6 +299,13 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         initial: USE_SCENE_SETTING,
         choices: DEPTH_SCALE_CHOICES,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.depthScaleOverride.label"
+      }),
+      elevationScaleOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: ELEVATION_SCALE_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.elevationScaleOverride.label"
       }),
       modifyTokenElevation: new fields.BooleanField({
         required: true,
