@@ -159,15 +159,37 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
     const behavior = region.behaviors?.find(b => b.type === REGION_BEHAVIOR_TYPE && !b.disabled);
     if (!behavior) continue;
     const sourceSystem = behavior._source?.system ?? {};
-    const elevation = Number(behavior.system?.elevation ?? sourceSystem.elevation ?? sourceSystem.height ?? 0);
+    const flatElevation = _finiteNumber(behavior.system?.elevation ?? sourceSystem.elevation ?? sourceSystem.height, 0);
+    const slope = (behavior.system?.slope ?? sourceSystem.slope) === true;
+    let lowestElevation = _finiteNumber(behavior.system?.slopeLowestElevation ?? sourceSystem.slopeLowestElevation, flatElevation);
+    let highestElevation = _finiteNumber(behavior.system?.slopeHighestElevation ?? sourceSystem.slopeHighestElevation, flatElevation);
+    if (!slope) {
+      lowestElevation = flatElevation;
+      highestElevation = flatElevation;
+    } else if (lowestElevation > highestElevation) {
+      [lowestElevation, highestElevation] = [highestElevation, lowestElevation];
+    }
+    const elevation = slope ? (lowestElevation + highestElevation) / 2 : flatElevation;
     const shadowStrength = Number(behavior.system?.shadowStrength ?? sourceSystem.shadowStrength ?? SHADOW_STRENGTH_LIMITS.DEFAULT);
     if (!Number.isFinite(elevation)) continue;
-    const paths = pathCache ? _regionPaths(region) : null;
+    const paths = (pathCache || slope) ? _regionPaths(region) : null;
     if (pathCache) pathCache.set(region, paths);
+    const slopeDirection = _normalizeDegrees(behavior.system?.slopeDirection ?? sourceSystem.slopeDirection ?? 0);
+    const slopeVector = _slopeDirectionVector(slopeDirection);
+    const slopeRange = slope && paths?.length ? _slopeProjectionRange(paths, slopeVector) : null;
     entries.push({
       region,
       behavior,
+      flatElevation,
       elevation,
+      maxAbsElevation: slope ? Math.max(Math.abs(lowestElevation), Math.abs(highestElevation), Math.abs(elevation)) : Math.abs(elevation),
+      slope,
+      lowestElevation,
+      highestElevation,
+      slopeDirection,
+      slopeVector,
+      slopeMinProjection: slopeRange?.min ?? 0,
+      slopeMaxProjection: slopeRange?.max ?? 0,
       shadowStrength: Math.clamp(Number.isFinite(shadowStrength) ? shadowStrength : SHADOW_STRENGTH_LIMITS.DEFAULT, SHADOW_STRENGTH_LIMITS.MIN, SHADOW_STRENGTH_LIMITS.MAX),
       area: _regionArea(region, paths),
       parallaxStrengthOverride: _keyOverride(behavior.system?.parallaxStrengthOverride ?? sourceSystem.parallaxStrengthOverride, PARALLAX_STRENGTHS),
@@ -196,17 +218,18 @@ export function getRegionElevationStateAtPoint(point, scene = canvas?.scene, ent
     if (options.requireTokenElevation && !candidate.modifyTokenElevation) continue;
     if (options.requireTokenScaling && !candidate.modifyTokenScaling) continue;
     if (!_regionContains(candidate.region, point)) continue;
+    const candidateElevation = _entryElevationAtPoint(candidate, point);
     if (options.preferHighest) {
-      if (!found || candidate.elevation > elevation) {
-        elevation = candidate.elevation;
+      if (!found || candidateElevation > elevation) {
+        elevation = candidateElevation;
         entry = candidate;
       }
       found = true;
       continue;
     }
     const candidateArea = candidate.area || Infinity;
-    if (!found || candidateArea < area || (candidateArea === area && candidate.elevation > elevation)) {
-      elevation = candidate.elevation;
+    if (!found || candidateArea < area || (candidateArea === area && candidateElevation > elevation)) {
+      elevation = candidateElevation;
       entry = candidate;
       area = candidateArea;
     }
@@ -234,6 +257,44 @@ function _shadowLengthOverride(value) {
   if (!override) return "";
   if (Object.prototype.hasOwnProperty.call(SHADOW_LENGTHS, override)) return override;
   return Number.isFinite(Number(override)) ? shadowLengthKey(value) : "";
+}
+
+function _finiteNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function _normalizeDegrees(value) {
+  const number = _finiteNumber(value, 0);
+  return ((number % 360) + 360) % 360;
+}
+
+function _slopeDirectionVector(degrees) {
+  const radians = (_normalizeDegrees(degrees) * Math.PI) / 180;
+  return { x: Math.sin(radians), y: -Math.cos(radians) };
+}
+
+function _slopeProjectionRange(paths, vector) {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const path of paths) {
+    for (const point of path) {
+      const projection = point.x * vector.x + point.y * vector.y;
+      min = Math.min(min, projection);
+      max = Math.max(max, projection);
+    }
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max) || Math.abs(max - min) < 1e-6) return null;
+  return { min, max };
+}
+
+function _entryElevationAtPoint(entry, point) {
+  if (!entry?.slope) return entry?.elevation ?? 0;
+  const range = entry.slopeMaxProjection - entry.slopeMinProjection;
+  if (!Number.isFinite(range) || Math.abs(range) < 1e-6) return entry.elevation ?? 0;
+  const projection = point.x * entry.slopeVector.x + point.y * entry.slopeVector.y;
+  const t = Math.clamp((projection - entry.slopeMinProjection) / range, 0, 1);
+  return entry.lowestElevation + (entry.highestElevation - entry.lowestElevation) * t;
 }
 
 function _regionContains(region, point) {
@@ -297,6 +358,17 @@ function _pathArea(path) {
     area += point.x * next.y - next.x * point.y;
   }
   return Math.abs(area) / 2;
+}
+
+function _pathCentroid(path) {
+  if (!path?.length) return null;
+  let x = 0;
+  let y = 0;
+  for (const point of path) {
+    x += point.x;
+    y += point.y;
+  }
+  return { x: x / path.length, y: y / path.length };
 }
 
 function _regionArea(region, paths = null) {
@@ -508,8 +580,10 @@ export class RegionElevationRenderer {
     if (!state.found) return { x: 0, y: 0 };
     const visual = this._entries.find(candidate => candidate.entry === state.entry);
     if (!visual) return { x: 0, y: 0 };
-    const offset = this._visualParams.get(this._parallaxStateKey(visual))?.overlayOffset;
-    return offset ? { x: offset.x, y: offset.y } : { x: 0, y: 0 };
+    const params = this._visualParams.get(this._parallaxStateKey(visual));
+    if (!params) return { x: 0, y: 0 };
+    if (params.slope) return this._slopeOverlayOffsetAtPoint(point, params);
+    return params.overlayOffset ? { x: params.overlayOffset.x, y: params.overlayOffset.y } : { x: 0, y: 0 };
   }
 
   _updateCameraFocus(force) {
@@ -549,11 +623,11 @@ export class RegionElevationRenderer {
         const bounds = paths.length ? _cachedPathsBounds(paths) : null;
         return { entry, paths, bounds };
       })
-      .filter(visual => visual.paths.length && visual.bounds && Math.abs(visual.entry.elevation) >= MIN_ELEVATION_DELTA);
+      .filter(visual => visual.paths.length && visual.bounds && (visual.entry.maxAbsElevation ?? Math.abs(visual.entry.elevation)) >= MIN_ELEVATION_DELTA);
     visuals = visuals
       .map(visual => this._withNearestLowerLayer(visual, visuals))
       .sort((left, right) => {
-        const elevation = left.entry.elevation - right.entry.elevation;
+        const elevation = left.visualElevation - right.visualElevation;
         if (Math.abs(elevation) > 0.001) return elevation;
         return (right.entry.area || 0) - (left.entry.area || 0);
       });
@@ -564,20 +638,23 @@ export class RegionElevationRenderer {
     let lowerElevation = 0;
     let lowerArea = Infinity;
     const point = visual.bounds.center;
+    const visualElevation = _entryElevationAtPoint(visual.entry, point);
     for (const candidate of visuals) {
       if (candidate.entry.region === visual.entry.region) continue;
-      if (candidate.entry.elevation >= visual.entry.elevation) continue;
+      const candidateElevation = _entryElevationAtPoint(candidate.entry, point);
+      if (candidateElevation >= visualElevation) continue;
       if (!_pathsContain(candidate.paths, point)) continue;
       const area = candidate.entry.area || Infinity;
-      if (candidate.entry.elevation > lowerElevation || (candidate.entry.elevation === lowerElevation && area < lowerArea)) {
-        lowerElevation = candidate.entry.elevation;
+      if (candidateElevation > lowerElevation || (candidateElevation === lowerElevation && area < lowerArea)) {
+        lowerElevation = candidateElevation;
         lowerArea = area;
       }
     }
     return {
       ...visual,
+      visualElevation,
       lowerElevation,
-      elevationDelta: visual.entry.elevation - lowerElevation
+      elevationDelta: visualElevation - lowerElevation
     };
   }
 
@@ -670,13 +747,14 @@ export class RegionElevationRenderer {
     const gridSize = geo.gridSize;
     const { entry, bounds } = visual;
     const reference = DEPTH_SCALE_REFERENCE[depthScale] ?? DEPTH_SCALE_REFERENCE[DEPTH_SCALES.COMPRESSED];
-    const absElevation = Math.abs(entry.elevation);
+    const visualElevation = visual.visualElevation ?? entry.elevation;
+    const absElevation = entry.slope ? (entry.maxAbsElevation ?? Math.abs(visualElevation)) : Math.abs(visualElevation);
     const magnitude = Math.min(absElevation, reference);
     const normalized = Math.clamp(_depthNormalize(magnitude, reference, depthScale), 0.1, 1);
     const absDelta = Math.abs(visual.elevationDelta ?? entry.elevation);
     const deltaMagnitude = Math.min(absDelta, reference);
     const transitionNormalized = Math.clamp(_depthNormalize(deltaMagnitude, reference, depthScale), 0.1, 1);
-    const isHole = entry.elevation < 0;
+    const isHole = entry.slope ? entry.highestElevation < 0 : visualElevation < 0;
     const baseParallaxDirection = parallax > 0 ? this._perspectiveDirection(bounds, perspectivePoint) : STATIC_SHADOW_DIRECTION;
     const sunShadow = _sunShadowState(shadowMode, geo, bounds);
     const shadowDirection = sunShadow?.direction ?? this._shadowDirection(bounds, parallax, shadowMode, perspectivePoint);
@@ -820,6 +898,13 @@ export class RegionElevationRenderer {
     );
     return {
       isHole,
+      slope: entry.slope && Math.abs(entry.highestElevation - entry.lowestElevation) >= MIN_ELEVATION_DELTA,
+      slopeLowestElevation: entry.lowestElevation,
+      slopeHighestElevation: entry.highestElevation,
+      slopeVector: entry.slopeVector,
+      slopeMinProjection: entry.slopeMinProjection,
+      slopeMaxProjection: entry.slopeMaxProjection,
+      slopeMaxAbsElevation: Math.max(entry.maxAbsElevation ?? absElevation, MIN_ELEVATION_DELTA),
       center: bounds.center,
       projectionCenter: useProjectionPerspective ? perspectivePoint : bounds.center,
       overlayScale,
@@ -1004,6 +1089,33 @@ export class RegionElevationRenderer {
       params.center.y + (includeOverlayOffset ? params.overlayOffset.y : 0)
     );
     displayObject.scale.set(params.overlayScale);
+  }
+
+  _slopeElevationAtPoint(point, params) {
+    const range = params.slopeMaxProjection - params.slopeMinProjection;
+    if (!Number.isFinite(range) || Math.abs(range) < 1e-6) return params.slopeLowestElevation;
+    const projection = point.x * params.slopeVector.x + point.y * params.slopeVector.y;
+    const t = Math.clamp((projection - params.slopeMinProjection) / range, 0, 1);
+    return params.slopeLowestElevation + (params.slopeHighestElevation - params.slopeLowestElevation) * t;
+  }
+
+  _slopeElevationFactorAtPoint(point, params) {
+    const maxAbs = Math.max(params.slopeMaxAbsElevation ?? 0, MIN_ELEVATION_DELTA);
+    return Math.clamp(this._slopeElevationAtPoint(point, params) / maxAbs, -1, 1);
+  }
+
+  _slopeOverlayOffsetAtPoint(point, params) {
+    const factor = this._slopeElevationFactorAtPoint(point, params);
+    return { x: params.overlayOffset.x * factor, y: params.overlayOffset.y * factor };
+  }
+
+  _slopedOverlayPoint(point, params) {
+    const factor = this._slopeElevationFactorAtPoint(point, params);
+    const scale = 1 + (params.overlayScale - 1) * factor;
+    return {
+      x: params.center.x + (point.x - params.center.x) * scale + params.overlayOffset.x * factor,
+      y: params.center.y + (point.y - params.center.y) * scale + params.overlayOffset.y * factor
+    };
   }
 
   _shadowDirection(bounds, parallax, shadowMode, perspectivePoint) {
@@ -1357,6 +1469,7 @@ export class RegionElevationRenderer {
   }
 
   _createOverlay(paths, texture, geo, params) {
+    if (params.slope && texture) return this._createSlopedOverlay(paths, texture, geo, params);
     const overlay = new PIXI.Container();
     overlay.eventMode = "none";
     this._applyRegionTransform(overlay, params);
@@ -1383,6 +1496,53 @@ export class RegionElevationRenderer {
       overlay.addChild(fallback);
     }
 
+    return overlay;
+  }
+
+  _createSlopedOverlay(paths, texture, geo, params) {
+    const Mesh = PIXI.Mesh;
+    const MeshGeometry = PIXI.MeshGeometry;
+    const MeshMaterial = PIXI.MeshMaterial;
+    if (!Mesh || !MeshGeometry || !MeshMaterial) return null;
+
+    const overlay = new PIXI.Container();
+    overlay.eventMode = "none";
+    for (const path of paths) {
+      if (!path || path.length < 3) continue;
+      const center = _pathCentroid(path) ?? params.center;
+      const vertices = [center, ...path];
+      const positions = new Float32Array(vertices.length * 2);
+      const uvs = new Float32Array(vertices.length * 2);
+      const indexArray = vertices.length > 65535 ? Uint32Array : Uint16Array;
+      const indices = new indexArray(path.length * 3);
+
+      for (let index = 0; index < vertices.length; index++) {
+        const source = vertices[index];
+        const displaced = this._slopedOverlayPoint(source, params);
+        const offset = index * 2;
+        positions[offset] = displaced.x;
+        positions[offset + 1] = displaced.y;
+        uvs[offset] = Math.clamp((source.x - geo.x) / geo.width, 0, 1);
+        uvs[offset + 1] = Math.clamp((source.y - geo.y) / geo.height, 0, 1);
+      }
+      for (let index = 0; index < path.length; index++) {
+        const offset = index * 3;
+        indices[offset] = 0;
+        indices[offset + 1] = index + 1;
+        indices[offset + 2] = index === path.length - 1 ? 1 : index + 2;
+      }
+
+      const meshGeo = new MeshGeometry(positions, uvs, indices);
+      const material = new MeshMaterial(texture, { alpha: params.overlayAlpha });
+      const mesh = new Mesh(meshGeo, material);
+      mesh.eventMode = "none";
+      overlay.addChild(mesh);
+    }
+
+    if (!overlay.children.length) {
+      overlay.destroy({ children: true });
+      return null;
+    }
     return overlay;
   }
 

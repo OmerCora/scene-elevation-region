@@ -560,7 +560,8 @@ function _shiftHitArea(hitArea, offset) {
 }
 
 function _patchTokenHudPositioning() {
-  const hudClasses = [CONFIG.Token?.hudClass, foundry.applications?.hud?.TokenHUD, globalThis.TokenHUD].filter(Boolean);
+  const globalTokenHud = Object.getOwnPropertyDescriptor(globalThis, "TokenHUD")?.value;
+  const hudClasses = [CONFIG.Token?.hudClass, foundry.applications?.hud?.TokenHUD, globalTokenHud].filter(Boolean);
   for (const hudClass of new Set(hudClasses)) _patchTokenHudClass(hudClass);
 }
 

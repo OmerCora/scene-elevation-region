@@ -1,4 +1,4 @@
-import { BLEND_MODES, DEPTH_SCALES, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, shadowLengthKey } from "./config.mjs";
+import { BLEND_MODES, DEPTH_SCALES, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, shadowLengthKey } from "./config.mjs";
 
 const fields = foundry.data.fields;
 const USE_SCENE_SETTING = "";
@@ -109,6 +109,31 @@ function _shadowLengthChoice(value) {
   return Number.isFinite(Number(override)) ? shadowLengthKey(value) : USE_SCENE_SETTING;
 }
 
+function _numberValue(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function _booleanValue(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  const text = String(value ?? "").trim().toLowerCase();
+  if (["true", "1", "on", "yes"].includes(text)) return true;
+  if (["false", "0", "off", "no", ""].includes(text)) return false;
+  return fallback;
+}
+
+function _slopeDirection(value) {
+  const number = _numberValue(value, 0);
+  return ((number % 360) + 360) % 360;
+}
+
+function _syncSlopeElevations(data) {
+  const elevation = _numberValue(data.elevation, 0);
+  data.slopeLowestElevation = elevation;
+  data.slopeHighestElevation = elevation;
+}
+
 /**
  * RegionBehavior subtype: scene-elevation.elevation
  *
@@ -121,6 +146,11 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
 
   static migrateData(data) {
     data.shadowLengthOverride = _shadowLengthChoice(data.shadowLengthOverride);
+    data.slope = _booleanValue(data.slope, false);
+    if (data.slopeLowestElevation === undefined) data.slopeLowestElevation = _numberValue(data.elevation, 1);
+    if (data.slopeHighestElevation === undefined) data.slopeHighestElevation = _numberValue(data.elevation, 1);
+    data.slopeDirection = _slopeDirection(data.slopeDirection);
+    if (!data.slope) _syncSlopeElevations(data);
     return super.migrateData(data);
   }
 
@@ -130,6 +160,33 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         required: true, initial: 1,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.elevation.label",
         hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.elevation.hint"
+      }),
+      slope: new fields.BooleanField({
+        required: true,
+        initial: false,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slope.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slope.hint"
+      }),
+      slopeLowestElevation: new fields.NumberField({
+        required: true,
+        initial: 1,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeLowestElevation.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeLowestElevation.hint"
+      }),
+      slopeHighestElevation: new fields.NumberField({
+        required: true,
+        initial: 1,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeHighestElevation.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeHighestElevation.hint"
+      }),
+      slopeDirection: new fields.NumberField({
+        required: true,
+        initial: 0,
+        min: 0,
+        max: 359,
+        step: 1,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeDirection.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeDirection.hint"
       }),
       shadowStrength: new fields.NumberField({
         required: true,
@@ -232,6 +289,22 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
 
 /** Hook handler — refreshes the renderer whenever a relevant region or behavior changes. */
 export function registerRegionHooks(invalidate) {
+  Hooks.on("preUpdateRegionBehavior", (document, changes) => {
+    if (document?.type !== REGION_BEHAVIOR_TYPE) return;
+    const slopeChanged = foundry.utils.hasProperty(changes, "system.slope");
+    const elevationChanged = foundry.utils.hasProperty(changes, "system.elevation");
+    const directionChanged = foundry.utils.hasProperty(changes, "system.slopeDirection");
+    const previousSlope = document.system?.slope === true;
+    const nextSlope = slopeChanged ? _booleanValue(foundry.utils.getProperty(changes, "system.slope"), previousSlope) : previousSlope;
+    const slopeActuallyChanged = slopeChanged && nextSlope !== previousSlope;
+    const elevation = _numberValue(foundry.utils.getProperty(changes, "system.elevation") ?? document.system?.elevation, 0);
+    if (slopeActuallyChanged || (!nextSlope && elevationChanged)) {
+      foundry.utils.setProperty(changes, "system.slopeLowestElevation", elevation);
+      foundry.utils.setProperty(changes, "system.slopeHighestElevation", elevation);
+    }
+    if (directionChanged) foundry.utils.setProperty(changes, "system.slopeDirection", _slopeDirection(foundry.utils.getProperty(changes, "system.slopeDirection")));
+  });
+
   const triggers = [
     "createRegion", "updateRegion", "deleteRegion",
     "createRegionBehavior", "updateRegionBehavior", "deleteRegionBehavior"

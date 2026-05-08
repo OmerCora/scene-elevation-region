@@ -142,6 +142,22 @@
           "label": "Elevation",
           "hint": "Flat elevation for this region. Non-zero elevations lift the map art inside the region as an overlay."
         },
+        "slope": {
+          "label": "Slope",
+          "hint": "Use a sloped elevation instead of one flat elevation for the whole region. Toggling this on or off starts both slope endpoints at the current flat elevation."
+        },
+        "slopeLowestElevation": {
+          "label": "Lowest elevation",
+          "hint": "The elevation at the low end of the slope."
+        },
+        "slopeHighestElevation": {
+          "label": "Highest elevation",
+          "hint": "The elevation at the high end of the slope."
+        },
+        "slopeDirection": {
+          "label": "Slope direction",
+          "hint": "Direction toward the highest elevation in degrees. 0 points north/up, 90 east/right, 180 south/down, and 270 west/left."
+        },
         "shadowStrength": {
           "label": "Shadow strength",
           "hint": "Multiplier for this region's short contact shadow and soft drop shadow. Set to 0 to hide shadows from this region; high values are allowed for testing stronger casts."

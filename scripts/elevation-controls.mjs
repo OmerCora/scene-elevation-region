@@ -13,7 +13,7 @@ import {
   setTransientSceneElevationSetting,
   clearTransientSceneElevationSettings
 } from "./config.mjs";
-import { RegionElevationRenderer, getActiveElevationRegions } from "./region-elevation-renderer.mjs";
+import { RegionElevationRenderer, getActiveElevationRegions, getRegionElevationStateAtPoint } from "./region-elevation-renderer.mjs";
 import { openSceneElevationSettingsDialog } from "./scene-settings.mjs";
 
 const MIN_POLYGON_POINTS = 3;
@@ -68,6 +68,8 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._nativeRegionVisibility = null;
     this._nativeRegionLayerState = null;
     this._hoverLabel = null;
+    this._hoveredRegionId = null;
+    this._editedRegionId = null;
     this._visibilityRefreshFrame = null;
   }
 
@@ -125,6 +127,8 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._sunEdgePointPreview = null;
     this._draggingPerspectivePoint = false;
     this._draggingSunPoint = false;
+    this._hoveredRegionId = null;
+    this._editedRegionId = null;
     clearTransientSceneElevationSettings(canvas?.scene);
     return super._tearDown?.(options);
   }
@@ -160,7 +164,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   }
 
   refreshElevationRegionVisibility(forceVisible = null) {
-    const visible = forceVisible ?? (this._activeTool !== null && game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS));
+    const visible = forceVisible ?? (this._activeTool !== null && (game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS) || this._hoveredRegionId || this._editedRegionId));
     if (this.outlines) this.outlines.visible = visible;
     if (!visible) this._hideElevationHoverLabel();
     if (this.outlines) this._drawElevationRegionOutlines();
@@ -195,6 +199,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._draggingSunPoint = false;
     this._edgePointPreview = null;
     this._sunEdgePointPreview = null;
+    this._setHoveredElevationRegion(null);
     clearTransientSceneElevationSettings(canvas?.scene);
     this.preview?.clear();
     if (this.preview) this.preview.visible = false;
@@ -298,7 +303,18 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     }
 
     if (!DRAW_TOOLS.has(this._activeTool)) {
-      if (this._activeTool === TOOL_SELECT) this._clearRegionUndo();
+      if (this._activeTool === TOOL_SELECT) {
+        this._clearRegionUndo();
+        const original = event.nativeEvent ?? event.data?.originalEvent ?? event;
+        const point = this._eventPosition(event, { snap: false });
+        const state = _hoverElevationStateAtPoint(point);
+        const isDoubleClick = Number(original.detail ?? 0) >= 2 || this._isDoubleClick(point, original);
+        this._rememberClick(point, original);
+        if (isDoubleClick && state?.entry?.region) {
+          this._consumeEvent(event);
+          this._openRegionDetails(state.entry.region);
+        }
+      }
       return;
     }
 
@@ -429,16 +445,20 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
   _updateElevationHoverLabel(event) {
     const point = this._eventPosition(event, { snap: false });
-    const entry = _hoverElevationEntryAtPoint(point);
-    if (!entry) {
+    const state = _hoverElevationStateAtPoint(point);
+    if (!state) {
       this._hideElevationHoverLabel();
       return;
     }
+    const { entry, elevation } = state;
+    this._setHoveredElevationRegion(entry.region);
     const label = this._ensureElevationHoverLabel();
     const icon = document.createElement("i");
-    icon.className = `fa-solid ${entry.elevation > 0 ? "fa-arrow-up" : entry.elevation < 0 ? "fa-arrow-down" : "fa-minus"}`;
+    icon.className = `fa-solid ${elevation > 0 ? "fa-arrow-up" : elevation < 0 ? "fa-arrow-down" : "fa-minus"}`;
     const value = document.createElement("span");
-    value.textContent = _formatElevationLabel(entry.elevation);
+    value.textContent = entry.slope
+      ? `${_formatElevationLabel(elevation)} (${_formatElevationLabel(entry.lowestElevation)}-${_formatElevationLabel(entry.highestElevation)})`
+      : _formatElevationLabel(elevation);
     label.replaceChildren(icon, value);
     label.style.left = `${event.clientX + 14}px`;
     label.style.top = `${event.clientY + 14}px`;
@@ -462,11 +482,33 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
   _hideElevationHoverLabel() {
     if (this._hoverLabel) this._hoverLabel.hidden = true;
+    this._setHoveredElevationRegion(null);
   }
 
   _removeElevationHoverLabel() {
     this._hoverLabel?.remove();
     this._hoverLabel = null;
+  }
+
+  _setHoveredElevationRegion(region) {
+    const nextId = region?.id ?? null;
+    if (this._hoveredRegionId === nextId) return;
+    this._hoveredRegionId = nextId;
+    this.refreshElevationRegionVisibility();
+  }
+
+  _openRegionDetails(region) {
+    this._editedRegionId = region?.id ?? null;
+    this.refreshElevationRegionVisibility();
+    const sheet = region?.sheet;
+    const clearEditedRegion = () => {
+      if (this._editedRegionId !== region?.id) return;
+      this._editedRegionId = null;
+      this.refreshElevationRegionVisibility();
+    };
+    if (sheet?.addEventListener) sheet.addEventListener("close", clearEditedRegion, { once: true });
+    const rendered = _renderDocumentSheet(region, sheet);
+    if (rendered?.addEventListener && rendered !== sheet) rendered.addEventListener("close", clearEditedRegion, { once: true });
   }
 
   _eventPosition(event, { snap = true } = {}) {
@@ -655,6 +697,10 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
         type: REGION_BEHAVIOR_TYPE,
         system: {
           elevation: 1,
+          slope: false,
+          slopeLowestElevation: 1,
+          slopeHighestElevation: 1,
+          slopeDirection: 0,
           shadowStrength: SHADOW_STRENGTH_LIMITS.DEFAULT,
           parallaxStrengthOverride: "",
           parallaxModeOverride: "",
@@ -917,10 +963,40 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     const scale = canvas.stage?.scale?.x || 1;
     for (const entry of entries) {
       const paths = _regionPaths(entry.region);
-      const alpha = entry.elevation < 0 ? 0.7 : 0.9;
-      graphics.lineStyle(2 / scale, entry.elevation < 0 ? 0x8ec5ff : OUTLINE_COLOR, alpha);
+      const outlineElevation = entry.slope ? entry.highestElevation : entry.elevation;
+      const alpha = outlineElevation < 0 ? 0.7 : 0.9;
+      graphics.lineStyle(2 / scale, outlineElevation < 0 ? 0x8ec5ff : OUTLINE_COLOR, alpha);
       for (const path of paths) graphics.drawPolygon(path.flatMap(point => [point.x, point.y]));
+      if (entry.slope && (this._hoveredRegionId === entry.region.id || this._editedRegionId === entry.region.id || _isRegionSelected(entry.region))) this._drawSlopeArrow(graphics, entry, paths, scale);
     }
+  }
+
+  _drawSlopeArrow(graphics, entry, paths, scale) {
+    const bounds = _pathsBounds(paths);
+    if (!bounds) return;
+    const vector = entry.slopeVector ?? _slopeDirectionVector(entry.slopeDirection);
+    const minLength = 28 / scale;
+    const maxLength = 92 / scale;
+    const length = Math.clamp(Math.min(bounds.width, bounds.height) * 0.38, minLength, maxLength);
+    const center = bounds.center;
+    const start = { x: center.x - vector.x * length * 0.48, y: center.y - vector.y * length * 0.48 };
+    const end = { x: center.x + vector.x * length * 0.48, y: center.y + vector.y * length * 0.48 };
+    const angle = Math.atan2(vector.y, vector.x);
+    const head = Math.clamp(length * 0.28, 10 / scale, 22 / scale);
+    const left = { x: end.x - Math.cos(angle - Math.PI / 6) * head, y: end.y - Math.sin(angle - Math.PI / 6) * head };
+    const right = { x: end.x - Math.cos(angle + Math.PI / 6) * head, y: end.y - Math.sin(angle + Math.PI / 6) * head };
+    graphics.lineStyle(5 / scale, 0x111111, 0.78);
+    graphics.moveTo(start.x, start.y);
+    graphics.lineTo(end.x, end.y);
+    graphics.moveTo(left.x, left.y);
+    graphics.lineTo(end.x, end.y);
+    graphics.lineTo(right.x, right.y);
+    graphics.lineStyle(2.5 / scale, PREVIEW_COLOR, 0.98);
+    graphics.moveTo(start.x, start.y);
+    graphics.lineTo(end.x, end.y);
+    graphics.moveTo(left.x, left.y);
+    graphics.lineTo(end.x, end.y);
+    graphics.lineTo(right.x, right.y);
   }
 }
 
@@ -1082,33 +1158,66 @@ function _regionPaths(region) {
   return rawPaths.map(_normalizeRegionPath).filter(path => path.length >= MIN_POLYGON_POINTS);
 }
 
-function _hoverElevationEntryAtPoint(point) {
-  const entries = getActiveElevationRegions(canvas.scene)
-    .filter(entry => _regionContainsPoint(entry.region, point))
-    .sort((left, right) => (left.area || Infinity) - (right.area || Infinity) || right.elevation - left.elevation);
-  return entries[0] ?? null;
+function _hoverElevationStateAtPoint(point) {
+  const state = getRegionElevationStateAtPoint(point, canvas.scene);
+  return state.found ? state : null;
 }
 
-function _regionContainsPoint(region, point) {
-  try {
-    if (region.testPoint?.({ x: point.x, y: point.y })) return true;
-  } catch (err) {}
-  try {
-    if (region.testPoint?.({ x: point.x, y: point.y, elevation: point.elevation ?? 0 })) return true;
-  } catch (err) {}
-  return _regionPaths(region).some(path => _pointInPolygon(point, path));
-}
-
-function _pointInPolygon(point, path) {
-  let inside = false;
-  for (let index = 0, previous = path.length - 1; index < path.length; previous = index++) {
-    const currentPoint = path[index];
-    const previousPoint = path[previous];
-    const intersects = (currentPoint.y > point.y) !== (previousPoint.y > point.y)
-      && point.x < ((previousPoint.x - currentPoint.x) * (point.y - currentPoint.y)) / ((previousPoint.y - currentPoint.y) || 1e-9) + currentPoint.x;
-    if (intersects) inside = !inside;
+function _renderDocumentSheet(document, sheet = document?.sheet) {
+  if (sheet?.render) {
+    try {
+      sheet.render({ force: true });
+      return sheet;
+    } catch (err) {
+      try {
+        sheet.render(true);
+        return sheet;
+      } catch (legacyError) {}
+    }
   }
-  return inside;
+  const RegionConfig = foundry.applications?.sheets?.RegionConfig;
+  if (!RegionConfig) return null;
+  const app = new RegionConfig({ document });
+  app.render({ force: true });
+  return app;
+}
+
+function _pathsBounds(paths) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const path of paths) {
+    for (const point of path) {
+      minX = Math.min(minX, point.x);
+      minY = Math.min(minY, point.y);
+      maxX = Math.max(maxX, point.x);
+      maxY = Math.max(maxY, point.y);
+    }
+  }
+  if (!Number.isFinite(minX)) return null;
+  return {
+    minX,
+    minY,
+    maxX,
+    maxY,
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+    center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
+  };
+}
+
+function _slopeDirectionVector(degrees) {
+  const radians = ((((Number(degrees) || 0) % 360) + 360) % 360) * Math.PI / 180;
+  return { x: Math.sin(radians), y: -Math.cos(radians) };
+}
+
+function _isRegionSelected(region) {
+  const regionLayer = canvas?.regions;
+  const placeables = _regionLayerPlaceables(regionLayer);
+  const placeable = region?.object ?? placeables.find(candidate => candidate.document === region);
+  if (placeable?.controlled || placeable?.selected || placeable?.isControlled) return true;
+  return Array.from(regionLayer?.controlled ?? []).some(candidate => candidate?.document === region);
 }
 
 function _formatElevationLabel(elevation) {
