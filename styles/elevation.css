@@ -40,7 +40,7 @@
 .scene-elevation-region-scene-settings {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: 8px;
 	overflow: visible;
 	padding-bottom: 4px;
 }

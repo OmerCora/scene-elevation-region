@@ -1,7 +1,14 @@
-import { BLEND_MODES, DEPTH_SCALES, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, shadowLengthKey } from "./config.mjs";
+import { BLEND_MODES, DEPTH_SCALES, ELEVATION_PRESETS, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, shadowLengthKey } from "./config.mjs";
 
 const fields = foundry.data.fields;
 const USE_SCENE_SETTING = "";
+
+const PRESET_CHOICES = Object.freeze({
+  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
+  [ELEVATION_PRESETS.CUSTOM]: "SCENE_ELEVATION.Settings.PresetCustom",
+  [ELEVATION_PRESETS.DEFAULT]: "SCENE_ELEVATION.Settings.PresetDefault",
+  [ELEVATION_PRESETS.BASIC_LIFT_DRIFT_SHADOW]: "SCENE_ELEVATION.Settings.PresetBasicLiftDriftShadow"
+});
 
 const PARALLAX_STRENGTH_CHOICES = Object.freeze({
   [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
@@ -65,7 +72,6 @@ const SHADOW_MODE_CHOICES = Object.freeze({
   [SHADOW_MODES.FULL_TEXTURE_MELD]: "SCENE_ELEVATION.Settings.ShadowModeFullTextureMeld",
   [SHADOW_MODES.TOP_DOWN]: "SCENE_ELEVATION.Settings.ShadowModeTopDown",
   [SHADOW_MODES.TOP_DOWN_STRONG]: "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong",
-  [SHADOW_MODES.SMALL_TIME_SUN]: "SCENE_ELEVATION.Settings.ShadowModeSmallTimeSun",
   [SHADOW_MODES.SUN_AT_EDGE]: "SCENE_ELEVATION.Settings.ShadowModeSunAtEdge"
 });
 
@@ -109,6 +115,12 @@ function _shadowLengthChoice(value) {
   return Number.isFinite(Number(override)) ? shadowLengthKey(value) : USE_SCENE_SETTING;
 }
 
+function _presetOverrideChoice(value) {
+  const preset = String(value ?? USE_SCENE_SETTING);
+  if (!preset) return USE_SCENE_SETTING;
+  return Object.values(ELEVATION_PRESETS).includes(preset) ? preset : ELEVATION_PRESETS.CUSTOM;
+}
+
 function _numberValue(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -147,6 +159,8 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
   static LOCALIZATION_PREFIXES = ["SCENE_ELEVATION.RegionBehavior"];
 
   static migrateData(data) {
+    data.presetOverride = _presetOverrideChoice(data.presetOverride);
+    if (data.shadowModeOverride && !Object.values(SHADOW_MODES).includes(String(data.shadowModeOverride))) data.shadowModeOverride = SHADOW_MODES.TOP_DOWN;
     data.shadowLengthOverride = _shadowLengthChoice(data.shadowLengthOverride);
     data.slope = _booleanValue(data.slope, false);
     const elevation = _numberValue(data.elevation, 1);
@@ -185,6 +199,13 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         step: 1,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeDirection.label",
         hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeDirection.hint"
+      }),
+      presetOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        choices: PRESET_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.presetOverride.label"
       }),
       parallaxStrengthOverride: new fields.StringField({
         required: true,

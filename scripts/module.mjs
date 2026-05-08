@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, REGION_BEHAVIOR_TYPE, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, REGION_BEHAVIOR_TYPE, elevationPresetValues, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -20,6 +20,18 @@ const TOKEN_PARALLAX_TARGET_NAME_PATTERN = /target|crosshair|reticle|reticule|ba
 const TOKEN_PARALLAX_TARGET_SCAN_LIMIT = 80;
 const TOKEN_PARALLAX_HIT_AREA_EPSILON = 0.5;
 const TOKEN_HUD_POSITION_PATCHED = "_sceneElevationRegionHudPositionPatched";
+const REGION_PRESET_FIELD_MAP = Object.freeze({
+  [SCENE_SETTING_KEYS.PARALLAX]: "parallaxStrengthOverride",
+  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "parallaxHeightContrastOverride",
+  [SCENE_SETTING_KEYS.PARALLAX_MODE]: "parallaxModeOverride",
+  [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: "perspectivePointOverride",
+  [SCENE_SETTING_KEYS.BLEND_MODE]: "blendModeOverride",
+  [SCENE_SETTING_KEYS.OVERLAY_SCALE]: "overlayScaleOverride",
+  [SCENE_SETTING_KEYS.SHADOW_MODE]: "shadowModeOverride",
+  [SCENE_SETTING_KEYS.SHADOW_LENGTH]: "shadowLengthOverride",
+  [SCENE_SETTING_KEYS.DEPTH_SCALE]: "depthScaleOverride"
+});
+const REGION_PRESET_CONTROL_FIELDS = new Set(Object.values(REGION_PRESET_FIELD_MAP));
 const _syncingTokenElevation = new Set();
 const _pendingTokenElevationUpdates = new Map();
 const _tokensWithPendingMovement = new Set();
@@ -198,7 +210,6 @@ Hooks.once("init", () => {
       [SHADOW_MODES.FULL_TEXTURE_MELD]: "SCENE_ELEVATION.Settings.ShadowModeFullTextureMeld",
       [SHADOW_MODES.TOP_DOWN]: "SCENE_ELEVATION.Settings.ShadowModeTopDown",
       [SHADOW_MODES.TOP_DOWN_STRONG]: "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong",
-      [SHADOW_MODES.SMALL_TIME_SUN]: "SCENE_ELEVATION.Settings.ShadowModeSmallTimeSun",
       [SHADOW_MODES.SUN_AT_EDGE]: "SCENE_ELEVATION.Settings.ShadowModeSunAtEdge"
     },
     onChange: () => {
@@ -232,28 +243,6 @@ Hooks.once("init", () => {
       RegionElevationRenderer.instance.update();
       _refreshAllTokenScales();
     }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.ELEVATION_SCALE, {
-    name: "SCENE_ELEVATION.Settings.ElevationScale",
-    hint: "SCENE_ELEVATION.Settings.ElevationScaleHint",
-    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.ELEVATION_SCALE],
-    range: { min: 1, max: 5, step: 0.25 },
-    onChange: () => {
-      RegionElevationRenderer.instance.update();
-      _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.SUNRISE_HOUR, {
-    name: "SCENE_ELEVATION.Settings.SunriseHour",
-    hint: "SCENE_ELEVATION.Settings.SunriseHourHint",
-    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.SUNRISE_HOUR],
-    onChange: () => RegionElevationRenderer.instance.update()
-  });
-  game.settings.register(MODULE_ID, SETTINGS.SUNSET_HOUR, {
-    name: "SCENE_ELEVATION.Settings.SunsetHour",
-    hint: "SCENE_ELEVATION.Settings.SunsetHourHint",
-    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.SUNSET_HOUR],
-    onChange: () => RegionElevationRenderer.instance.update()
   });
   game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_ENABLED, {
     name: "SCENE_ELEVATION.Settings.TokenScale",
@@ -306,11 +295,6 @@ Hooks.once("init", () => {
   };
   registerRegionHooks(invalidate);
   registerElevationControls();
-
-  Hooks.on("updateWorldTime", () => {
-    RegionElevationRenderer.instance.update();
-    _refreshAllTokenScales();
-  });
 
   const mod = game.modules.get(MODULE_ID);
   if (mod) mod.api = {
@@ -379,6 +363,7 @@ function _insertRegionBehaviorDivider(app, html) {
     divider.setAttribute("aria-hidden", "true");
     formGroup.after(divider);
   }
+  _wireRegionPresetControls(root);
   app?.setPosition?.({ height: "auto" });
 }
 
@@ -386,6 +371,46 @@ function _renderedHtmlElement(html) {
   if (html instanceof HTMLElement) return html;
   if (html?.[0] instanceof HTMLElement) return html[0];
   return null;
+}
+
+function _wireRegionPresetControls(root) {
+  const presetField = _regionBehaviorField(root, "presetOverride");
+  if (!presetField) return;
+  const form = presetField.closest?.("form") ?? root;
+  if (!form || form.dataset.sceneElevationPresetWired) return;
+  form.dataset.sceneElevationPresetWired = "true";
+  form.addEventListener("change", event => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
+    const fieldName = _regionBehaviorFieldName(target.name);
+    if (fieldName === "presetOverride") {
+      _applyRegionPresetToForm(root, target.value);
+      return;
+    }
+    if (REGION_PRESET_CONTROL_FIELDS.has(fieldName)) {
+      const currentPresetField = _regionBehaviorField(root, "presetOverride");
+      if (currentPresetField && currentPresetField.value !== ELEVATION_PRESETS.CUSTOM) currentPresetField.value = ELEVATION_PRESETS.CUSTOM;
+    }
+  });
+}
+
+function _applyRegionPresetToForm(root, presetKey) {
+  const values = elevationPresetValues(presetKey, canvas?.scene);
+  if (!values) return;
+  for (const [settingKey, fieldName] of Object.entries(REGION_PRESET_FIELD_MAP)) {
+    const field = _regionBehaviorField(root, fieldName);
+    if (!field || values[settingKey] === undefined) continue;
+    field.value = values[settingKey];
+  }
+}
+
+function _regionBehaviorField(root, fieldName) {
+  return root.querySelector(`[name="system.${fieldName}"], [name$=".${fieldName}"]`);
+}
+
+function _regionBehaviorFieldName(name) {
+  const parts = String(name ?? "").split(".");
+  return parts[parts.length - 1] ?? "";
 }
 
 /* -------------------------------------------- */

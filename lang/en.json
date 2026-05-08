@@ -33,6 +33,11 @@
       "ResetDefaultsHint": "Set the module elevation defaults to the recommended visual profile.",
       "ResetDefaultsConfirm": "Reset module elevation settings to the recommended defaults? This updates the world-level module settings; scene overrides are not removed.",
       "ResetDefaultsDone": "Elevation defaults reset.",
+      "Preset": "Preset",
+      "PresetHint": "Apply a tested combination of parallax, transition, overlay, shadow, and depth settings.",
+      "PresetCustom": "Custom",
+      "PresetDefault": "Default",
+      "PresetBasicLiftDriftShadow": "Basic Lift+Drift Shadow",
       "Parallax": "Parallax Strength",
       "ParallaxHint": "Optional viewer-based motion for elevated overlays and transition texture. Off keeps overlays and transition textures stationary.",
       "ParallaxOff": "Off",
@@ -89,8 +94,6 @@
       "DepthScaleCompressed": "Compressed (sqrt)",
       "DepthScaleLinear": "Linear (proportional)",
       "DepthScaleDramatic": "Dramatic (super-linear)",
-      "ElevationScale": "Elevation units per grid",
-      "ElevationScaleHint": "How many elevation units equal one grid distance for visual height. 1 means 1 elevation equals 1 grid; 5 means 5 elevation equals 1 grid.",
       "OverlayScale": "Overlay Scale",
       "OverlayScaleHint": "Scale elevated overlays as positive elevation increases, making higher layers feel closer to the viewport.",
       "OverlayScaleShrinkMedium": "Shrink medium",
@@ -109,7 +112,6 @@
       "ShadowModeFullTextureMeld": "Full texture-melded cast",
       "ShadowModeTopDown": "Top-down even cast",
       "ShadowModeTopDownStrong": "Strong all-around cast",
-      "ShadowModeSmallTimeSun": "Small Time sun path",
       "ShadowModeSunAtEdge": "Sun at edge",
       "ShadowLength": "Shadow Length",
       "ShadowLengthHint": "How far cast shadows reach. Off disables them entirely; Extreme stretches them dramatically.",
@@ -118,10 +120,6 @@
       "ShadowLengthNormal": "Normal",
       "ShadowLengthLong": "Long",
       "ShadowLengthExtreme": "Extreme",
-      "SunriseHour": "Sunrise hour",
-      "SunriseHourHint": "Scene-local sunrise time for Small Time sun shadows. East is the right middle edge. Use decimal hours, e.g. 6.5 for 6:30 AM.",
-      "SunsetHour": "Sunset hour",
-      "SunsetHourHint": "Scene-local sunset time for Small Time sun shadows. West is the left middle edge. Use decimal hours, e.g. 18.5 for 6:30 PM.",
       "TokenElevationMode": "Set token elevation on movement",
       "TokenElevationModeHint": "Controls whether tokens automatically adopt elevation from Elevation Regions when they move.",
       "TokenElevationModeAlways": "Always",
@@ -158,7 +156,11 @@
         },
         "shadowStrength": {
           "label": "Shadow strength",
-          "hint": "Multiplier for this region's short contact shadow and soft drop shadow. Set to 0 to hide shadows from this region; high values are allowed for testing stronger casts."
+          "hint": "Multiplier for this region's short contact shadow and soft drop shadow. Set to 0 to hide shadows from this region."
+        },
+        "presetOverride": {
+          "label": "Preset",
+          "hint": "Apply a tested combination of parallax, transition, overlay, shadow, and depth settings for this region."
         },
         "parallaxStrengthOverride": {
           "label": "Parallax strength",

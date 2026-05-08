@@ -1,4 +1,4 @@
-import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, elevationScaleValue, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey } from "./config.mjs";
 
 /**
  * Per-draw settings cache. `getSceneElevationSettings()` rebuilds via two deep clones
@@ -170,6 +170,8 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
     const elevation = slope ? (slopeBaseElevation + slopeFarElevation) / 2 : flatElevation;
     const shadowStrength = Number(behavior.system?.shadowStrength ?? sourceSystem.shadowStrength ?? SHADOW_STRENGTH_LIMITS.DEFAULT);
     if (!Number.isFinite(elevation)) continue;
+    const presetOverride = _regionPresetOverride(behavior.system?.presetOverride ?? sourceSystem.presetOverride);
+    const presetValues = presetOverride ? elevationPresetValues(presetOverride, scene) : null;
     const paths = (pathCache || slope) ? _regionPaths(region) : null;
     if (pathCache) pathCache.set(region, paths);
     const slopeDirection = _normalizeDegrees(behavior.system?.slopeDirection ?? sourceSystem.slopeDirection ?? 0);
@@ -193,15 +195,16 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
       slopeMaxProjection: slopeRange?.max ?? 0,
       shadowStrength: Math.clamp(Number.isFinite(shadowStrength) ? shadowStrength : SHADOW_STRENGTH_LIMITS.DEFAULT, SHADOW_STRENGTH_LIMITS.MIN, SHADOW_STRENGTH_LIMITS.MAX),
       area: _regionArea(region, paths),
-      parallaxStrengthOverride: _keyOverride(behavior.system?.parallaxStrengthOverride ?? sourceSystem.parallaxStrengthOverride, PARALLAX_STRENGTHS),
-      parallaxModeOverride: _settingOverride(behavior.system?.parallaxModeOverride ?? sourceSystem.parallaxModeOverride, PARALLAX_MODES),
-      perspectivePointOverride: _settingOverride(behavior.system?.perspectivePointOverride ?? sourceSystem.perspectivePointOverride, PERSPECTIVE_POINTS),
-      overlayScaleOverride: _keyOverride(behavior.system?.overlayScaleOverride ?? sourceSystem.overlayScaleOverride, OVERLAY_SCALE_STRENGTHS),
-      shadowModeOverride: _settingOverride(behavior.system?.shadowModeOverride ?? sourceSystem.shadowModeOverride, SHADOW_MODES),
-      shadowLengthOverride: _shadowLengthOverride(behavior.system?.shadowLengthOverride ?? sourceSystem.shadowLengthOverride),
-      blendModeOverride: _settingOverride(behavior.system?.blendModeOverride ?? sourceSystem.blendModeOverride, BLEND_MODES),
-      depthScaleOverride: _settingOverride(behavior.system?.depthScaleOverride ?? sourceSystem.depthScaleOverride, DEPTH_SCALES),
-      parallaxHeightContrastOverride: _keyOverride(behavior.system?.parallaxHeightContrastOverride ?? sourceSystem.parallaxHeightContrastOverride, PARALLAX_HEIGHT_CONTRASTS),
+      presetOverride,
+      parallaxStrengthOverride: _keyOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.PARALLAX, behavior.system?.parallaxStrengthOverride ?? sourceSystem.parallaxStrengthOverride), PARALLAX_STRENGTHS),
+      parallaxModeOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.PARALLAX_MODE, behavior.system?.parallaxModeOverride ?? sourceSystem.parallaxModeOverride), PARALLAX_MODES),
+      perspectivePointOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.PERSPECTIVE_POINT, behavior.system?.perspectivePointOverride ?? sourceSystem.perspectivePointOverride), PERSPECTIVE_POINTS),
+      overlayScaleOverride: _keyOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.OVERLAY_SCALE, behavior.system?.overlayScaleOverride ?? sourceSystem.overlayScaleOverride), OVERLAY_SCALE_STRENGTHS),
+      shadowModeOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.SHADOW_MODE, behavior.system?.shadowModeOverride ?? sourceSystem.shadowModeOverride), SHADOW_MODES),
+      shadowLengthOverride: _shadowLengthOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.SHADOW_LENGTH, behavior.system?.shadowLengthOverride ?? sourceSystem.shadowLengthOverride)),
+      blendModeOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.BLEND_MODE, behavior.system?.blendModeOverride ?? sourceSystem.blendModeOverride), BLEND_MODES),
+      depthScaleOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.DEPTH_SCALE, behavior.system?.depthScaleOverride ?? sourceSystem.depthScaleOverride), DEPTH_SCALES),
+      parallaxHeightContrastOverride: _keyOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST, behavior.system?.parallaxHeightContrastOverride ?? sourceSystem.parallaxHeightContrastOverride), PARALLAX_HEIGHT_CONTRASTS),
       modifyTokenElevation: behavior.system?.modifyTokenElevation !== false,
       modifyTokenScaling: behavior.system?.modifyTokenScaling !== false
     });
@@ -258,6 +261,15 @@ function _shadowLengthOverride(value) {
   if (!override) return "";
   if (Object.prototype.hasOwnProperty.call(SHADOW_LENGTHS, override)) return override;
   return Number.isFinite(Number(override)) ? shadowLengthKey(value) : "";
+}
+
+function _regionPresetOverride(value) {
+  const override = String(value ?? "");
+  return elevationPresetValues(override) ? override : "";
+}
+
+function _presetValue(presetValues, key, fallback) {
+  return presetValues?.[key] ?? fallback;
 }
 
 function _finiteNumber(value, fallback = 0) {
@@ -764,13 +776,12 @@ export class RegionElevationRenderer {
     const gridSize = geo.gridSize;
     const { entry, bounds } = visual;
     const reference = DEPTH_SCALE_REFERENCE[depthScale] ?? DEPTH_SCALE_REFERENCE[DEPTH_SCALES.COMPRESSED];
-    const elevationScale = elevationScaleValue(_setting(SCENE_SETTING_KEYS.ELEVATION_SCALE));
     const visualElevation = visual.visualElevation ?? entry.elevation;
     const rawAbsElevation = entry.slope ? (entry.maxAbsElevation ?? Math.abs(visualElevation)) : Math.abs(visualElevation);
-    const absElevation = rawAbsElevation / elevationScale;
+    const absElevation = rawAbsElevation;
     const magnitude = Math.min(absElevation, reference);
     const normalized = Math.clamp(_depthNormalize(magnitude, reference, depthScale), 0.1, 1);
-    const absDelta = Math.abs(visual.elevationDelta ?? entry.elevation) / elevationScale;
+    const absDelta = Math.abs(visual.elevationDelta ?? entry.elevation);
     const deltaMagnitude = Math.min(absDelta, reference);
     const transitionNormalized = Math.clamp(_depthNormalize(deltaMagnitude, reference, depthScale), 0.1, 1);
     const isHole = entry.slope ? entry.highestElevation < 0 : visualElevation < 0;
@@ -2009,64 +2020,7 @@ function _sunShadowState(shadowMode, geo, bounds) {
       blurMultiplier: 1.08
     };
   }
-  if (shadowMode !== SHADOW_MODES.SMALL_TIME_SUN) return null;
-
-  const hour = _currentTimeHour();
-  const sunrise = _sceneHourSetting(SCENE_SETTING_KEYS.SUNRISE_HOUR, 6, 0, 23.75);
-  const sunset = _sceneHourSetting(SCENE_SETTING_KEYS.SUNSET_HOUR, 18, 0.25, 24);
-  const sunPoint = _sunPointForHour(hour, sunrise, sunset, geo);
-  if (!sunPoint) return {
-    direction: STATIC_SHADOW_DIRECTION,
-    alphaMultiplier: 0,
-    lengthMultiplier: 1,
-    blurMultiplier: 1
-  };
-
-  const middleY = geo.y + geo.height / 2;
-  const altitude = Math.clamp((middleY - sunPoint.y) / Math.max(1, middleY - geo.y), 0, 1);
-  return {
-    direction: _directionAwayFromPoint(bounds.center, sunPoint),
-    alphaMultiplier: 0.38 + altitude * 0.92,
-    lengthMultiplier: 1.75 - altitude * 0.55,
-    blurMultiplier: 1.35 - altitude * 0.18
-  };
-}
-
-function _sceneHourSetting(key, fallback, min, max) {
-  const value = Number(_setting(key) ?? fallback);
-  return Math.clamp(Number.isFinite(value) ? value : fallback, min, max);
-}
-
-function _sunPointForHour(hour, sunrise, sunset, geo) {
-  if (!Number.isFinite(hour) || sunset <= sunrise) return null;
-  if (hour < sunrise || hour > sunset) return null;
-
-  const noon = 12;
-  const leftX = geo.x;
-  const centerX = geo.x + geo.width / 2;
-  const rightX = geo.x + geo.width;
-  const topY = geo.y;
-  const middleY = geo.y + geo.height / 2;
-  if (sunrise < noon && sunset > noon) {
-    if (hour <= noon) {
-      const progress = Math.clamp((hour - sunrise) / Math.max(0.25, noon - sunrise), 0, 1);
-      return {
-        x: rightX + (centerX - rightX) * progress,
-        y: middleY + (topY - middleY) * progress
-      };
-    }
-    const progress = Math.clamp((hour - noon) / Math.max(0.25, sunset - noon), 0, 1);
-    return {
-      x: centerX + (leftX - centerX) * progress,
-      y: topY + (middleY - topY) * progress
-    };
-  }
-
-  const progress = Math.clamp((hour - sunrise) / Math.max(0.25, sunset - sunrise), 0, 1);
-  return {
-    x: rightX + (leftX - rightX) * progress,
-    y: middleY - Math.sin(progress * Math.PI) * (middleY - topY)
-  };
+  return null;
 }
 
 function _directionAwayFromPoint(center, sourcePoint) {
@@ -2075,66 +2029,6 @@ function _directionAwayFromPoint(center, sourcePoint) {
   const distance = Math.hypot(dx, dy);
   if (!Number.isFinite(distance) || distance < 1) return STATIC_SHADOW_DIRECTION;
   return { x: dx / distance, y: dy / distance };
-}
-
-function _currentTimeHour() {
-  const smallTime = game.modules.get("smalltime") ?? game.modules.get("small-time");
-  const api = smallTime?.active ? smallTime.api : null;
-  const candidates = [];
-  for (const methodName of ["getTime", "getCurrentTime", "getCurrentTimeOfDay", "currentTime"]) {
-    const member = api?.[methodName];
-    if (typeof member === "function") {
-      try { candidates.push(member.call(api)); } catch (err) {}
-    }
-  }
-  for (const propertyName of ["time", "currentTime", "current", "clock", "timeOfDay"]) {
-    if (api?.[propertyName] !== undefined) candidates.push(api[propertyName]);
-  }
-  candidates.push(game.time?.worldTime);
-  for (const candidate of candidates) {
-    const hour = _extractHour(candidate);
-    if (Number.isFinite(hour)) return hour;
-  }
-  return 12;
-}
-
-function _extractHour(value, depth = 0) {
-  if (value === null || value === undefined || depth > 3) return null;
-  if (typeof value === "number") return _numberToHour(value);
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (/^[+-]?\d+(?:\.\d+)?$/.test(trimmed)) return _numberToHour(Number(trimmed));
-    const timeMatch = trimmed.match(/\b(\d{1,2})(?::(\d{1,2}))?\s*(am|pm)?\b/i);
-    if (timeMatch) {
-      const suffix = timeMatch[3]?.toLowerCase();
-      let hour = Number(timeMatch[1]);
-      const minutes = Number(timeMatch[2] ?? 0);
-      if (suffix === "pm" && hour < 12) hour += 12;
-      else if (suffix === "am" && hour === 12) hour = 0;
-      if (Number.isFinite(hour) && Number.isFinite(minutes)) return ((hour + minutes / 60) % 24 + 24) % 24;
-    }
-    const numeric = Number(trimmed);
-    return Number.isFinite(numeric) ? _numberToHour(numeric) : null;
-  }
-  if (value instanceof Date) return value.getHours() + value.getMinutes() / 60;
-  if (typeof value !== "object") return null;
-
-  const hourValue = value.hour ?? value.hours ?? value.h;
-  if (Number.isFinite(Number(hourValue))) {
-    const minutes = Number(value.minute ?? value.minutes ?? value.m ?? 0);
-    return ((Number(hourValue) + (Number.isFinite(minutes) ? minutes : 0) / 60) % 24 + 24) % 24;
-  }
-  for (const key of ["time", "current", "clock", "worldTime", "seconds", "totalSeconds", "value"]) {
-    const hour = _extractHour(value[key], depth + 1);
-    if (Number.isFinite(hour)) return hour;
-  }
-  return null;
-}
-
-function _numberToHour(value) {
-  if (!Number.isFinite(value)) return null;
-  if (Math.abs(value) > 24) return ((value / 3600) % 24 + 24) % 24;
-  return ((value % 24) + 24) % 24;
 }
 
 /** Compute the per-region "lift factor" used as the multiplier for visual height

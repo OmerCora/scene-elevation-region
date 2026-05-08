@@ -3,6 +3,7 @@
 export const MODULE_ID = "scene-elevation-region";
 
 export const SETTINGS = {
+  PRESET: "preset",
   PARALLAX: "parallaxStrength",
   PARALLAX_HEIGHT_CONTRAST: "parallaxHeightContrast",
   PARALLAX_MODE: "parallaxMode",
@@ -11,9 +12,6 @@ export const SETTINGS = {
   OVERLAY_SCALE: "overlayScale",
   SHADOW_MODE: "shadowMode",
   SHADOW_LENGTH: "shadowLength",
-  ELEVATION_SCALE: "elevationScale",
-  SUNRISE_HOUR: "sunriseHour",
-  SUNSET_HOUR: "sunsetHour",
   SHOW_ELEVATION_REGIONS: "showElevationRegions",
   TOKEN_ELEVATION_MODE: "tokenElevationMode",
   TOKEN_ELEVATION_ANIMATION_MS: "tokenElevationAnimationMs",
@@ -25,6 +23,7 @@ export const SETTINGS = {
 export const SCENE_SETTINGS_FLAG = "sceneSettings";
 
 export const SCENE_SETTING_KEYS = Object.freeze({
+  PRESET: SETTINGS.PRESET,
   PARALLAX: SETTINGS.PARALLAX,
   PARALLAX_HEIGHT_CONTRAST: SETTINGS.PARALLAX_HEIGHT_CONTRAST,
   PARALLAX_MODE: SETTINGS.PARALLAX_MODE,
@@ -34,9 +33,6 @@ export const SCENE_SETTING_KEYS = Object.freeze({
   OVERLAY_SCALE: SETTINGS.OVERLAY_SCALE,
   SHADOW_MODE: SETTINGS.SHADOW_MODE,
   SHADOW_LENGTH: SETTINGS.SHADOW_LENGTH,
-  ELEVATION_SCALE: SETTINGS.ELEVATION_SCALE,
-  SUNRISE_HOUR: SETTINGS.SUNRISE_HOUR,
-  SUNSET_HOUR: SETTINGS.SUNSET_HOUR,
   SUN_EDGE_POINT: "sunEdgePoint",
   TOKEN_ELEVATION_MODE: SETTINGS.TOKEN_ELEVATION_MODE,
   TOKEN_ELEVATION_ANIMATION_MS: SETTINGS.TOKEN_ELEVATION_ANIMATION_MS,
@@ -120,7 +116,6 @@ export const SHADOW_MODES = Object.freeze({
   FULL_TEXTURE_MELD: "fullTextureMeld",
   TOP_DOWN: "topDown",
   TOP_DOWN_STRONG: "topDownStrong",
-  SMALL_TIME_SUN: "smallTimeSun",
   SUN_AT_EDGE: "sunAtEdge"
 });
 
@@ -165,18 +160,45 @@ export const DEPTH_SCALE_REFERENCE = Object.freeze({
   [DEPTH_SCALES.DRAMATIC]: 32
 });
 
-export const ELEVATION_DEFAULT_SETTINGS = Object.freeze({
-  [SCENE_SETTING_KEYS.PARALLAX]: "medium",
-  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "normal",
-  [SCENE_SETTING_KEYS.PARALLAX_MODE]: PARALLAX_MODES.ANCHORED_CARD,
-  [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: PERSPECTIVE_POINTS.REGION_CENTER,
-  [SCENE_SETTING_KEYS.BLEND_MODE]: BLEND_MODES.WIDE,
+export const ELEVATION_PRESETS = Object.freeze({
+  CUSTOM: "custom",
+  DEFAULT: "default",
+  BASIC_LIFT_DRIFT_SHADOW: "basicLiftDriftShadow"
+});
+
+export const ELEVATION_PRESET_SETTING_KEYS = Object.freeze([
+  SCENE_SETTING_KEYS.PARALLAX,
+  SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST,
+  SCENE_SETTING_KEYS.PARALLAX_MODE,
+  SCENE_SETTING_KEYS.PERSPECTIVE_POINT,
+  SCENE_SETTING_KEYS.BLEND_MODE,
+  SCENE_SETTING_KEYS.OVERLAY_SCALE,
+  SCENE_SETTING_KEYS.SHADOW_MODE,
+  SCENE_SETTING_KEYS.SHADOW_LENGTH,
+  SCENE_SETTING_KEYS.DEPTH_SCALE
+]);
+
+const BASIC_LIFT_DRIFT_SHADOW_PRESET = Object.freeze({
+  [SCENE_SETTING_KEYS.PARALLAX]: "strong",
+  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "strong",
+  [SCENE_SETTING_KEYS.PARALLAX_MODE]: PARALLAX_MODES.ANCHORED_VELOCITY_CARD,
+  [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: PERSPECTIVE_POINTS.FAR_BOTTOM,
+  [SCENE_SETTING_KEYS.BLEND_MODE]: BLEND_MODES.SOFT,
   [SCENE_SETTING_KEYS.OVERLAY_SCALE]: "subtle",
   [SCENE_SETTING_KEYS.SHADOW_MODE]: SHADOW_MODES.TOP_DOWN,
-  [SCENE_SETTING_KEYS.SHADOW_LENGTH]: "normal",
-  [SCENE_SETTING_KEYS.ELEVATION_SCALE]: 1,
-  [SCENE_SETTING_KEYS.SUNRISE_HOUR]: 6,
-  [SCENE_SETTING_KEYS.SUNSET_HOUR]: 18,
+  [SCENE_SETTING_KEYS.SHADOW_LENGTH]: "long",
+  [SCENE_SETTING_KEYS.DEPTH_SCALE]: DEPTH_SCALES.COMPRESSED
+});
+
+export const ELEVATION_DEFAULT_SETTINGS = Object.freeze({
+  [SCENE_SETTING_KEYS.PARALLAX]: "strong",
+  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "strong",
+  [SCENE_SETTING_KEYS.PARALLAX_MODE]: PARALLAX_MODES.ANCHORED_VELOCITY_CARD,
+  [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: PERSPECTIVE_POINTS.FAR_BOTTOM,
+  [SCENE_SETTING_KEYS.BLEND_MODE]: BLEND_MODES.SOFT,
+  [SCENE_SETTING_KEYS.OVERLAY_SCALE]: "subtle",
+  [SCENE_SETTING_KEYS.SHADOW_MODE]: SHADOW_MODES.TOP_DOWN,
+  [SCENE_SETTING_KEYS.SHADOW_LENGTH]: "long",
   [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: TOKEN_ELEVATION_MODES.PER_REGION,
   [SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]: 120,
   [SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]: true,
@@ -186,7 +208,7 @@ export const ELEVATION_DEFAULT_SETTINGS = Object.freeze({
 
 export const SHADOW_STRENGTH_LIMITS = Object.freeze({
   MIN: 0,
-  MAX: 12,
+  MAX: 5,
   STEP: 0.05,
   DEFAULT: 2.15
 });
@@ -229,51 +251,38 @@ const MERGE_KNOWN_SCENE_SETTING_OPTIONS = Object.freeze({
 });
 
 export function defaultSceneElevationSettings(scene = canvas?.scene) {
+  const visualDefaults = elevationPresetValues(ELEVATION_PRESETS.DEFAULT, scene);
   return {
-    [SCENE_SETTING_KEYS.PARALLAX]: _worldSetting(SETTINGS.PARALLAX, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PARALLAX]),
-    [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: _worldSetting(SETTINGS.PARALLAX_HEIGHT_CONTRAST, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]),
-    [SCENE_SETTING_KEYS.PARALLAX_MODE]: _worldSetting(SETTINGS.PARALLAX_MODE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PARALLAX_MODE]),
-    [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: _worldSetting(SETTINGS.PERSPECTIVE_POINT, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PERSPECTIVE_POINT]),
+    [SCENE_SETTING_KEYS.PRESET]: ELEVATION_PRESETS.DEFAULT,
+    ...visualDefaults,
     [SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT]: _defaultPerspectiveEdgePoint(scene),
-    [SCENE_SETTING_KEYS.BLEND_MODE]: _worldSetting(SETTINGS.BLEND_MODE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.BLEND_MODE]),
-    [SCENE_SETTING_KEYS.OVERLAY_SCALE]: _worldSetting(SETTINGS.OVERLAY_SCALE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.OVERLAY_SCALE]),
-    [SCENE_SETTING_KEYS.SHADOW_MODE]: _worldSetting(SETTINGS.SHADOW_MODE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.SHADOW_MODE]),
-    [SCENE_SETTING_KEYS.SHADOW_LENGTH]: _worldSetting(SETTINGS.SHADOW_LENGTH, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.SHADOW_LENGTH]),
-    [SCENE_SETTING_KEYS.ELEVATION_SCALE]: _worldSetting(SETTINGS.ELEVATION_SCALE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.ELEVATION_SCALE]),
-    [SCENE_SETTING_KEYS.SUNRISE_HOUR]: _worldSetting(SETTINGS.SUNRISE_HOUR, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.SUNRISE_HOUR]),
-    [SCENE_SETTING_KEYS.SUNSET_HOUR]: _worldSetting(SETTINGS.SUNSET_HOUR, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.SUNSET_HOUR]),
     [SCENE_SETTING_KEYS.SUN_EDGE_POINT]: _defaultSunEdgePoint(scene),
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: _worldSetting(SETTINGS.TOKEN_ELEVATION_MODE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]),
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]: _worldSetting(SETTINGS.TOKEN_ELEVATION_ANIMATION_MS, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]: _worldSetting(SETTINGS.TOKEN_SCALE_ENABLED, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]),
-    [SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]: _worldSetting(SETTINGS.TOKEN_SCALE_MAX, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]),
-    [SCENE_SETTING_KEYS.DEPTH_SCALE]: _worldSetting(SETTINGS.DEPTH_SCALE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.DEPTH_SCALE])
+    [SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]: _worldSetting(SETTINGS.TOKEN_SCALE_MAX, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.TOKEN_SCALE_MAX])
   };
 }
 
 export function elevationDefaultSettings(scene = canvas?.scene) {
-  return {
-    ...ELEVATION_DEFAULT_SETTINGS,
-    [SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT]: _defaultPerspectiveEdgePoint(scene),
-    [SCENE_SETTING_KEYS.SUN_EDGE_POINT]: _defaultSunEdgePoint(scene)
-  };
+  return defaultSceneElevationSettings(scene);
 }
 
 export function getSceneElevationSettings(scene = canvas?.scene) {
   const defaults = defaultSceneElevationSettings(scene);
   const stored = scene?.getFlag?.(MODULE_ID, SCENE_SETTINGS_FLAG) ?? foundry.utils.getProperty(scene ?? {}, `flags.${MODULE_ID}.${SCENE_SETTINGS_FLAG}`) ?? {};
+  const storedSettings = foundry.utils.deepClone(stored);
+  if (!_hasOwn(storedSettings, SCENE_SETTING_KEYS.PRESET) && ELEVATION_PRESET_SETTING_KEYS.some(key => _hasOwn(storedSettings, key))) {
+    storedSettings[SCENE_SETTING_KEYS.PRESET] = ELEVATION_PRESETS.CUSTOM;
+  }
   const transient = scene ? (_transientSceneSettings.get(scene) ?? {}) : {};
-  const sceneSettings = foundry.utils.mergeObject(foundry.utils.deepClone(defaults), foundry.utils.deepClone(stored), MERGE_KNOWN_SCENE_SETTING_OPTIONS);
-  return foundry.utils.mergeObject(sceneSettings, foundry.utils.deepClone(transient), MERGE_KNOWN_SCENE_SETTING_OPTIONS);
+  const sceneSettings = foundry.utils.mergeObject(foundry.utils.deepClone(defaults), storedSettings, MERGE_KNOWN_SCENE_SETTING_OPTIONS);
+  const merged = foundry.utils.mergeObject(sceneSettings, foundry.utils.deepClone(transient), MERGE_KNOWN_SCENE_SETTING_OPTIONS);
+  return applyElevationPreset(merged, scene);
 }
 
 export function getSceneElevationSetting(key, scene = canvas?.scene) {
   return getSceneElevationSettings(scene)[key];
-}
-
-export function elevationScaleValue(setting) {
-  const value = Number(setting);
-  return Math.clamp(Number.isFinite(value) ? value : 1, 1, 5);
 }
 
 export function parallaxHeightContrastValue(setting) {
@@ -282,6 +291,25 @@ export function parallaxHeightContrastValue(setting) {
   if (String(setting ?? "").trim() && Number.isFinite(numeric)) return Math.clamp(numeric, 1, 4);
   const value = PARALLAX_HEIGHT_CONTRASTS[String(setting ?? "normal")];
   return value ?? PARALLAX_HEIGHT_CONTRASTS.normal;
+}
+
+export function elevationPresetKey(value) {
+  const key = String(value ?? ELEVATION_PRESETS.CUSTOM);
+  return Object.values(ELEVATION_PRESETS).includes(key) ? key : ELEVATION_PRESETS.CUSTOM;
+}
+
+export function elevationPresetValues(value, scene = canvas?.scene) {
+  const preset = elevationPresetKey(value);
+  if (preset === ELEVATION_PRESETS.DEFAULT) return _worldVisualSettings(scene);
+  if (preset === ELEVATION_PRESETS.BASIC_LIFT_DRIFT_SHADOW) return { ...BASIC_LIFT_DRIFT_SHADOW_PRESET };
+  return null;
+}
+
+export function applyElevationPreset(settings, scene = canvas?.scene) {
+  const preset = elevationPresetKey(settings?.[SCENE_SETTING_KEYS.PRESET]);
+  const presetValues = elevationPresetValues(preset, scene);
+  if (!presetValues) return { ...settings, [SCENE_SETTING_KEYS.PRESET]: ELEVATION_PRESETS.CUSTOM };
+  return { ...settings, [SCENE_SETTING_KEYS.PRESET]: preset, ...presetValues };
 }
 
 export function parallaxHeightContrastKey(setting) {
@@ -333,6 +361,29 @@ function _worldSetting(key, fallback) {
   } catch (err) {
     return fallback;
   }
+}
+
+function _worldVisualSettings() {
+  return {
+    [SCENE_SETTING_KEYS.PARALLAX]: _worldChoiceSetting(SETTINGS.PARALLAX, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PARALLAX], Object.keys(PARALLAX_STRENGTHS)),
+    [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: parallaxHeightContrastKey(_worldSetting(SETTINGS.PARALLAX_HEIGHT_CONTRAST, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST])),
+    [SCENE_SETTING_KEYS.PARALLAX_MODE]: _worldChoiceSetting(SETTINGS.PARALLAX_MODE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PARALLAX_MODE], Object.values(PARALLAX_MODES)),
+    [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: _worldChoiceSetting(SETTINGS.PERSPECTIVE_POINT, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.PERSPECTIVE_POINT], Object.values(PERSPECTIVE_POINTS)),
+    [SCENE_SETTING_KEYS.BLEND_MODE]: _worldChoiceSetting(SETTINGS.BLEND_MODE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.BLEND_MODE], Object.values(BLEND_MODES)),
+    [SCENE_SETTING_KEYS.OVERLAY_SCALE]: _worldChoiceSetting(SETTINGS.OVERLAY_SCALE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.OVERLAY_SCALE], Object.keys(OVERLAY_SCALE_STRENGTHS)),
+    [SCENE_SETTING_KEYS.SHADOW_MODE]: _worldChoiceSetting(SETTINGS.SHADOW_MODE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.SHADOW_MODE], Object.values(SHADOW_MODES)),
+    [SCENE_SETTING_KEYS.SHADOW_LENGTH]: shadowLengthKey(_worldSetting(SETTINGS.SHADOW_LENGTH, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.SHADOW_LENGTH])),
+    [SCENE_SETTING_KEYS.DEPTH_SCALE]: _worldChoiceSetting(SETTINGS.DEPTH_SCALE, ELEVATION_DEFAULT_SETTINGS[SCENE_SETTING_KEYS.DEPTH_SCALE], Object.values(DEPTH_SCALES))
+  };
+}
+
+function _worldChoiceSetting(key, fallback, choices) {
+  const value = String(_worldSetting(key, fallback) ?? fallback);
+  return choices.includes(value) ? value : fallback;
+}
+
+function _hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object ?? {}, key);
 }
 
 function _defaultPerspectiveEdgePoint(scene) {

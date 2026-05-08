@@ -11,7 +11,10 @@ import {
   SHADOW_LENGTHS,
   TOKEN_ELEVATION_MODES,
   DEPTH_SCALES,
-  elevationScaleValue,
+  ELEVATION_PRESETS,
+  ELEVATION_PRESET_SETTING_KEYS,
+  elevationPresetKey,
+  elevationPresetValues,
   elevationDefaultSettings,
   getSceneElevationSettings,
   parallaxHeightContrastKey,
@@ -20,6 +23,11 @@ import {
 } from "./config.mjs";
 
 const SELECT_GROUPS = Object.freeze({
+  [SCENE_SETTING_KEYS.PRESET]: [
+    [ELEVATION_PRESETS.CUSTOM, "SCENE_ELEVATION.Settings.PresetCustom"],
+    [ELEVATION_PRESETS.DEFAULT, "SCENE_ELEVATION.Settings.PresetDefault"],
+    [ELEVATION_PRESETS.BASIC_LIFT_DRIFT_SHADOW, "SCENE_ELEVATION.Settings.PresetBasicLiftDriftShadow"]
+  ],
   [SCENE_SETTING_KEYS.PARALLAX]: [
     ["off", "SCENE_ELEVATION.Settings.ParallaxOff"],
     ["minimal", "SCENE_ELEVATION.Settings.ParallaxMinimal"],
@@ -86,7 +94,6 @@ const SELECT_GROUPS = Object.freeze({
     [SHADOW_MODES.FULL_TEXTURE_MELD, "SCENE_ELEVATION.Settings.ShadowModeFullTextureMeld"],
     [SHADOW_MODES.TOP_DOWN, "SCENE_ELEVATION.Settings.ShadowModeTopDown"],
     [SHADOW_MODES.TOP_DOWN_STRONG, "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong"],
-    [SHADOW_MODES.SMALL_TIME_SUN, "SCENE_ELEVATION.Settings.ShadowModeSmallTimeSun"],
     [SHADOW_MODES.SUN_AT_EDGE, "SCENE_ELEVATION.Settings.ShadowModeSunAtEdge"]
   ],
   [SCENE_SETTING_KEYS.SHADOW_LENGTH]: [
@@ -132,7 +139,10 @@ class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
     await super._onRender?.(context, options);
     const form = this.element.querySelector("form");
     if (!form) return;
-    form.addEventListener("change", () => void this._applyFormSettings());
+    form.addEventListener("change", event => {
+      this._syncPresetFields(form, event.target);
+      void this._applyFormSettings();
+    });
     form.addEventListener("input", event => {
       if (event.target instanceof HTMLInputElement && event.target.type === "number") this._queueApplyFormSettings();
     });
@@ -142,12 +152,22 @@ class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
     });
   }
 
+  _syncPresetFields(form, target) {
+    const field = target instanceof HTMLInputElement || target instanceof HTMLSelectElement ? target : null;
+    if (!field?.name) return;
+    if (field.name === SCENE_SETTING_KEYS.PRESET) {
+      _applyPresetToSettingsForm(form, field.value, this.scene);
+      return;
+    }
+    if (ELEVATION_PRESET_SETTING_KEYS.includes(field.name)) _setSettingsFormPreset(form, ELEVATION_PRESETS.CUSTOM);
+  }
+
   async _applyFormSettings() {
     const scene = this.scene;
     const form = this.element.querySelector("form");
     if (!scene || !form) return;
     const data = new FormData(form);
-    await setSceneElevationSettings(scene, _formSettings(data, getSceneElevationSettings(scene)));
+    await setSceneElevationSettings(scene, _formSettings(data, getSceneElevationSettings(scene), scene));
   }
 
   async _setToDefault() {
@@ -164,6 +184,7 @@ class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
 function _settingsForm(settings) {
   return `<form class="${MODULE_ID}-scene-settings">
     <button type="button" data-action="setDefault"><i class="fa-solid fa-rotate-left"></i> ${game.i18n.localize("SCENE_ELEVATION.SceneSettings.SetToDefault")}</button>
+    ${_selectField(SCENE_SETTING_KEYS.PRESET, "SCENE_ELEVATION.Settings.Preset", settings)}
     ${_selectField(SCENE_SETTING_KEYS.PARALLAX, "SCENE_ELEVATION.Settings.Parallax", settings)}
     ${_selectField(SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST, "SCENE_ELEVATION.Settings.ParallaxHeightContrast", settings)}
     ${_selectField(SCENE_SETTING_KEYS.PARALLAX_MODE, "SCENE_ELEVATION.Settings.ParallaxMode", settings)}
@@ -173,9 +194,6 @@ function _settingsForm(settings) {
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_MODE, "SCENE_ELEVATION.Settings.ShadowMode", settings)}
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_LENGTH, "SCENE_ELEVATION.Settings.ShadowLength", settings)}
     ${_selectField(SCENE_SETTING_KEYS.DEPTH_SCALE, "SCENE_ELEVATION.Settings.DepthScale", settings)}
-    ${_numberField(SCENE_SETTING_KEYS.ELEVATION_SCALE, "SCENE_ELEVATION.Settings.ElevationScale", "SCENE_ELEVATION.Settings.ElevationScaleHint", settings, { min: 1, max: 5, step: 0.25 })}
-    ${_numberField(SCENE_SETTING_KEYS.SUNRISE_HOUR, "SCENE_ELEVATION.Settings.SunriseHour", "SCENE_ELEVATION.Settings.SunriseHourHint", settings, { min: 0, max: 23.75, step: 0.25 })}
-    ${_numberField(SCENE_SETTING_KEYS.SUNSET_HOUR, "SCENE_ELEVATION.Settings.SunsetHour", "SCENE_ELEVATION.Settings.SunsetHourHint", settings, { min: 0.25, max: 24, step: 0.25 })}
     ${_selectField(SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, "SCENE_ELEVATION.Settings.TokenElevationMode", settings)}
     <div class="form-group">
       <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenElevationAnimationMs")}</label>
@@ -195,7 +213,9 @@ function _settingsForm(settings) {
 }
 
 function _selectField(name, labelKey, settings) {
-  const current = name === SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST
+  const current = name === SCENE_SETTING_KEYS.PRESET
+    ? elevationPresetKey(settings[name])
+    : name === SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST
     ? parallaxHeightContrastKey(settings[name])
     : name === SCENE_SETTING_KEYS.SHADOW_LENGTH
       ? shadowLengthKey(settings[name])
@@ -225,32 +245,34 @@ function _populateSettingsForm(form, settings) {
   }
 }
 
-function _formSettings(data, current) {
+function _formSettings(data, current, scene) {
+  const preset = elevationPresetKey(data.get(SCENE_SETTING_KEYS.PRESET) ?? current[SCENE_SETTING_KEYS.PRESET]);
+  const presetValues = elevationPresetValues(preset, scene) ?? {};
   return {
-    [SCENE_SETTING_KEYS.PARALLAX]: _choice(data, SCENE_SETTING_KEYS.PARALLAX, Object.keys(PARALLAX_STRENGTHS), current),
-    [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: _heightContrastChoice(data, current),
-    [SCENE_SETTING_KEYS.PARALLAX_MODE]: _choice(data, SCENE_SETTING_KEYS.PARALLAX_MODE, Object.values(PARALLAX_MODES), current),
-    [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: _choice(data, SCENE_SETTING_KEYS.PERSPECTIVE_POINT, Object.values(PERSPECTIVE_POINTS), current),
+    [SCENE_SETTING_KEYS.PRESET]: preset,
+    [SCENE_SETTING_KEYS.PARALLAX]: presetValues[SCENE_SETTING_KEYS.PARALLAX] ?? _choice(data, SCENE_SETTING_KEYS.PARALLAX, Object.keys(PARALLAX_STRENGTHS), current, "strong"),
+    [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: presetValues[SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST] ?? _heightContrastChoice(data, current),
+    [SCENE_SETTING_KEYS.PARALLAX_MODE]: presetValues[SCENE_SETTING_KEYS.PARALLAX_MODE] ?? _choice(data, SCENE_SETTING_KEYS.PARALLAX_MODE, Object.values(PARALLAX_MODES), current, PARALLAX_MODES.ANCHORED_VELOCITY_CARD),
+    [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: presetValues[SCENE_SETTING_KEYS.PERSPECTIVE_POINT] ?? _choice(data, SCENE_SETTING_KEYS.PERSPECTIVE_POINT, Object.values(PERSPECTIVE_POINTS), current, PERSPECTIVE_POINTS.FAR_BOTTOM),
     [SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT]: current[SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT],
-    [SCENE_SETTING_KEYS.BLEND_MODE]: _choice(data, SCENE_SETTING_KEYS.BLEND_MODE, Object.values(BLEND_MODES), current),
-    [SCENE_SETTING_KEYS.OVERLAY_SCALE]: _choice(data, SCENE_SETTING_KEYS.OVERLAY_SCALE, Object.keys(OVERLAY_SCALE_STRENGTHS), current),
-    [SCENE_SETTING_KEYS.SHADOW_MODE]: _choice(data, SCENE_SETTING_KEYS.SHADOW_MODE, Object.values(SHADOW_MODES), current),
-    [SCENE_SETTING_KEYS.SHADOW_LENGTH]: _shadowLengthChoice(data, current),
-    [SCENE_SETTING_KEYS.ELEVATION_SCALE]: elevationScaleValue(data.get(SCENE_SETTING_KEYS.ELEVATION_SCALE) ?? current[SCENE_SETTING_KEYS.ELEVATION_SCALE]),
-    [SCENE_SETTING_KEYS.SUNRISE_HOUR]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SUNRISE_HOUR) ?? current[SCENE_SETTING_KEYS.SUNRISE_HOUR] ?? 6), 0, 23.75),
-    [SCENE_SETTING_KEYS.SUNSET_HOUR]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.SUNSET_HOUR) ?? current[SCENE_SETTING_KEYS.SUNSET_HOUR] ?? 18), 0.25, 24),
+    [SCENE_SETTING_KEYS.BLEND_MODE]: presetValues[SCENE_SETTING_KEYS.BLEND_MODE] ?? _choice(data, SCENE_SETTING_KEYS.BLEND_MODE, Object.values(BLEND_MODES), current, BLEND_MODES.SOFT),
+    [SCENE_SETTING_KEYS.OVERLAY_SCALE]: presetValues[SCENE_SETTING_KEYS.OVERLAY_SCALE] ?? _choice(data, SCENE_SETTING_KEYS.OVERLAY_SCALE, Object.keys(OVERLAY_SCALE_STRENGTHS), current, "subtle"),
+    [SCENE_SETTING_KEYS.SHADOW_MODE]: presetValues[SCENE_SETTING_KEYS.SHADOW_MODE] ?? _choice(data, SCENE_SETTING_KEYS.SHADOW_MODE, Object.values(SHADOW_MODES), current, SHADOW_MODES.TOP_DOWN),
+    [SCENE_SETTING_KEYS.SHADOW_LENGTH]: presetValues[SCENE_SETTING_KEYS.SHADOW_LENGTH] ?? _shadowLengthChoice(data, current),
     [SCENE_SETTING_KEYS.SUN_EDGE_POINT]: current[SCENE_SETTING_KEYS.SUN_EDGE_POINT],
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: _choice(data, SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, Object.values(TOKEN_ELEVATION_MODES), current),
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS) ?? current[SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS] ?? 120), 0, 600),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]: data.has(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? current[SCENE_SETTING_KEYS.TOKEN_SCALE_MAX] ?? 1.5), 1, 3),
-    [SCENE_SETTING_KEYS.DEPTH_SCALE]: _choice(data, SCENE_SETTING_KEYS.DEPTH_SCALE, Object.values(DEPTH_SCALES), current)
+    [SCENE_SETTING_KEYS.DEPTH_SCALE]: presetValues[SCENE_SETTING_KEYS.DEPTH_SCALE] ?? _choice(data, SCENE_SETTING_KEYS.DEPTH_SCALE, Object.values(DEPTH_SCALES), current, DEPTH_SCALES.COMPRESSED)
   };
 }
 
-function _choice(data, key, choices, current) {
-  const value = String(data.get(key) ?? current[key] ?? "");
-  return choices.includes(value) ? value : current[key];
+function _choice(data, key, choices, current, fallback = choices[0]) {
+  const value = String(data.get(key) ?? current[key] ?? fallback);
+  if (choices.includes(value)) return value;
+  const currentValue = String(current[key] ?? fallback);
+  return choices.includes(currentValue) ? currentValue : fallback;
 }
 
 function _heightContrastChoice(data, current) {
@@ -263,4 +285,18 @@ function _shadowLengthChoice(data, current) {
   const choices = Object.keys(SHADOW_LENGTHS);
   const value = String(data.get(SCENE_SETTING_KEYS.SHADOW_LENGTH) ?? "");
   return choices.includes(value) ? value : shadowLengthKey(current[SCENE_SETTING_KEYS.SHADOW_LENGTH]);
+}
+
+function _applyPresetToSettingsForm(form, presetKey, scene) {
+  const values = elevationPresetValues(presetKey, scene);
+  if (!values) return;
+  for (const [key, value] of Object.entries(values)) {
+    const field = form.elements.namedItem(key);
+    if (field) field.value = value;
+  }
+}
+
+function _setSettingsFormPreset(form, presetKey) {
+  const field = form.elements.namedItem(SCENE_SETTING_KEYS.PRESET);
+  if (field) field.value = presetKey;
 }
