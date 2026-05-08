@@ -145,7 +145,10 @@
     "RegionBehavior": {
       "Label": "Elevation",
       "Choices": {
-        "UseSceneSetting": "Use scene setting"
+        "UseSceneSetting": "Use scene setting",
+        "UnderOverheadHide": "Hide",
+        "UnderOverheadFade": "Fade",
+        "UnderOverheadKeep": "Keep"
       },
       "FIELDS": {
         "elevation": {
@@ -163,6 +166,14 @@
         "slopeDirection": {
           "label": "Slope direction",
           "hint": "Direction toward Elevation plus the elevation delta. 0 points north/up, 90 east/right, 180 south/down, and 270 west/left."
+        },
+        "overhead": {
+          "label": "Overhead",
+          "hint": "Treat this region as overhead cover. Tokens inside stay underneath it, so this region does not change their elevation or elevation-based token scaling."
+        },
+        "underOverheadMode": {
+          "label": "When Under Overhead",
+          "hint": "Controls how this overhead overlay appears to a token owner while their token is inside it. GMs see it faded while any token is inside unless selecting a token under it."
         },
         "shadowStrength": {
           "label": "Shadow strength",

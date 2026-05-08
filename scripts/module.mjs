@@ -11,6 +11,9 @@ import {
 
 const TOKEN_ELEVATION_MIN_MOVEMENT_DELAY_MS = 250;
 const TOKEN_ELEVATION_SETTLE_TIMEOUT_MS = 900;
+const TOKEN_MOVEMENT_DELTA_OPTION = "sceneElevationRegionHasMovementDelta";
+const TOKEN_MOVEMENT_POSITION_EPSILON = 0.5;
+const TOKEN_MOVEMENT_SIZE_EPSILON = 0.001;
 const TOKEN_PARALLAX_UI_KEYS = Object.freeze([
   "border", "nameplate", "tooltip", "elevationLabel", "elevationText", "elevationTooltip",
   "bars", "bar1", "bar2", "resourceBars", "attributeBars", "healthBar", "healthBars",
@@ -38,7 +41,10 @@ const _syncingTokenElevation = new Set();
 const _pendingTokenElevationUpdates = new Map();
 const _tokensWithPendingMovement = new Set();
 const _tokenMovementStartStates = new Map();
+const _tokenOverheadRefreshStates = new WeakMap();
+const _tokenUpdateMovementDeltas = new Map();
 let _tokenVisualRefreshFrame = null;
+let _regionOverheadRefreshFrame = null;
 
 // Diagnostic logging for token-elevation issues. Enable via:
 //   game.modules.get("scene-elevation-region").api.setDebug(true)
@@ -362,6 +368,7 @@ Hooks.on("canvasReady", async () => {
 Hooks.on("canvasTearDown", () => {
   _clearPendingTokenElevationUpdates();
   _clearPendingTokenVisualRefresh();
+  _clearPendingRegionOverheadRefresh();
   RegionElevationRenderer.instance.detach();
 });
 
@@ -387,7 +394,7 @@ Hooks.on("renderRegionBehaviorConfig", _insertRegionBehaviorDivider);
 function _insertRegionBehaviorDivider(app, html) {
   const root = _renderedHtmlElement(html) ?? app?.element;
   if (!root?.querySelectorAll) return;
-  _insertRegionDividerAfterField(root, "slopeDirection", `${MODULE_ID}-region-settings-divider`);
+  _insertRegionDividerAfterField(root, "underOverheadMode", `${MODULE_ID}-region-settings-divider`);
   _insertRegionDividerAfterField(root, "depthScaleOverride", `${MODULE_ID}-region-settings-preset-end-divider`);
   _wireRegionPresetControls(root);
   app?.setPosition?.({ height: "auto" });
@@ -466,11 +473,16 @@ function _tokenScaleFactor(token) {
   if (!getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED)) return 1;
   if (!canvas?.scene || !token?.document) return 1;
   const entries = getActiveElevationRegions(canvas.scene);
-  const state = _tokenElevationState(token.document, { requireTokenScaling: true }, {}, entries);
+  const state = _tokenElevationState(token.document, { requireTokenScaling: true, allowOverheadSupport: true }, {}, entries);
   if (!state.found) return 1;
   const maxSetting = Number(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? 1.5);
   const max = Math.max(1, Number.isFinite(maxSetting) ? maxSetting : 1.5);
-  const normalized = _normalizedTokenScaleElevation(state.elevation, _tokenScalingElevationRange(entries));
+  const range = _tokenScalingElevationRange(entries);
+  if (state.entry?.overhead) {
+    range.lowest = Math.min(range.lowest, Number(state.elevation ?? 0));
+    range.highest = Math.max(range.highest, Number(state.elevation ?? 0));
+  }
+  const normalized = _normalizedTokenScaleElevation(state.elevation, range);
   const factor = normalized >= 0
     ? 1 + normalized * (max - 1)
     : 1 + normalized * (1 - (1 / max));
@@ -554,10 +566,10 @@ function _highestTokenElevationState(tokenDocument, position = {}) {
     case TOKEN_ELEVATION_MODES.NEVER:
       return { skip: true, found: false, elevation: 0, entry: null };
     case TOKEN_ELEVATION_MODES.ALWAYS:
-      return _tokenElevationState(tokenDocument, { preferHighest: true }, position);
+      return _tokenElevationState(tokenDocument, { preferHighest: true, allowOverheadSupport: true }, position);
     case TOKEN_ELEVATION_MODES.PER_REGION:
     default:
-      return _tokenElevationState(tokenDocument, { requireTokenElevation: true, preferHighest: true }, position);
+      return _tokenElevationState(tokenDocument, { requireTokenElevation: true, preferHighest: true, allowOverheadSupport: true }, position);
   }
 }
 
@@ -982,6 +994,47 @@ function _clearPendingTokenVisualRefresh() {
   _tokenVisualRefreshFrame = null;
 }
 
+function _queueRegionOverheadRefresh() {
+  if (_regionOverheadRefreshFrame) return;
+  if (!RegionElevationRenderer.instance.hasOverheadRegions()) return;
+  _regionOverheadRefreshFrame = requestAnimationFrame(() => {
+    _regionOverheadRefreshFrame = null;
+    RegionElevationRenderer.instance.refreshOverheadVisibility();
+  });
+}
+
+function _clearPendingRegionOverheadRefresh() {
+  if (_regionOverheadRefreshFrame) cancelAnimationFrame(_regionOverheadRefreshFrame);
+  _regionOverheadRefreshFrame = null;
+}
+
+function _queueOverheadRefreshForToken(token) {
+  if (!token || !RegionElevationRenderer.instance.hasOverheadRegions()) return;
+  const state = _tokenOverheadRefreshState(token);
+  if (_tokenOverheadRefreshStates.get(token) === state) return;
+  _tokenOverheadRefreshStates.set(token, state);
+  _queueRegionOverheadRefresh();
+}
+
+function _tokenOverheadRefreshState(token) {
+  const document = token.document;
+  const x = _finitePositionValue(token.x ?? token.position?.x ?? document?.x, 0);
+  const y = _finitePositionValue(token.y ?? token.position?.y ?? document?.y, 0);
+  const width = _finitePositionValue(document?.width, 1);
+  const height = _finitePositionValue(document?.height, 1);
+  const documentElevation = Number(document?.elevation);
+  const tokenElevation = Number(token.elevation);
+  const elevation = Number.isFinite(documentElevation) && Number.isFinite(tokenElevation)
+    ? Math.max(documentElevation, tokenElevation)
+    : Number.isFinite(documentElevation) ? documentElevation : tokenElevation;
+  return [document?.uuid ?? document?.id ?? "", _roundOverheadRefreshValue(x), _roundOverheadRefreshValue(y), width, height, elevation].join("|");
+}
+
+function _roundOverheadRefreshValue(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number * 2) / 2 : 0;
+}
+
 async function _syncTokenElevation(tokenDocument, position = {}, options = {}) {
   if (!canvas?.scene || tokenDocument?.parent !== canvas.scene) return;
   const uuid = tokenDocument.uuid ?? tokenDocument.id;
@@ -1030,6 +1083,7 @@ function _queueTokenElevationAfterMovement(tokenDocument, change = {}, options =
   // move enters/leaves elevation, the configured elevation sync should control
   // when those visuals update.
   const immediateToken = tokenDocument.object;
+  _queueOverheadRefreshForToken(immediateToken);
   if (immediateToken && !_movementChangesTokenElevation(tokenDocument, finalPosition)) {
     _applyTokenScale(immediateToken, { forceScale: true });
   }
@@ -1048,12 +1102,14 @@ function _queueTokenElevationAfterMovement(tokenDocument, change = {}, options =
     const waitingForAnimation = elapsed < animationDuration;
     const waitingForPosition = !_tokenMovementSettled(tokenDocument) && elapsed < TOKEN_ELEVATION_SETTLE_TIMEOUT_MS;
     if (waitingForAnimation || waitingForPosition) {
+      _queueOverheadRefreshForToken(tokenDocument.object);
       const frame = requestAnimationFrame(waitForMovement);
       _pendingTokenElevationUpdates.set(uuid, { frame });
       return;
     }
     _pendingTokenElevationUpdates.delete(uuid);
     _tokensWithPendingMovement.delete(uuid);
+    _queueOverheadRefreshForToken(tokenDocument.object);
     const movementStart = _tokenMovementStartStates.get(uuid);
     void _syncTokenElevation(tokenDocument, finalPosition, { movementStart }).finally(() => {
       if (_tokenMovementStartStates.get(uuid) === movementStart) _tokenMovementStartStates.delete(uuid);
@@ -1104,11 +1160,13 @@ async function _promoteNegativeTokenElevationForVisibleMovement(tokenDocument, p
 
 function _stripMovementElevationChange(tokenDocument, change = {}) {
   if (!canvas?.scene || tokenDocument?.parent !== canvas.scene) return null;
-  if (!_hasTokenMovementChange(change) || !foundry.utils.hasProperty(change, "elevation")) return null;
+  if (!_hasTokenMovementDelta(tokenDocument, change) || !foundry.utils.hasProperty(change, "elevation")) return null;
   const uuid = tokenDocument.uuid ?? tokenDocument.id;
   if (!uuid || _syncingTokenElevation.has(uuid)) return null;
+  const requested = Number(change.elevation ?? 0);
+  if (!Number.isFinite(requested) || Math.abs(requested) > 0.001) return null;
   const stripped = {
-    requested: Number(change.elevation ?? 0),
+    requested,
     current: Number(tokenDocument.elevation ?? 0),
     changeKeys: Object.keys(change ?? {})
   };
@@ -1177,6 +1235,21 @@ function _hasTokenMovementChange(change = {}) {
     || foundry.utils.hasProperty(change, "height");
 }
 
+function _hasTokenMovementDelta(tokenDocument, change = {}) {
+  if (!tokenDocument || !_hasTokenMovementChange(change)) return false;
+  return _movementPropertyChanged(change, "x", tokenDocument.x, TOKEN_MOVEMENT_POSITION_EPSILON)
+    || _movementPropertyChanged(change, "y", tokenDocument.y, TOKEN_MOVEMENT_POSITION_EPSILON)
+    || _movementPropertyChanged(change, "width", tokenDocument.width, TOKEN_MOVEMENT_SIZE_EPSILON)
+    || _movementPropertyChanged(change, "height", tokenDocument.height, TOKEN_MOVEMENT_SIZE_EPSILON);
+}
+
+function _movementPropertyChanged(change, key, current, epsilon) {
+  if (!foundry.utils.hasProperty(change, key)) return false;
+  const next = _finitePositionValue(change[key], current ?? 0);
+  const previous = _finitePositionValue(current, 0);
+  return Math.abs(next - previous) > epsilon;
+}
+
 function _tokenMovementPosition(tokenDocument, change = {}) {
   return {
     x: foundry.utils.hasProperty(change, "x") ? _finitePositionValue(change.x, tokenDocument.x ?? 0) : _finitePositionValue(tokenDocument.x, 0),
@@ -1214,6 +1287,17 @@ function _clearPendingTokenElevationUpdates() {
   _pendingTokenElevationUpdates.clear();
   _tokensWithPendingMovement.clear();
   _tokenMovementStartStates.clear();
+  _tokenUpdateMovementDeltas.clear();
+}
+
+function _cancelPendingTokenElevationUpdate(tokenDocument) {
+  const uuid = tokenDocument?.uuid ?? tokenDocument?.id;
+  if (!uuid) return;
+  const pending = _pendingTokenElevationUpdates.get(uuid);
+  if (pending) cancelAnimationFrame(pending.frame);
+  _pendingTokenElevationUpdates.delete(uuid);
+  _tokensWithPendingMovement.delete(uuid);
+  _tokenMovementStartStates.delete(uuid);
 }
 
 async function _refreshAllTokenElevations() {
@@ -1231,8 +1315,12 @@ Hooks.on("drawToken", (token) => {
   }
   _clearTokenParallaxCaches(token);
   _applyTokenScale(token);
+  _queueOverheadRefreshForToken(token);
 });
-Hooks.on("refreshToken", _applyTokenScale);
+Hooks.on("refreshToken", (token) => {
+  _applyTokenScale(token);
+  _queueOverheadRefreshForToken(token);
+});
 Hooks.on("targetToken", (_user, token) => {
   if (!token) return;
   requestAnimationFrame(() => {
@@ -1243,18 +1331,27 @@ Hooks.on("targetToken", (_user, token) => {
 Hooks.on("createToken", (document) => {
   if (document.parent !== canvas?.scene) return;
   void _syncTokenElevation(document);
+  _queueRegionOverheadRefresh();
 });
+Hooks.on("deleteToken", (document) => {
+  if (document.parent && document.parent !== canvas?.scene) return;
+  _queueRegionOverheadRefresh();
+});
+Hooks.on("controlToken", () => _queueRegionOverheadRefresh());
 Hooks.on("preUpdateToken", (document, change, options, userId) => {
-  const hasMove = _hasTokenMovementChange(change);
+  const hasMove = _hasTokenMovementDelta(document, change);
+  if (options) options[TOKEN_MOVEMENT_DELTA_OPTION] = hasMove;
+  const uuid = document.uuid ?? document.id;
+  if (uuid) _tokenUpdateMovementDeltas.set(uuid, hasMove);
   const syncing = _syncingTokenElevation.has(document.uuid ?? document.id);
   const strippedMovementElevation = _stripMovementElevationChange(document, change);
   const hasElev = foundry.utils.hasProperty(change, "elevation");
+  if (hasElev && !hasMove && !syncing) _cancelPendingTokenElevationUpdate(document);
   const correctedElevation = _correctMovementElevationChange(document, change);
   const json = (() => { try { return JSON.stringify(change); } catch { return "<unstringifiable>"; } })();
   const optJson = (() => { try { return JSON.stringify(Object.keys(options ?? {})); } catch { return ""; } })();
   if (hasElev && !hasMove) {
     _dsLog("hook:preUpdateToken:ELEVATION-ONLY", document, { change: json, options: optJson, userId, syncing, currentElev: document.elevation, correctedElevation });
-    if (!syncing) console.trace(`[scene-elevation-region] external elevation write to ${change.elevation} (current ${document.elevation}) options=${optJson}`);
   } else {
     _dsLog("hook:preUpdateToken", document, { changeKeys: Object.keys(change ?? {}), changeJson: json, hasMove, hasElev, syncing, strippedMovementElevation, correctedElevation });
   }
@@ -1263,14 +1360,20 @@ Hooks.on("preUpdateToken", (document, change, options, userId) => {
 });
 Hooks.on("updateToken", (document, change, options) => {
   const json = (() => { try { return JSON.stringify(change); } catch { return "<unstringifiable>"; } })();
-  _dsLog("hook:updateToken", document, { changeKeys: Object.keys(change ?? {}), changeJson: json, hasMove: _hasTokenMovementChange(change), optionsKeys: Object.keys(options ?? {}) });
+  const uuid = document.uuid ?? document.id;
+  const hasTrackedMovementDelta = uuid && _tokenUpdateMovementDeltas.has(uuid);
+  const hasMove = hasTrackedMovementDelta ? _tokenUpdateMovementDeltas.get(uuid) : (options?.[TOKEN_MOVEMENT_DELTA_OPTION] ?? _hasTokenMovementChange(change));
+  if (hasTrackedMovementDelta) _tokenUpdateMovementDeltas.delete(uuid);
+  _dsLog("hook:updateToken", document, { changeKeys: Object.keys(change ?? {}), changeJson: json, hasMove, optionsKeys: Object.keys(options ?? {}) });
   if (document.parent !== canvas?.scene) return;
-  if (_hasTokenMovementChange(change)) {
+  if (hasMove) {
+    _queueRegionOverheadRefresh();
     _queueTokenElevationAfterMovement(document, change, options);
     return;
   }
   if (foundry.utils.hasProperty(change, "elevation")) {
     _dsLog("elevationChanged", document, { newElevation: change.elevation, syncing: _syncingTokenElevation.has(document.uuid ?? document.id) });
+    _queueRegionOverheadRefresh();
   }
   _applyTokenScale(document.object);
 });

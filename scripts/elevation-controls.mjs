@@ -215,7 +215,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     const onUp = event => this._onPointerUp(event);
     const onContextMenu = event => this._onContextMenu(event);
     const onKeyDown = event => this._onKeyDown(event);
-    window.addEventListener("pointermove", onMove, true);
+    window.addEventListener("pointermove", onMove, { capture: true, passive: true });
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("pointerup", onUp, true);
     window.addEventListener("contextmenu", onContextMenu, true);
@@ -225,7 +225,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
   _unbindStageListeners() {
     if (this._listeners) {
-      window.removeEventListener("pointermove", this._listeners.onMove, true);
+      window.removeEventListener("pointermove", this._listeners.onMove, { capture: true });
       window.removeEventListener("pointerdown", this._listeners.onDown, true);
       window.removeEventListener("pointerup", this._listeners.onUp, true);
       window.removeEventListener("contextmenu", this._listeners.onContextMenu, true);
@@ -245,7 +245,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._drawingInProgress() && isCanvasEvent) this._updateElevationHoverLabel(event);
     else this._hideElevationHoverLabel();
     if (this._draggingSunPoint) {
-      this._consumeEvent(event);
+      this._consumeEvent(event, { preventDefault: false });
       const rawPoint = this._eventPosition(event, { snap: false });
       this._sunEdgePointPreview = this._clampPointToSceneEdge(rawPoint);
       setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.SUN_EDGE_POINT, this._sunEdgePointPreview);
@@ -254,7 +254,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       return;
     }
     if (this._draggingPerspectivePoint) {
-      this._consumeEvent(event);
+      this._consumeEvent(event, { preventDefault: false });
       const rawPoint = this._eventPosition(event, { snap: false });
       this._edgePointPreview = this._clampPointToSceneEdge(rawPoint);
       setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT, this._edgePointPreview);
@@ -263,7 +263,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       return;
     }
     if (!DRAW_TOOLS.has(this._activeTool)) return;
-    this._consumeEvent(event);
+    this._consumeEvent(event, { preventDefault: false });
     const point = this._eventPosition(event);
     if (this._activeTool === TOOL_POLYGON) this._hover = point;
     else this._shapeHover = point;
@@ -568,8 +568,8 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     return this._points.length > 0 || !!this._shapeStart;
   }
 
-  _consumeEvent(event) {
-    event.preventDefault?.();
+  _consumeEvent(event, { preventDefault = true } = {}) {
+    if (preventDefault) event.preventDefault?.();
     event.stopPropagation?.();
     event.stopImmediatePropagation?.();
   }

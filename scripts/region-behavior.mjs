@@ -1,4 +1,4 @@
-import { BLEND_MODES, DEPTH_SCALES, ELEVATION_PRESETS, ELEVATION_SCALE_LIMITS, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, shadowLengthKey } from "./config.mjs";
+import { BLEND_MODES, DEPTH_SCALES, ELEVATION_PRESETS, ELEVATION_SCALE_LIMITS, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, shadowLengthKey } from "./config.mjs";
 
 const fields = foundry.data.fields;
 const USE_SCENE_SETTING = "";
@@ -106,6 +106,12 @@ const ELEVATION_SCALE_CHOICES = Object.freeze(Object.fromEntries([
   })
 ]));
 
+const UNDER_OVERHEAD_CHOICES = Object.freeze({
+  [OVERHEAD_MODES.HIDE]: "SCENE_ELEVATION.RegionBehavior.Choices.UnderOverheadHide",
+  [OVERHEAD_MODES.FADE]: "SCENE_ELEVATION.RegionBehavior.Choices.UnderOverheadFade",
+  [OVERHEAD_MODES.KEEP]: "SCENE_ELEVATION.RegionBehavior.Choices.UnderOverheadKeep"
+});
+
 const PARALLAX_HEIGHT_CONTRAST_CHOICES = Object.freeze({
   [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
   normal: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNormal",
@@ -164,6 +170,11 @@ function _slopeDirection(value) {
   return ((number % 360) + 360) % 360;
 }
 
+function _underOverheadMode(value) {
+  const mode = String(value ?? OVERHEAD_MODES.FADE);
+  return Object.values(OVERHEAD_MODES).includes(mode) ? mode : OVERHEAD_MODES.FADE;
+}
+
 function _legacySlopeHeight(data, elevation) {
   const lowest = _numberValue(data.slopeLowestElevation, elevation);
   const highest = _numberValue(data.slopeHighestElevation, elevation);
@@ -192,6 +203,8 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
     if (data.slopeHeight === undefined) data.slopeHeight = _legacySlopeHeight(data, elevation);
     data.slopeHeight = data.slope ? _numberValue(data.slopeHeight, 0) : 0;
     data.slopeDirection = _slopeDirection(data.slopeDirection);
+    data.overhead = _booleanValue(data.overhead, false);
+    data.underOverheadMode = _underOverheadMode(data.underOverheadMode);
     delete data.slopeLowestElevation;
     delete data.slopeHighestElevation;
     return super.migrateData(data);
@@ -224,6 +237,19 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         step: 1,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeDirection.label",
         hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.slopeDirection.hint"
+      }),
+      overhead: new fields.BooleanField({
+        required: true,
+        initial: false,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.overhead.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.overhead.hint"
+      }),
+      underOverheadMode: new fields.StringField({
+        required: true,
+        initial: OVERHEAD_MODES.FADE,
+        choices: UNDER_OVERHEAD_CHOICES,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.underOverheadMode.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.underOverheadMode.hint"
       }),
       presetOverride: new fields.StringField({
         required: true,
@@ -336,6 +362,7 @@ export function registerRegionHooks(invalidate) {
     const slopeChanged = foundry.utils.hasProperty(changes, "system.slope");
     const elevationChanged = foundry.utils.hasProperty(changes, "system.elevation");
     const directionChanged = foundry.utils.hasProperty(changes, "system.slopeDirection");
+    const underOverheadChanged = foundry.utils.hasProperty(changes, "system.underOverheadMode");
     const previousSlope = document.system?.slope === true;
     const nextSlope = slopeChanged ? _booleanValue(foundry.utils.getProperty(changes, "system.slope"), previousSlope) : previousSlope;
     const slopeActuallyChanged = slopeChanged && nextSlope !== previousSlope;
@@ -343,6 +370,7 @@ export function registerRegionHooks(invalidate) {
       foundry.utils.setProperty(changes, "system.slopeHeight", 0);
     }
     if (directionChanged) foundry.utils.setProperty(changes, "system.slopeDirection", _slopeDirection(foundry.utils.getProperty(changes, "system.slopeDirection")));
+    if (underOverheadChanged) foundry.utils.setProperty(changes, "system.underOverheadMode", _underOverheadMode(foundry.utils.getProperty(changes, "system.underOverheadMode")));
   });
 
   const triggers = [

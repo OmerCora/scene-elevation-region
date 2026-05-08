@@ -1,4 +1,4 @@
-import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey, elevationScaleValue } from "./config.mjs";
+import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey, elevationScaleValue } from "./config.mjs";
 
 /**
  * Per-draw settings cache. `getSceneElevationSettings()` rebuilds via two deep clones
@@ -84,6 +84,10 @@ const TEXTURE_MELD_CONTACT_ALPHA = 0.36;
 const TEXTURE_MELD_BLACK_ALPHA_RATIO = 0.58;
 const FULL_TEXTURE_MELD_SOFT_ALPHA = 0.62;
 const FULL_TEXTURE_MELD_CONTACT_ALPHA = 0.5;
+const OVERHEAD_FADE_ALPHA = 0.5;
+const REGION_CONTAINER_Z_INDEX = 10_000;
+const OVERHEAD_SORT_EPSILON = 0.001;
+const OVERHEAD_SUPPORT_EPSILON = 0.001;
 
 const BLEND_PROFILE_CONFIGS = Object.freeze({
   [BLEND_MODES.OFF]: Object.freeze({
@@ -172,6 +176,8 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
     const highestElevation = slope ? Math.max(slopeBaseElevation, slopeFarElevation) : flatElevation;
     const elevation = slope ? (slopeBaseElevation + slopeFarElevation) / 2 : flatElevation;
     const shadowStrength = Number(behavior.system?.shadowStrength ?? sourceSystem.shadowStrength ?? SHADOW_STRENGTH_LIMITS.DEFAULT);
+    const overhead = (behavior.system?.overhead ?? sourceSystem.overhead) === true;
+    const underOverheadMode = _overheadMode(behavior.system?.underOverheadMode ?? sourceSystem.underOverheadMode);
     if (!Number.isFinite(elevation)) continue;
     const presetOverride = _regionPresetOverride(behavior.system?.presetOverride ?? sourceSystem.presetOverride);
     const presetValues = presetOverride ? elevationPresetValues(presetOverride, scene) : null;
@@ -197,6 +203,8 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
       slopeMinProjection: slopeRange?.min ?? 0,
       slopeMaxProjection: slopeRange?.max ?? 0,
       shadowStrength: Math.clamp(Number.isFinite(shadowStrength) ? shadowStrength : SHADOW_STRENGTH_LIMITS.DEFAULT, SHADOW_STRENGTH_LIMITS.MIN, SHADOW_STRENGTH_LIMITS.MAX),
+      overhead,
+      underOverheadMode,
       area: _regionArea(region, paths),
       presetOverride,
       parallaxStrengthOverride: _keyOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.PARALLAX, behavior.system?.parallaxStrengthOverride ?? sourceSystem.parallaxStrengthOverride), PARALLAX_STRENGTHS),
@@ -209,11 +217,83 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
       depthScaleOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.DEPTH_SCALE, behavior.system?.depthScaleOverride ?? sourceSystem.depthScaleOverride), DEPTH_SCALES),
       elevationScaleOverride: _elevationScaleOverride(behavior.system?.elevationScaleOverride ?? sourceSystem.elevationScaleOverride),
       parallaxHeightContrastOverride: _keyOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST, behavior.system?.parallaxHeightContrastOverride ?? sourceSystem.parallaxHeightContrastOverride), PARALLAX_HEIGHT_CONTRASTS),
-      modifyTokenElevation: behavior.system?.modifyTokenElevation !== false,
-      modifyTokenScaling: behavior.system?.modifyTokenScaling !== false
+      modifyTokenElevation: !overhead && behavior.system?.modifyTokenElevation !== false,
+      modifyTokenScaling: !overhead && behavior.system?.modifyTokenScaling !== false
     });
   }
   return entries;
+}
+
+function _overheadMode(value) {
+  const mode = String(value ?? OVERHEAD_MODES.FADE);
+  return Object.values(OVERHEAD_MODES).includes(mode) ? mode : OVERHEAD_MODES.FADE;
+}
+
+function _overheadModeAlpha(mode) {
+  switch (_overheadMode(mode)) {
+    case OVERHEAD_MODES.HIDE:
+      return 0;
+    case OVERHEAD_MODES.KEEP:
+      return 1;
+    case OVERHEAD_MODES.FADE:
+    default:
+      return OVERHEAD_FADE_ALPHA;
+  }
+}
+
+function _tokenOwnedByCurrentUser(token) {
+  return !!(token?.isOwner || token?.document?.isOwner || token?.actor?.isOwner);
+}
+
+function _tokenSelected(token) {
+  return !!(token?.controlled || token?.selected || token?.isControlled || canvas?.tokens?.controlled?.includes(token));
+}
+
+function _tokenUnderOverhead(token, entry) {
+  const state = _tokenRegionState(token);
+  if (!state?.document || state.document.parent !== canvas?.scene || !entry?.region) return false;
+  const tokenElevation = _finiteNumber(state.elevation, 0);
+  return _tokenRegionSamplePoints(state).some(point => {
+    const regionElevation = _entryElevationAtPoint(entry, point);
+    return regionElevation > tokenElevation + 0.001 && _regionContains(entry.region, point, regionElevation);
+  });
+}
+
+function _tokenRegionState(token) {
+  const document = token?.document ?? token;
+  if (!document) return null;
+  const object = token?.document ? token : document.object;
+  const documentElevation = Number(document.elevation);
+  const objectElevation = Number(object?.elevation);
+  const elevation = Number.isFinite(documentElevation) && Number.isFinite(objectElevation)
+    ? Math.max(documentElevation, objectElevation)
+    : Number.isFinite(documentElevation) ? documentElevation : objectElevation;
+  return {
+    document,
+    x: _finiteNumber(object?.x ?? object?.position?.x ?? document.x, document.x ?? 0),
+    y: _finiteNumber(object?.y ?? object?.position?.y ?? document.y, document.y ?? 0),
+    width: _finiteNumber(document.width, 1),
+    height: _finiteNumber(document.height, 1),
+    elevation: _finiteNumber(elevation, 0)
+  };
+}
+
+function _tokenRegionSamplePoints(tokenState) {
+  const gridSize = _finiteNumber(canvas?.grid?.size ?? canvas?.scene?.grid?.size ?? canvas?.dimensions?.size, 100);
+  const x = _finiteNumber(tokenState.x, 0);
+  const y = _finiteNumber(tokenState.y, 0);
+  const width = Math.max(0.25, _finiteNumber(tokenState.width, 1)) * gridSize;
+  const height = Math.max(0.25, _finiteNumber(tokenState.height, 1)) * gridSize;
+  const elevation = _finiteNumber(tokenState.elevation, 0);
+  const insetX = Math.min(width / 2, Math.max(1, gridSize * 0.2));
+  const insetY = Math.min(height / 2, Math.max(1, gridSize * 0.2));
+  return [
+    { x: x + width / 2, y: y + height / 2, elevation },
+    { x: x + insetX, y: y + insetY, elevation },
+    { x: x + width - insetX, y: y + insetY, elevation },
+    { x: x + insetX, y: y + height - insetY, elevation },
+    { x: x + width - insetX, y: y + height - insetY, elevation }
+  ];
 }
 
 export function getRegionElevationStateAtPoint(point, scene = canvas?.scene, entries = null, options = {}) {
@@ -223,9 +303,11 @@ export function getRegionElevationStateAtPoint(point, scene = canvas?.scene, ent
   let found = false;
   let area = Infinity;
   for (const candidate of candidates) {
-    if (options.requireTokenElevation && !candidate.modifyTokenElevation) continue;
-    if (options.requireTokenScaling && !candidate.modifyTokenScaling) continue;
     const candidateElevation = _entryElevationAtPoint(candidate, point);
+    const overheadSupport = _overheadSupportsPoint(candidate, point, candidateElevation, options);
+    if (options.allowOverheadSupport && candidate.overhead && !overheadSupport) continue;
+    if (options.requireTokenElevation && !candidate.modifyTokenElevation && !overheadSupport) continue;
+    if (options.requireTokenScaling && !candidate.modifyTokenScaling && !overheadSupport) continue;
     if (!_regionContains(candidate.region, point, candidateElevation)) continue;
     if (options.preferHighest) {
       if (!found || candidateElevation > elevation) {
@@ -244,6 +326,12 @@ export function getRegionElevationStateAtPoint(point, scene = canvas?.scene, ent
     found = true;
   }
   return { found, elevation: found ? elevation : 0, entry };
+}
+
+function _overheadSupportsPoint(entry, point, elevation, options = {}) {
+  if (!options.allowOverheadSupport || !entry?.overhead) return false;
+  const tokenElevation = Number(point?.elevation);
+  return Number.isFinite(tokenElevation) && tokenElevation >= Number(elevation ?? 0) - OVERHEAD_SUPPORT_EPSILON;
 }
 
 export function getRegionElevationAtPoint(point, scene = canvas?.scene, entries = null, options = {}) {
@@ -520,6 +608,8 @@ export class RegionElevationRenderer {
 
   constructor() {
     this.container = null;
+    this.overheadContainer = null;
+    this._overheadContainers = new Map();
     this.mask = null;
     this._scene = null;
     this._entries = [];
@@ -550,7 +640,7 @@ export class RegionElevationRenderer {
 
     canvas.primary.sortableChildren = true;
     container.eventMode = "none";
-    container.zIndex = 10_000;
+    container.zIndex = REGION_CONTAINER_Z_INDEX;
     container.mask = mask;
     canvas.primary.addChild(mask);
     canvas.primary.addChild(container);
@@ -561,6 +651,7 @@ export class RegionElevationRenderer {
 
     this._scene = scene;
     this.container = container;
+    this.overheadContainer = null;
     this.mask = mask;
     this._cameraFocus = null;
     this.update();
@@ -571,11 +662,15 @@ export class RegionElevationRenderer {
     this._panRaf = null;
     try { this._pointerEventTarget?.removeEventListener?.("pointermove", this._pointerMoveHandler); } catch (err) {}
     try { this.container?.parent?.removeChild(this.container); } catch (err) {}
+    try { this.overheadContainer?.parent?.removeChild(this.overheadContainer); } catch (err) {}
     try { this.mask?.parent?.removeChild(this.mask); } catch (err) {}
     this.container?.destroy({ children: true });
+    this.overheadContainer?.destroy({ children: true });
+    this._clearOverheadContainers({ destroy: true });
     this.mask?.destroy();
     this._clearGeneratedTextureCache();
     this.container = null;
+    this.overheadContainer = null;
     this.mask = null;
     this._scene = null;
     this._entries = [];
@@ -583,6 +678,7 @@ export class RegionElevationRenderer {
     this._previousCameraFocus = null;
     this._parallaxState.clear();
     this._visualParams.clear();
+    this._overheadContainers.clear();
     this._needsParallaxFrame = false;
     this._pointerEventTarget = null;
     this._pointerMoveHandler = null;
@@ -599,6 +695,15 @@ export class RegionElevationRenderer {
     this.container.visible = this._entries.length > 0;
     this._updateCameraFocus(true);
     this._drawRegions({ clear: false });
+  }
+
+  hasOverheadRegions() {
+    return this._entries.some(visual => visual.entry.overhead);
+  }
+
+  refreshOverheadVisibility() {
+    if (!this.container || !this._scene || !this.hasOverheadRegions()) return;
+    this._drawRegions({ emitVisualRefresh: false });
   }
 
   onPan() {
@@ -626,9 +731,10 @@ export class RegionElevationRenderer {
     const height = Number(position.height ?? tokenDocument.height ?? 1);
     const point = {
       x: x + (width * gridSize) / 2,
-      y: y + (height * gridSize) / 2
+      y: y + (height * gridSize) / 2,
+      elevation: Number(tokenDocument.elevation ?? 0)
     };
-    const state = getRegionElevationStateAtPoint(point, this._scene, this._entries.map(visual => visual.entry), { requireTokenScaling: true });
+    const state = getRegionElevationStateAtPoint(point, this._scene, this._entries.map(visual => visual.entry), { requireTokenScaling: true, allowOverheadSupport: true });
     if (!state.found) return { x: 0, y: 0 };
     const visual = this._entries.find(candidate => candidate.entry === state.entry);
     if (!visual) return { x: 0, y: 0 };
@@ -743,7 +849,7 @@ export class RegionElevationRenderer {
     };
   }
 
-  _drawRegions({ clear = true } = {}) {
+  _drawRegions({ clear = true, emitVisualRefresh = clear } = {}) {
     if (clear) this._clearRegionChildren();
     this._visualParams.clear();
     this._needsParallaxFrame = false;
@@ -778,35 +884,38 @@ export class RegionElevationRenderer {
         const visualParallaxHeightContrast = visual.entry.parallaxHeightContrastOverride ? parallaxHeightContrastValue(visual.entry.parallaxHeightContrastOverride) : parallaxHeightContrast;
         const perspectivePoint = _perspectivePoint(geo, visual.bounds, visualPerspectivePointMode);
         const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualElevationScale, visualShadowLength, visualParallaxHeightContrast);
+        const overheadVisibility = this._overheadVisibilityState(visual);
+        params.overheadVisibilityAlpha = overheadVisibility.alpha;
+        params.overheadAboveTokens = overheadVisibility.aboveTokens;
         this._visualParams.set(this._parallaxStateKey(visual), params);
         visualParams.push({ visual, params });
       }
       for (const { visual, params } of visualParams) {
+        if ((params.overheadVisibilityAlpha ?? 1) <= 0.001) continue;
         if (!params.isHole) {
           const shadow = this._createShadow(visual.paths, texture, geo, params);
           if (shadow) {
             if (!shadow._sceneElevationPreTransformed) this._applyRegionTransform(shadow, params, { includeOverlayOffset: false });
-            this.container.addChild(shadow);
+            this._addRegionDisplayObject(shadow, params);
           }
         }
         const overlay = this._createOverlay(visual.paths, texture, geo, params);
-        if (params.isHole && overlay) this.container.addChild(overlay);
+        if (params.isHole && overlay) this._addRegionDisplayObject(overlay, params);
         const slope = this._createSlopeLayer(visual.paths, texture, geo, params);
-        if (slope) this.container.addChild(slope);
+        if (slope) this._addRegionDisplayObject(slope, params);
         if (!params.isHole) {
           const edgeGlue = this._createEdgeGlue(visual.paths, params);
-          if (edgeGlue) this.container.addChild(edgeGlue);
+          if (edgeGlue) this._addRegionDisplayObject(edgeGlue, params);
         }
-        if (!params.isHole && overlay) this.container.addChild(overlay);
+        if (!params.isHole && overlay) this._addRegionDisplayObject(overlay, params);
         if (params.isHole) {
           const innerShadow = this._createInnerShadow(visual.paths, params);
-          if (innerShadow) this.container.addChild(innerShadow);
+          if (innerShadow) this._addRegionDisplayObject(innerShadow, params);
         }
       }
       if (this._needsParallaxFrame) this._requestParallaxFrame();
-      // Only fire visualRefresh on structural rebuilds (clear=true means update());
-      // pan-only redraws would otherwise schedule downstream token-refresh RAFs every frame.
-      if (clear) Hooks.callAll(`${MODULE_ID}.visualRefresh`);
+      // Token-overhead redraws only need to rebuild the region layer, not feed back into token visuals.
+      if (emitVisualRefresh) Hooks.callAll(`${MODULE_ID}.visualRefresh`);
     } finally {
       _settingsCache = previousCache;
     }
@@ -821,12 +930,103 @@ export class RegionElevationRenderer {
     });
   }
 
+  _addRegionDisplayObject(displayObject, params) {
+    if (!displayObject) return;
+    const alpha = Math.clamp(Number(params.overheadVisibilityAlpha ?? 1), 0, 1);
+    if (alpha <= 0.001) return;
+    displayObject.alpha *= alpha;
+    const useOverheadLayer = params.entry?.overhead === true;
+    if (useOverheadLayer) {
+      const sortElevation = this._overheadSortElevation(params);
+      displayObject.zIndex = sortElevation;
+      displayObject.elevation = sortElevation;
+      displayObject.sort = sortElevation;
+    }
+    const target = useOverheadLayer ? (this._ensureOverheadContainerParent(params) ?? this.container) : this.container;
+    target.addChild(displayObject);
+    if (useOverheadLayer) {
+      target.sortableChildren = true;
+      target.sortDirty = true;
+      if (canvas?.primary) canvas.primary.sortDirty = true;
+    }
+  }
+
+  _ensureOverheadContainerParent(params) {
+    const parent = this._overheadRenderParent();
+    if (!parent) return null;
+    const sortElevation = this._overheadSortElevation(params);
+    const key = String(Math.round(sortElevation * 1000) / 1000);
+    let container = this._overheadContainers.get(key);
+    if (!container) {
+      container = new PIXI.Container();
+      container.eventMode = "none";
+      container.mask = this.mask;
+      this._overheadContainers.set(key, container);
+    }
+    if (container.parent !== parent) {
+      try { container.parent?.removeChild(container); } catch (err) {}
+      parent.addChild(container);
+    }
+    container.zIndex = sortElevation;
+    container.elevation = sortElevation;
+    container.sort = sortElevation;
+    container.sortableChildren = true;
+    parent.sortableChildren = true;
+    parent.sortDirty = true;
+    return container;
+  }
+
+  _overheadSortElevation(params) {
+    const elevation = Number(params?.visualElevation ?? params?.entry?.elevation ?? 0);
+    return (Number.isFinite(elevation) ? elevation : 0) - OVERHEAD_SORT_EPSILON;
+  }
+
+  _overheadRenderParent() {
+    const tokenParent = canvas?.tokens?.placeables?.find(token => token?.mesh?.parent)?.mesh?.parent;
+    return tokenParent ?? canvas?.primary ?? null;
+  }
+
+  _overheadVisibilityState(visual) {
+    if (!visual?.entry?.overhead) return { alpha: 1, aboveTokens: false };
+    const tokens = this._tokensUnderOverhead(visual.entry);
+    if (!tokens.length) return { alpha: 1, aboveTokens: false };
+    const modeAlpha = _overheadModeAlpha(visual.entry.underOverheadMode);
+    let alpha = 1;
+    if (game.user?.isGM) {
+      alpha = tokens.some(token => _tokenSelected(token)) ? modeAlpha : OVERHEAD_FADE_ALPHA;
+    } else if (tokens.some(token => _tokenOwnedByCurrentUser(token))) {
+      alpha = modeAlpha;
+    }
+    return { alpha, aboveTokens: alpha > 0.001 };
+  }
+
+  _tokensUnderOverhead(entry) {
+    if (!entry?.region || !canvas?.tokens?.placeables?.length) return [];
+    return canvas.tokens.placeables.filter(token => _tokenUnderOverhead(token, entry));
+  }
+
   _clearRegionChildren() {
-    if (!this.container) return;
-    while (this.container.children.length) {
-      const child = this.container.removeChildAt(0);
+    this._clearContainerChildren(this.container);
+    this._clearOverheadContainers();
+  }
+
+  _clearContainerChildren(container) {
+    if (!container) return;
+    while (container.children.length) {
+      const child = container.removeChildAt(0);
       child.destroy({ children: true });
     }
+  }
+
+  _clearOverheadContainers({ destroy = false } = {}) {
+    for (const container of this._overheadContainers.values()) {
+      this._clearContainerChildren(container);
+      if (destroy) {
+        try { container.parent?.removeChild(container); } catch (err) {}
+        container.destroy({ children: true });
+      }
+    }
+    if (destroy) this._overheadContainers.clear();
   }
 
   _backgroundTexture() {
@@ -995,6 +1195,7 @@ export class RegionElevationRenderer {
     );
     return {
       entry,
+      visualElevation,
       isHole,
       slope: entry.slope && Math.abs(entry.slopeHeight) >= MIN_ELEVATION_DELTA,
       slopeBaseElevation: entry.slopeBaseElevation,

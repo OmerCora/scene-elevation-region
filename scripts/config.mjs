@@ -130,6 +130,12 @@ export const TOKEN_ELEVATION_MODES = Object.freeze({
   PER_REGION: "perRegion"
 });
 
+export const OVERHEAD_MODES = Object.freeze({
+  HIDE: "hide",
+  FADE: "fade",
+  KEEP: "keep"
+});
+
 export const BLEND_MODES = Object.freeze({
   OFF: "off",
   SOFT: "soft",
