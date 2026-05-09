@@ -37,6 +37,7 @@ const SELECT_GROUPS = Object.freeze({
   ],
   [SCENE_SETTING_KEYS.PARALLAX]: [
     ["off", "SCENE_ELEVATION.Settings.ParallaxOff"],
+    ["trace", "SCENE_ELEVATION.Settings.ParallaxTrace"],
     ["minimal", "SCENE_ELEVATION.Settings.ParallaxMinimal"],
     ["verySubtle", "SCENE_ELEVATION.Settings.ParallaxVerySubtle"],
     ["subtle", "SCENE_ELEVATION.Settings.ParallaxSubtle"],
@@ -55,6 +56,7 @@ const SELECT_GROUPS = Object.freeze({
     [PARALLAX_MODES.SHADOW, "SCENE_ELEVATION.Settings.ParallaxModeShadow"]
   ],
   [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: [
+    ["reduced", "SCENE_ELEVATION.Settings.ParallaxHeightContrastReduced"],
     ["normal", "SCENE_ELEVATION.Settings.ParallaxHeightContrastNormal"],
     ["noticeable", "SCENE_ELEVATION.Settings.ParallaxHeightContrastNoticeable"],
     ["strong", "SCENE_ELEVATION.Settings.ParallaxHeightContrastStrong"],

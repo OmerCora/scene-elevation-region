@@ -18,6 +18,7 @@ const PRESET_CHOICES = Object.freeze({
 const PARALLAX_STRENGTH_CHOICES = Object.freeze({
   [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
   off: "SCENE_ELEVATION.Settings.ParallaxOff",
+  trace: "SCENE_ELEVATION.Settings.ParallaxTrace",
   minimal: "SCENE_ELEVATION.Settings.ParallaxMinimal",
   verySubtle: "SCENE_ELEVATION.Settings.ParallaxVerySubtle",
   subtle: "SCENE_ELEVATION.Settings.ParallaxSubtle",
@@ -114,6 +115,7 @@ const UNDER_OVERHEAD_CHOICES = Object.freeze({
 
 const PARALLAX_HEIGHT_CONTRAST_CHOICES = Object.freeze({
   [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
+  reduced: "SCENE_ELEVATION.Settings.ParallaxHeightContrastReduced",
   normal: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNormal",
   noticeable: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNoticeable",
   strong: "SCENE_ELEVATION.Settings.ParallaxHeightContrastStrong",

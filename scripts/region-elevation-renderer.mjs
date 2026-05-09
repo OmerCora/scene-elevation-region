@@ -28,6 +28,10 @@ const ANCHORED_VELOCITY_DRIFT_WEIGHT = 0.55;
 const LAYERED_CAMERA_MULTIPLIER = 1.12;
 const AXIS_SCROLL_CAMERA_MULTIPLIER = 1.15;
 const MOUSE_PARALLAX_MULTIPLIER = 1.45;
+const LOW_ELEVATION_PARALLAX_FACTOR = 1.16;
+const HIGH_ELEVATION_PARALLAX_FACTOR = 0.52;
+const PARALLAX_DEPTH_CURVE_CENTER = 0.47;
+const PARALLAX_DEPTH_CURVE_STEEPNESS = 15;
 const CARD_TRANSITION_SHIFT_RATIO = 0.28;
 const TRANSITION_TEXTURE_SHIFT_RATIO = 0.55;
 const TRANSITION_WIDTH_MIN = 2;
@@ -88,6 +92,11 @@ const OVERHEAD_FADE_ALPHA = 0.5;
 const REGION_CONTAINER_Z_INDEX = 10_000;
 const OVERHEAD_SORT_EPSILON = 0.001;
 const OVERHEAD_SUPPORT_EPSILON = 0.001;
+// Compensation factor applied to the Elevation Scale setting at render time.
+// The user-facing default moved from 3 to 5 (so 5 ft / grid systems can use
+// a single tick) without changing the visual; legacy default 3 / new default
+// 5 = 0.6.
+const ELEVATION_SCALE_RENDER_COMPENSATION = 3 / 5;
 
 const BLEND_PROFILE_CONFIGS = Object.freeze({
   [BLEND_MODES.OFF]: Object.freeze({
@@ -1038,7 +1047,12 @@ export class RegionElevationRenderer {
     const gridSize = geo.gridSize;
     const { entry, bounds } = visual;
     const reference = DEPTH_SCALE_REFERENCE[depthScale] ?? DEPTH_SCALE_REFERENCE[DEPTH_SCALES.COMPRESSED];
-    const visualElevationScale = elevationScaleValue(elevationScale);
+    // Compensation: the user-facing Elevation Scale slider goes 1-10 (default 5)
+    // so 1 grid = 5 ft systems can keep a single-step setting. The visual
+    // pipeline is calibrated against the legacy default of 3, so we multiply
+    // by 3/5 here; user value 5 reproduces the legacy visual at user value 3,
+    // and every step is roughly 1.6x (rather than 1.667x) finer.
+    const visualElevationScale = elevationScaleValue(elevationScale) * ELEVATION_SCALE_RENDER_COMPENSATION;
     const visualElevation = visual.visualElevation ?? entry.elevation;
     const rawAbsElevation = entry.slope ? (entry.maxAbsElevation ?? Math.abs(visualElevation)) : Math.abs(visualElevation);
     const absElevation = rawAbsElevation * visualElevationScale;
@@ -1068,19 +1082,20 @@ export class RegionElevationRenderer {
     const perspectiveDistance = Math.hypot(perspectivePoint.x - bounds.center.x, perspectivePoint.y - bounds.center.y);
     const distanceBoost = _parallaxDistanceBoost(perspectiveDistance, geo);
     const liftFactor = _depthLiftFactor(absElevation, depthScale);
-    const parallaxHeightFactor = _parallaxHeightContrastFactor(absElevation, reference, depthScale, parallaxHeightContrast);
     const liftMultiplier = blendProfile.liftMultiplier ?? 1;
     const liftCeiling = depthScale === DEPTH_SCALES.COMPRESSED
       ? _parallaxLiftMaxPixels(gridSize)
       : Math.max(_parallaxLiftMaxPixels(gridSize), gridSize * (depthScale === DEPTH_SCALES.DRAMATIC ? 6 : 4));
+    const liftCeilingLimit = liftCeiling * Math.max(1, liftMultiplier);
+    const liftBase = gridSize * (OVERLAY_LIFT_BASE + parallax * OVERLAY_LIFT_PARALLAX) * distanceBoost * liftMultiplier;
     const lift = Math.clamp(
-      liftFactor * gridSize * (OVERLAY_LIFT_BASE + parallax * OVERLAY_LIFT_PARALLAX) * distanceBoost * liftMultiplier,
+      liftFactor * liftBase,
       0,
-      liftCeiling * Math.max(1, liftMultiplier)
+      liftCeilingLimit
     );
     const shadowLift = (liftMultiplier > 0 ? lift / liftMultiplier : lift) / 5;
-    const parallaxLift = lift * parallaxHeightFactor;
-    const heightAdjustedParallax = parallax * parallaxHeightFactor;
+    const parallaxLift = _parallaxMotionLift(lift, normalized, parallaxHeightContrast);
+    const heightAdjustedParallax = lift > 0 ? parallax * (parallaxLift / lift) : parallax;
     const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * parallaxLift * sign, y: baseParallaxDirection.y * parallaxLift * sign } : { x: 0, y: 0 };
     const parallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, parallaxLift, sign, heightAdjustedParallax) : { x: 0, y: 0 };
     const modeEffects = this._parallaxVisualEffectsForMode(visual, geo, parallaxMode, parallaxVector, parallaxLift, sign, heightAdjustedParallax, normalized, perspectivePoint);
@@ -2216,10 +2231,14 @@ function _parallaxHeightContrast() {
   return parallaxHeightContrastValue(_setting(SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST));
 }
 
-function _parallaxHeightContrastFactor(absElevation, reference, depthScale, contrast) {
-  if (contrast <= 1 || absElevation <= 0) return 1;
-  const depthRatio = Math.max(0.16, _overlayScaleDepthFactor(absElevation, reference, depthScale));
-  return Math.clamp(Math.pow(depthRatio, contrast - 1), 0.18, 4);
+function _parallaxMotionLift(lift, normalized, contrast) {
+  if (lift <= 0) return lift;
+  const strength = Math.clamp(Number.isFinite(contrast) ? contrast : 1, 0, PARALLAX_HEIGHT_CONTRASTS.extreme);
+  if (strength <= 0) return lift;
+  const nearWeight = 1 / (1 + Math.exp(-(normalized - PARALLAX_DEPTH_CURVE_CENTER) * PARALLAX_DEPTH_CURVE_STEEPNESS));
+  const targetMultiplier = LOW_ELEVATION_PARALLAX_FACTOR + (HIGH_ELEVATION_PARALLAX_FACTOR - LOW_ELEVATION_PARALLAX_FACTOR) * nearWeight;
+  const depthMultiplier = 1 + (targetMultiplier - 1) * strength;
+  return lift * Math.clamp(depthMultiplier, 0.18, 1.35);
 }
 
 function _parallaxStrengthForKey(strengthKey) {

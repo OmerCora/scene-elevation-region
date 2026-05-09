@@ -172,6 +172,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._restoreNativeRegionVisibility();
     this._drawPerspectiveHandle();
     _removeDrawElevationControl();
+    this._clearRegionUndo();
     return super.deactivate?.();
   }
 
@@ -332,7 +333,6 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
     if (!DRAW_TOOLS.has(this._activeTool)) {
       if (this._activeTool === TOOL_SELECT) {
-        this._clearRegionUndo();
         const original = event.nativeEvent ?? event.data?.originalEvent ?? event;
         const point = this._eventPosition(event, { snap: false });
         const state = _hoverElevationStateAtPoint(point);
@@ -835,7 +835,8 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
   _noteRegionChanged(action, region) {
     if (action === "delete" && this._undoingRegionIds.has(region?.id)) return;
-    if (action === "update" || action === "delete") this._clearRegionUndo();
+    // Undo history is intentionally NOT cleared on update/delete so it persists
+    // for the entire Elevation menu session. It is cleared on layer deactivate.
   }
 
   _syncNativeRegionVisibility(showElevationRegions) {

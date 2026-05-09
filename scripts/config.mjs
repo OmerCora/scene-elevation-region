@@ -46,6 +46,7 @@ export const SCENE_SETTING_KEYS = Object.freeze({
 /** Parallax strength values keyed by enum option. */
 export const PARALLAX_STRENGTHS = Object.freeze({
   off: 0,
+  trace: 0.003,
   minimal: 0.006,
   verySubtle: 0.018,
   subtle: 0.04,
@@ -55,11 +56,12 @@ export const PARALLAX_STRENGTHS = Object.freeze({
 });
 
 export const PARALLAX_HEIGHT_CONTRASTS = Object.freeze({
+  reduced: 0.35,
   normal: 1,
-  noticeable: 1.35,
-  strong: 1.8,
-  dramatic: 2.5,
-  extreme: 4
+  noticeable: 1.15,
+  strong: 1.35,
+  dramatic: 1.6,
+  extreme: 1.9
 });
 
 /** Shadow length multipliers keyed by enum option (max 4). */
@@ -72,6 +74,7 @@ export const SHADOW_LENGTHS = Object.freeze({
 });
 
 export const PARALLAX_LIFT_LIMITS = Object.freeze({
+  trace: 2.5,
   minimal: 4,
   extreme: 72
 });
@@ -175,7 +178,7 @@ export const ELEVATION_SCALE_LIMITS = Object.freeze({
   MIN: 1,
   MAX: 10,
   STEP: 1,
-  DEFAULT: 3
+  DEFAULT: 5
 });
 
 export const ELEVATION_PRESETS = Object.freeze({
@@ -227,7 +230,7 @@ const MULTI_LAYER_DRIFT_SHADOW_PRESET = Object.freeze({
 
 const MULTI_LAYER_DRIFT_SHADOWLESS_PRESET = Object.freeze({
   [SCENE_SETTING_KEYS.PARALLAX]: "subtle",
-  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "noticeable",
+  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "normal",
   [SCENE_SETTING_KEYS.PARALLAX_MODE]: PARALLAX_MODES.LAYERED,
   [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: PERSPECTIVE_POINTS.FAR_BOTTOM,
   [SCENE_SETTING_KEYS.BLEND_MODE]: BLEND_MODES.WIDE,
@@ -239,9 +242,9 @@ const MULTI_LAYER_DRIFT_SHADOWLESS_PRESET = Object.freeze({
 
 const MOUSE_DRIFT_SHADOW_PRESET = Object.freeze({
   [SCENE_SETTING_KEYS.PARALLAX]: "minimal",
-  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "noticeable",
+  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "reduced",
   [SCENE_SETTING_KEYS.PARALLAX_MODE]: PARALLAX_MODES.MOUSE,
-  [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: PERSPECTIVE_POINTS.FAR_BOTTOM,
+  [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: PERSPECTIVE_POINTS.CENTER,
   [SCENE_SETTING_KEYS.BLEND_MODE]: BLEND_MODES.SOFT,
   [SCENE_SETTING_KEYS.OVERLAY_SCALE]: "subtle",
   [SCENE_SETTING_KEYS.SHADOW_MODE]: SHADOW_MODES.TEXTURE_MELD,
@@ -371,9 +374,11 @@ export function getSceneElevationSetting(key, scene = canvas?.scene) {
 }
 
 export function parallaxHeightContrastValue(setting) {
-  if (typeof setting === "number") return Math.clamp(Number.isFinite(setting) ? setting : 1, 1, 4);
+  const min = PARALLAX_HEIGHT_CONTRASTS.reduced;
+  const max = PARALLAX_HEIGHT_CONTRASTS.extreme;
+  if (typeof setting === "number") return Math.clamp(Number.isFinite(setting) ? setting : 1, min, max);
   const numeric = Number(setting);
-  if (String(setting ?? "").trim() && Number.isFinite(numeric)) return Math.clamp(numeric, 1, 4);
+  if (String(setting ?? "").trim() && Number.isFinite(numeric)) return Math.clamp(numeric, min, max);
   const value = PARALLAX_HEIGHT_CONTRASTS[String(setting ?? "normal")];
   return value ?? PARALLAX_HEIGHT_CONTRASTS.normal;
 }

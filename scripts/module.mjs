@@ -113,6 +113,7 @@ Hooks.once("init", () => {
     scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.PARALLAX],
     choices: {
       off: "SCENE_ELEVATION.Settings.ParallaxOff",
+      trace: "SCENE_ELEVATION.Settings.ParallaxTrace",
       minimal: "SCENE_ELEVATION.Settings.ParallaxMinimal",
       verySubtle: "SCENE_ELEVATION.Settings.ParallaxVerySubtle",
       subtle: "SCENE_ELEVATION.Settings.ParallaxSubtle",
@@ -130,6 +131,7 @@ Hooks.once("init", () => {
     hint: "SCENE_ELEVATION.Settings.ParallaxHeightContrastHint",
     scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.PARALLAX_HEIGHT_CONTRAST],
     choices: {
+      reduced: "SCENE_ELEVATION.Settings.ParallaxHeightContrastReduced",
       normal: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNormal",
       noticeable: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNoticeable",
       strong: "SCENE_ELEVATION.Settings.ParallaxHeightContrastStrong",
