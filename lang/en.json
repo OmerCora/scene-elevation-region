@@ -42,7 +42,7 @@
       "PresetDefault": "Default",
       "PresetCameraLiftDriftShadow": "Camera Lift+Drift w/ Shadow",
       "PresetMultiLayerDriftShadow": "Multi-layer Drift w/ Shadow",
-      "PresetMultiLayerDriftShadowless": "Multi-layer Drift shadowless",
+      "PresetMultiLayerDriftShadowless": "Multi Layer Drift No Shadow",
       "PresetMouseDriftShadow": "Mouse Drift w/ Shadow",
       "PresetResponsiveShadowOnly": "Responsive Shadow Only",
       "PresetCameraLiftTextureMeld": "Camera Lift w/ Texture-meld",

@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, REGION_BEHAVIOR_TYPE, elevationPresetValues, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, REGION_BEHAVIOR_TYPE, elevationPresetValues, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -24,6 +24,7 @@ const TOKEN_PARALLAX_TARGET_NAME_PATTERN = /target|crosshair|reticle|reticule|ba
 const TOKEN_PARALLAX_TARGET_SCAN_LIMIT = 80;
 const TOKEN_PARALLAX_HIT_AREA_EPSILON = 0.5;
 const TOKEN_HUD_POSITION_PATCHED = "_sceneElevationRegionHudPositionPatched";
+const MOUSE_DRIFT_WORLD_DEFAULTS_VERSION = "mouse-drift-defaults-v2";
 const REGION_PRESET_FIELD_MAP = Object.freeze({
   [SCENE_SETTING_KEYS.PARALLAX]: "parallaxStrengthOverride",
   [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "parallaxHeightContrastOverride",
@@ -98,6 +99,10 @@ async function _resetWorldElevationDefaults() {
 /* -------------------------------------------- */
 
 Hooks.once("init", () => {
+  game.settings.register(MODULE_ID, SETTINGS.WORLD_DEFAULTS_VERSION, {
+    scope: "world", config: false, type: String, default: ""
+  });
+
   game.settings.registerMenu(MODULE_ID, "resetDefaults", {
     name: "SCENE_ELEVATION.Settings.ResetDefaults",
     label: "SCENE_ELEVATION.Settings.ResetDefaultsLabel",
@@ -353,6 +358,7 @@ Hooks.once("ready", async () => {
   _patchTokenHudPositioning();
   await _migrateParallaxHeightContrastSetting();
   await _migrateShadowLengthSetting();
+  await _migrateMouseDriftWorldDefaults();
 });
 
 /* -------------------------------------------- */
@@ -837,6 +843,15 @@ async function _migrateShadowLengthSetting() {
   const current = game.settings.get(MODULE_ID, SETTINGS.SHADOW_LENGTH);
   const key = shadowLengthKey(current);
   if (current !== key) await game.settings.set(MODULE_ID, SETTINGS.SHADOW_LENGTH, key);
+}
+
+async function _migrateMouseDriftWorldDefaults() {
+  if (!game.user?.isGM) return;
+  if (game.settings.get(MODULE_ID, SETTINGS.WORLD_DEFAULTS_VERSION) === MOUSE_DRIFT_WORLD_DEFAULTS_VERSION) return;
+  await Promise.all(ELEVATION_PRESET_SETTING_KEYS
+    .filter(key => game.settings.get(MODULE_ID, key) !== ELEVATION_DEFAULT_SETTINGS[key])
+    .map(key => game.settings.set(MODULE_ID, key, ELEVATION_DEFAULT_SETTINGS[key])));
+  await game.settings.set(MODULE_ID, SETTINGS.WORLD_DEFAULTS_VERSION, MOUSE_DRIFT_WORLD_DEFAULTS_VERSION);
 }
 
 function _patchTokenHudClass(hudClass) {
