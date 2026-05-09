@@ -18,6 +18,21 @@ https://github.com/user-attachments/assets/71fc9e46-a8e7-43c0-bc89-e079ce580751
 - **Region behavior - Slope**: You can define a delta elevation and a direction for a region by enabling the "Slope" option. This will create a 2D linear slope, setting scene elevation from one edge to another in the given direction. Parallax behaviour will occur at different rate for each edge simulating the slope effect.
 - **Overhead Regions**: You can enable overhead option in the elevation behaviour. causing the token moving to render "under" these regions if their elevation is lower than the overhead's elevation. Walking over them from a higher elevation will cause token to land over these regions. 
 
+
+
+https://github.com/user-attachments/assets/8605e48f-22db-4472-93b4-0948e2885d3d
+
+
+
+https://github.com/user-attachments/assets/fe959e6b-8faf-43e7-a4df-e03669b6c7f8
+
+
+
+https://github.com/user-attachments/assets/1c185628-d4bb-4640-be47-d705561d146a
+
+
+
+
 ## Support
 
 If you find this module useful, consider supporting development:
