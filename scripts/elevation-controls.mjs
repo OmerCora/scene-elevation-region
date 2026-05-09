@@ -26,6 +26,7 @@ const OUTLINE_COLOR = 0xffd166;
 const EDGE_HANDLE_COLOR = 0xff4d6d;
 const SUN_HANDLE_COLOR = 0xffd166;
 const EDGE_HANDLE_RADIUS = 9;
+const EDGE_POINT_PREVIEW_MIN_DISTANCE = 2;
 const TOOL_SELECT = "select";
 const TOOL_POLYGON = "elevationPolygon";
 const TOOL_RECTANGLE = "elevationRectangle";
@@ -78,6 +79,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._editedRegionId = null;
     this._visibilityRefreshFrame = null;
     this._overheadIconRefreshFrame = null;
+    this._edgePointPreviewRefreshFrame = null;
   }
 
   async _draw(options) {
@@ -114,6 +116,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._removeOverheadRegionIcons();
     this._cancelQueuedOverheadIconRefresh();
     this._cancelQueuedVisibilityRefresh();
+    this._cancelQueuedEdgePointPreviewRefresh();
     this._restoreNativeRegionVisibility();
     this.preview?.parent?.removeChild(this.preview);
     this.outlines?.parent?.removeChild(this.outlines);
@@ -217,7 +220,22 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._overheadIconRefreshFrame = null;
   }
 
+  _queueEdgePointPreviewRefresh() {
+    if (this._edgePointPreviewRefreshFrame) return;
+    this._edgePointPreviewRefreshFrame = requestAnimationFrame(() => {
+      this._edgePointPreviewRefreshFrame = null;
+      RegionElevationRenderer.instance.refreshVisuals({ emitVisualRefresh: false });
+    });
+  }
+
+  _cancelQueuedEdgePointPreviewRefresh() {
+    if (!this._edgePointPreviewRefreshFrame) return;
+    cancelAnimationFrame(this._edgePointPreviewRefreshFrame);
+    this._edgePointPreviewRefreshFrame = null;
+  }
+
   _resetToolState() {
+    this._cancelQueuedEdgePointPreviewRefresh();
     this._points = [];
     this._hover = null;
     this._shapeStart = null;
@@ -276,19 +294,25 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     if (this._draggingSunPoint) {
       this._consumeEvent(event, { preventDefault: false });
       const rawPoint = this._eventPosition(event, { snap: false });
-      this._sunEdgePointPreview = this._clampPointToSceneEdge(rawPoint);
-      setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.SUN_EDGE_POINT, this._sunEdgePointPreview);
+      const point = this._clampPointToSceneEdge(rawPoint);
+      if (!this._sunEdgePointPreview || Math.hypot(point.x - this._sunEdgePointPreview.x, point.y - this._sunEdgePointPreview.y) >= EDGE_POINT_PREVIEW_MIN_DISTANCE) {
+        this._sunEdgePointPreview = point;
+        setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.SUN_EDGE_POINT, this._sunEdgePointPreview);
+        this._queueEdgePointPreviewRefresh();
+      }
       this._drawPerspectiveHandle();
-      RegionElevationRenderer.instance.update();
       return;
     }
     if (this._draggingPerspectivePoint) {
       this._consumeEvent(event, { preventDefault: false });
       const rawPoint = this._eventPosition(event, { snap: false });
-      this._edgePointPreview = this._clampPointToSceneEdge(rawPoint);
-      setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT, this._edgePointPreview);
+      const point = this._clampPointToSceneEdge(rawPoint);
+      if (!this._edgePointPreview || Math.hypot(point.x - this._edgePointPreview.x, point.y - this._edgePointPreview.y) >= EDGE_POINT_PREVIEW_MIN_DISTANCE) {
+        this._edgePointPreview = point;
+        setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT, this._edgePointPreview);
+        this._queueEdgePointPreviewRefresh();
+      }
       this._drawPerspectiveHandle();
-      RegionElevationRenderer.instance.update();
       return;
     }
     if (!DRAW_TOOLS.has(this._activeTool)) return;
@@ -318,7 +342,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       this._sunEdgePointPreview = this._clampPointToSceneEdge(rawPoint);
       setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.SUN_EDGE_POINT, this._sunEdgePointPreview);
       this._drawPerspectiveHandle();
-      RegionElevationRenderer.instance.update();
+      this._queueEdgePointPreviewRefresh();
       return;
     }
     if (this._isPerspectiveHandleVisible() && this._isOnPerspectiveHandle(rawPoint)) {
@@ -327,7 +351,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       this._edgePointPreview = this._clampPointToSceneEdge(rawPoint);
       setTransientSceneElevationSetting(canvas.scene, SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT, this._edgePointPreview);
       this._drawPerspectiveHandle();
-      RegionElevationRenderer.instance.update();
+      this._queueEdgePointPreviewRefresh();
       return;
     }
 
@@ -375,6 +399,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     if (!this._activeTool) return;
     if (this._draggingSunPoint) {
       this._consumeEvent(event);
+      this._cancelQueuedEdgePointPreviewRefresh();
       const rawPoint = this._eventPosition(event, { snap: false });
       const point = this._clampPointToSceneEdge(rawPoint);
       this._sunEdgePointPreview = null;
@@ -388,6 +413,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     }
     if (this._draggingPerspectivePoint) {
       this._consumeEvent(event);
+      this._cancelQueuedEdgePointPreviewRefresh();
       const rawPoint = this._eventPosition(event, { snap: false });
       const point = this._clampPointToSceneEdge(rawPoint);
       this._edgePointPreview = null;
@@ -396,6 +422,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       const settings = getSceneElevationSettings(canvas.scene);
       await setSceneElevationSettings(canvas.scene, { ...settings, [SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT]: point });
       this._drawPerspectiveHandle();
+      RegionElevationRenderer.instance.update();
       return;
     }
     if ((this._activeTool !== TOOL_RECTANGLE && this._activeTool !== TOOL_CIRCLE) || !this._shapeStart) return;

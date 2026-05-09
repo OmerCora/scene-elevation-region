@@ -43,9 +43,13 @@ const EDGE_GLUE_ALPHA_MAX = 0.45;
 const SLOPE_TEXTURE_ALPHA_MAX = 0.72;
 const SLOPE_DROP_MIN_PIXELS = 5;
 const SLOPE_DROP_MAX_PIXELS = 14;
-const CLIFF_WARP_DROP_MAX_PIXELS = 68;
-const CLIFF_WARP_SOLID_ALPHA = 1;
-const CLIFF_WARP_SOURCE_RIM_PIXELS = 2;
+const CLIFF_WARP_DROP_MAX_PIXELS = 42;
+const CLIFF_WARP_SOLID_ALPHA = 0.92;
+const CLIFF_WARP_SOURCE_RIM_PIXELS = 4;
+const CLIFF_WARP_SIMPLIFY_GRID_RATIO = 0.08;
+const CLIFF_WARP_SIMPLIFY_MIN_PIXELS = 3;
+const CLIFF_WARP_SIMPLIFY_MAX_PIXELS = 9;
+const CLIFF_WARP_PARTIAL_SAMPLE_EPSILON = 0.05;
 const STRONG_TOP_DOWN_SHADOW_MULTIPLIER = 2.35;
 const STRONG_TOP_DOWN_BLUR_MULTIPLIER = 1.55;
 const SUN_EDGE_SHADOW_ALPHA_MULTIPLIER = 1.25;
@@ -139,18 +143,18 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
     slopeDropPixels: 0
   }),
   [BLEND_MODES.CLIFF_WARP]: Object.freeze({
-    widthMultiplier: 3.4,
-    widthAdd: 12,
-    maxWidth: 72,
+    widthMultiplier: 2.35,
+    widthAdd: 8,
+    maxWidth: 48,
     textureShiftRatio: 0.22,
-    overlayAlpha: 0.998,
-    glueAlpha: 0.26,
+    overlayAlpha: 0.985,
+    glueAlpha: 0.2,
     glueBlurMultiplier: 0.12,
     slopeAlpha: CLIFF_WARP_SOLID_ALPHA,
     slopeAlphaMax: CLIFF_WARP_SOLID_ALPHA,
-    slopeWidthMultiplier: 2.8,
+    slopeWidthMultiplier: 1.65,
     slopeTextureShiftRatio: 0.18,
-    slopeDropPixels: 38,
+    slopeDropPixels: 24,
     dropMaxPixels: CLIFF_WARP_DROP_MAX_PIXELS,
     stretchAlpha: 0,
     stretchSteps: 0,
@@ -161,10 +165,10 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
     cliffWarpAlpha: CLIFF_WARP_SOLID_ALPHA,
     cliffWarpAlphaMax: CLIFF_WARP_SOLID_ALPHA,
     cliffWarpSourceWidth: CLIFF_WARP_SOURCE_RIM_PIXELS,
-    cliffWarpWidthBase: 0.38,
-    cliffWarpWidthElevationRatio: 0.42,
-    liftMultiplier: 1.9,
-    overlayScaleBonus: 0.015
+    cliffWarpWidthBase: 0.22,
+    cliffWarpWidthElevationRatio: 0.24,
+    liftMultiplier: 1.25,
+    overlayScaleBonus: 0.006
   })
 });
 
@@ -715,6 +719,11 @@ export class RegionElevationRenderer {
     this._drawRegions({ emitVisualRefresh: false });
   }
 
+  refreshVisuals({ emitVisualRefresh = false } = {}) {
+    if (!this.container || !this._scene || !this._entries.length) return;
+    this._drawRegions({ emitVisualRefresh });
+  }
+
   onPan() {
     if (!this.container?.visible) return;
     if (!this._hasActiveParallax() && !_perspectiveFollowsCamera()) return;
@@ -1210,6 +1219,7 @@ export class RegionElevationRenderer {
     );
     return {
       entry,
+      gridSize,
       visualElevation,
       isHole,
       slope: entry.slope && Math.abs(entry.slopeHeight) >= MIN_ELEVATION_DELTA,
@@ -1310,22 +1320,29 @@ export class RegionElevationRenderer {
   _parallaxVectorForMode(visual, baseVector, parallaxMode, lift, sign, parallax) {
     switch (parallaxMode) {
       case PARALLAX_MODES.ANCHORED_CARD:
-        return this._anchoredParallaxVector(visual, lift, sign, parallax);
+        return this._combineParallaxVectors(baseVector, this._anchoredParallaxVector(visual, lift, sign, parallax), lift);
       case PARALLAX_MODES.VELOCITY_CARD:
-        return this._velocityParallaxVector(visual, lift, sign, parallax);
+        return this._combineParallaxVectors(baseVector, this._velocityParallaxVector(visual, lift, sign, parallax), lift);
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
-        return this._anchoredVelocityParallaxVector(visual, lift, sign, parallax);
+        return this._combineParallaxVectors(baseVector, this._anchoredVelocityParallaxVector(visual, lift, sign, parallax), lift);
       case PARALLAX_MODES.LAYERED:
-        return this._layeredParallaxVector(visual, lift, sign, parallax);
+        return this._combineParallaxVectors(baseVector, this._layeredParallaxVector(visual, lift, sign, parallax), lift);
       case PARALLAX_MODES.HORIZONTAL_SCROLL:
-        return this._axisScrollParallaxVector(visual, lift, sign, parallax, "x");
+        return this._combineParallaxVectors({ x: baseVector.x, y: 0 }, this._axisScrollParallaxVector(visual, lift, sign, parallax, "x"), lift);
       case PARALLAX_MODES.VERTICAL_SCROLL:
-        return this._axisScrollParallaxVector(visual, lift, sign, parallax, "y");
+        return this._combineParallaxVectors({ x: 0, y: baseVector.y }, this._axisScrollParallaxVector(visual, lift, sign, parallax, "y"), lift);
       case PARALLAX_MODES.MOUSE:
         return this._mouseParallaxVector(visual, lift, sign, parallax);
       default:
         return baseVector;
     }
+  }
+
+  _combineParallaxVectors(baseVector, modeVector, lift) {
+    return _limitVector({
+      x: (baseVector?.x ?? 0) + (modeVector?.x ?? 0),
+      y: (baseVector?.y ?? 0) + (modeVector?.y ?? 0)
+    }, lift);
   }
 
   _anchoredParallaxVector(visual, lift, sign, parallax) {
@@ -1702,7 +1719,7 @@ export class RegionElevationRenderer {
   _createCliffWarpShadow(paths, params) {
     const shadow = new PIXI.Container();
     shadow.eventMode = "none";
-    const shadowPaths = this._slopedOverlayPaths(paths, params);
+    const shadowPaths = this._slopedOverlayPaths(this._cliffWarpRenderPaths(paths, params), params);
     const allAround = this._createLiveRimShadowLayer(shadowPaths, { x: 0, y: 0 }, params.allAroundShadowAlpha, params.allAroundShadowBlur, Math.max(2, params.allAroundShadowBlur * 0.8), true);
     const soft = this._createLiveRimShadowLayer(shadowPaths, params.softShadowOffset, params.softShadowAlpha, params.softShadowBlur, Math.max(2, params.softShadowBlur * 0.7), true);
     const bridge = this._createLiveRimShadowLayer(shadowPaths, params.bridgeShadowOffset, params.bridgeShadowAlpha, params.bridgeShadowBlur, Math.max(2, params.bridgeShadowBlur * 0.75), true);
@@ -1811,7 +1828,7 @@ export class RegionElevationRenderer {
     const container = new PIXI.Container();
     container.eventMode = "none";
 
-    for (const path of paths) {
+    for (const path of this._cliffWarpRenderPaths(paths, params)) {
       if (!path || path.length < 3) continue;
       const positions = [];
       const uvs = [];
@@ -1840,11 +1857,19 @@ export class RegionElevationRenderer {
         if (Math.max(startLiftFraction, endLiftFraction, midpointLiftFraction) <= 0.001) continue;
 
         const baseIndex = positions.length / 2;
-        const edgePoints = [startPoint, endPoint];
-        const liftFractions = [startLiftFraction, endLiftFraction];
-        for (let pointIndex = 0; pointIndex < edgePoints.length; pointIndex++) {
-          const point = edgePoints[pointIndex];
-          const liftFraction = liftFractions[pointIndex];
+        const midpointDelta = Math.abs(midpointLiftFraction - (startLiftFraction + endLiftFraction) / 2);
+        const edgeSamples = midpointDelta > CLIFF_WARP_PARTIAL_SAMPLE_EPSILON
+          ? [
+            { point: startPoint, liftFraction: startLiftFraction },
+            { point: midpoint, liftFraction: midpointLiftFraction },
+            { point: endPoint, liftFraction: endLiftFraction }
+          ]
+          : [
+            { point: startPoint, liftFraction: startLiftFraction },
+            { point: endPoint, liftFraction: endLiftFraction }
+          ];
+        for (const sample of edgeSamples) {
+          const { point, liftFraction } = sample;
           const fullTop = params.slope
             ? this._slopedOverlayPoint(point, params)
             : {
@@ -1870,10 +1895,15 @@ export class RegionElevationRenderer {
             );
           }
         }
-        if (params.isHole) {
-          indices.push(baseIndex, baseIndex + 1, baseIndex + 2, baseIndex + 1, baseIndex + 3, baseIndex + 2);
-        } else {
-          indices.push(baseIndex, baseIndex + 2, baseIndex + 1, baseIndex + 1, baseIndex + 2, baseIndex + 3);
+        for (let segmentIndex = 0; segmentIndex < edgeSamples.length - 1; segmentIndex++) {
+          if (edgeSamples[segmentIndex].liftFraction <= 0.001 && edgeSamples[segmentIndex + 1].liftFraction <= 0.001) continue;
+          const left = baseIndex + segmentIndex * rowCount;
+          const right = left + rowCount;
+          if (params.isHole) {
+            indices.push(left, left + 1, right, left + 1, right + 1, right);
+          } else {
+            indices.push(left, right, left + 1, left + 1, right, right + 1);
+          }
         }
       }
 
@@ -1891,6 +1921,15 @@ export class RegionElevationRenderer {
       return null;
     }
     return container;
+  }
+
+  _cliffWarpRenderPaths(paths, params) {
+    const tolerance = Math.clamp(
+      Number(params.gridSize ?? canvas?.grid?.size ?? 100) * CLIFF_WARP_SIMPLIFY_GRID_RATIO,
+      CLIFF_WARP_SIMPLIFY_MIN_PIXELS,
+      CLIFF_WARP_SIMPLIFY_MAX_PIXELS
+    );
+    return paths.map(path => _simplifyClosedPath(path, tolerance)).filter(path => path.length >= 3);
   }
 
   _createTextureSprite(texture, geo, { shift = { x: 0, y: 0 }, alpha = 1, center = null, stretchScale = 1 } = {}) {
@@ -2031,7 +2070,14 @@ export class RegionElevationRenderer {
   }
 
   _createOverlay(paths, texture, geo, params) {
-    if (params.slope && texture) return this._createSlopedOverlay(paths, texture, geo, params);
+    const overlay = params.slope && texture
+      ? this._createSlopedOverlay(paths, texture, geo, params)
+      : this._createFlatOverlay(paths, texture, geo, params);
+    if (!overlay || !params.isHole) return overlay;
+    return this._clipDisplayObjectToRegion(overlay, paths);
+  }
+
+  _createFlatOverlay(paths, texture, geo, params) {
     const overlay = new PIXI.Container();
     overlay.eventMode = "none";
     this._applyRegionTransform(overlay, params);
@@ -2114,6 +2160,16 @@ export class RegionElevationRenderer {
       return null;
     }
     return overlay;
+  }
+
+  _clipDisplayObjectToRegion(displayObject, paths) {
+    const container = new PIXI.Container();
+    container.eventMode = "none";
+    const mask = this._createMask(paths);
+    displayObject.mask = mask;
+    container.addChild(mask);
+    container.addChild(displayObject);
+    return container;
   }
 
   _createFeatherMask(paths, feather) {
@@ -2223,6 +2279,24 @@ export class RegionElevationRenderer {
   }
 }
 
+function _simplifyClosedPath(path, tolerance) {
+  if (!Array.isArray(path) || path.length <= 6 || tolerance <= 0) return path ?? [];
+  const toleranceSq = tolerance * tolerance;
+  const simplified = [];
+  for (const point of path) {
+    const previous = simplified[simplified.length - 1];
+    if (!previous || _pointDistanceSq(previous, point) >= toleranceSq) simplified.push(point);
+  }
+  if (simplified.length > 3 && _pointDistanceSq(simplified[0], simplified[simplified.length - 1]) < toleranceSq) simplified.pop();
+  return simplified.length >= 3 ? simplified : path;
+}
+
+function _pointDistanceSq(a, b) {
+  const dx = Number(a?.x ?? 0) - Number(b?.x ?? 0);
+  const dy = Number(a?.y ?? 0) - Number(b?.y ?? 0);
+  return dx * dx + dy * dy;
+}
+
 function _parallaxStrength() {
   return _parallaxStrengthForKey(_parallaxStrengthKey());
 }
@@ -2296,7 +2370,7 @@ function _perspectivePointMode() {
 function _perspectivePoint(geo, bounds = null, point = _perspectivePointMode()) {
   switch (point) {
     case PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE:
-      return _clampPointToSceneEdge(_setting(SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT) ?? { x: geo.x + geo.width / 2, y: geo.y }, geo);
+      return _perspectivePointPastSceneEdge(_setting(SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT), geo);
     case PERSPECTIVE_POINTS.CAMERA_CENTER:
       return _cameraCenter(geo);
     case PERSPECTIVE_POINTS.FURTHEST_EDGE:
@@ -2434,6 +2508,15 @@ function _parallaxEnabled() {
 
 function _perspectiveFollowsCamera() {
   return [PERSPECTIVE_POINTS.CAMERA_CENTER, PERSPECTIVE_POINTS.FURTHEST_EDGE, PERSPECTIVE_POINTS.NEAREST_EDGE].includes(_setting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT));
+}
+
+function _perspectivePointPastSceneEdge(point, geo) {
+  const edgePoint = _clampPointToSceneEdge(point ?? { x: geo.x + geo.width / 2, y: geo.y }, geo);
+  const center = { x: geo.x + geo.width / 2, y: geo.y + geo.height / 2 };
+  return {
+    x: edgePoint.x + (edgePoint.x - center.x),
+    y: edgePoint.y + (edgePoint.y - center.y)
+  };
 }
 
 function _clampPointToSceneEdge(point, geo) {
