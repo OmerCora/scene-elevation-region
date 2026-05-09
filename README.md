@@ -1,3 +1,4 @@
+
 # Scene Elevation
 
 [![Downloads](https://img.shields.io/github/downloads/OmerCora/scene-elevation-region/total?label=Downloads&color=4aa94a)](https://github.com/OmerCora/scene-elevation-region/releases)
@@ -6,6 +7,8 @@
 System-agnostic visual scene elevation for Foundry VTT v14 using native Foundry Regions.
 
 Add the custom **Elevation** behavior to a Region, set its elevation and shadow strength, and choose whether it modifies token elevation and token scaling. The module duplicates the map art inside each elevated Region as a clipped overlay, draws shadows around and adds optional transition texture at Region edges. Adds parallax with various settings. Module settings act as scene defaults; each scene can override the preset-managed visual and token settings from the Elevation controls. I added some presets to play around
+
+https://github.com/user-attachments/assets/71fc9e46-a8e7-43c0-bc89-e079ce580751
 
 ## Features
 
