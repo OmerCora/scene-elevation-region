@@ -33,6 +33,11 @@ const TOOL_CIRCLE = "elevationCircle";
 const DRAW_TOOLS = new Set([TOOL_POLYGON, TOOL_RECTANGLE, TOOL_CIRCLE]);
 const ELEVATION_TOOLS = new Set([TOOL_SELECT, TOOL_POLYGON, TOOL_RECTANGLE, TOOL_CIRCLE]);
 const UTILITY_TOOLS = new Set(["sceneSettings", "showElevationRegions"]);
+const DRAW_ELEVATION_CONTROL_ID = `${MODULE_ID}-draw-elevation-control`;
+let _drawElevationValue = 1;
+let _drawElevationControlFrame = null;
+let _drawElevationAnchorElement = null;
+let _drawElevationResizeListenerBound = false;
 
 export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLayer {
   static LAYER_NAME = "sceneElevation";
@@ -68,9 +73,11 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._nativeRegionVisibility = null;
     this._nativeRegionLayerState = null;
     this._hoverLabel = null;
+    this._overheadIconLayer = null;
     this._hoveredRegionId = null;
     this._editedRegionId = null;
     this._visibilityRefreshFrame = null;
+    this._overheadIconRefreshFrame = null;
   }
 
   async _draw(options) {
@@ -104,6 +111,8 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   async _tearDown(options) {
     this._unbindStageListeners();
     this._removeElevationHoverLabel();
+    this._removeOverheadRegionIcons();
+    this._cancelQueuedOverheadIconRefresh();
     this._cancelQueuedVisibilityRefresh();
     this._restoreNativeRegionVisibility();
     this.preview?.parent?.removeChild(this.preview);
@@ -139,6 +148,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       return;
     }
     if (this._activeTool === toolName) {
+      _queueDrawElevationControlRender(this._activeTool);
       this.refreshElevationRegionVisibility();
       this._drawPerspectiveHandle();
       return;
@@ -148,6 +158,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     if (toolName) this._bindStageListeners();
     else this._unbindStageListeners();
     if (this.preview) this.preview.visible = DRAW_TOOLS.has(toolName);
+    _queueDrawElevationControlRender(this._activeTool);
     this._drawPreview();
     this.refreshElevationRegionVisibility();
     this._drawPerspectiveHandle();
@@ -160,6 +171,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this.refreshElevationRegionVisibility(false);
     this._restoreNativeRegionVisibility();
     this._drawPerspectiveHandle();
+    _removeDrawElevationControl();
     return super.deactivate?.();
   }
 
@@ -168,6 +180,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     if (this.outlines) this.outlines.visible = visible;
     if (!visible) this._hideElevationHoverLabel();
     if (this.outlines) this._drawElevationRegionOutlines();
+    this._refreshOverheadRegionIcons(visible);
     this._syncNativeRegionVisibility(visible);
   }
 
@@ -183,10 +196,24 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     });
   }
 
+  queueOverheadRegionIconRefresh() {
+    this._cancelQueuedOverheadIconRefresh();
+    this._overheadIconRefreshFrame = requestAnimationFrame(() => {
+      this._overheadIconRefreshFrame = null;
+      this._refreshOverheadRegionIcons(this.outlines?.visible ?? false);
+    });
+  }
+
   _cancelQueuedVisibilityRefresh() {
     if (!this._visibilityRefreshFrame) return;
     cancelAnimationFrame(this._visibilityRefreshFrame);
     this._visibilityRefreshFrame = null;
+  }
+
+  _cancelQueuedOverheadIconRefresh() {
+    if (!this._overheadIconRefreshFrame) return;
+    cancelAnimationFrame(this._overheadIconRefreshFrame);
+    this._overheadIconRefreshFrame = null;
   }
 
   _resetToolState() {
@@ -201,6 +228,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._sunEdgePointPreview = null;
     this._setHoveredElevationRegion(null);
     clearTransientSceneElevationSettings(canvas?.scene);
+    _queueDrawElevationControlRender(null);
     this.preview?.clear();
     if (this.preview) this.preview.visible = false;
     this._drawPreview();
@@ -490,6 +518,54 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._hoverLabel = null;
   }
 
+  _refreshOverheadRegionIcons(visible) {
+    if (!visible || !canvas.scene) {
+      this._removeOverheadRegionIcons();
+      return;
+    }
+    const entries = getActiveElevationRegions(canvas.scene).filter(entry => entry.overhead);
+    if (!entries.length) {
+      this._removeOverheadRegionIcons();
+      return;
+    }
+    const layer = this._ensureOverheadIconLayer();
+    const icons = [];
+    for (const entry of entries) {
+      const bounds = _pathsBounds(_regionPaths(entry.region));
+      if (!bounds) continue;
+      const position = _canvasPointToViewport(bounds.center);
+      if (!position) continue;
+      const icon = document.createElement("div");
+      icon.className = `${MODULE_ID}-overhead-icon`;
+      icon.style.left = `${position.x}px`;
+      icon.style.top = `${position.y}px`;
+      icon.title = game.i18n.localize("SCENE_ELEVATION.RegionBehavior.FIELDS.overhead.label");
+      const image = document.createElement("i");
+      image.className = "fa-solid fa-people-roof";
+      icon.appendChild(image);
+      icons.push(icon);
+    }
+    if (!icons.length) {
+      this._removeOverheadRegionIcons();
+      return;
+    }
+    layer.replaceChildren(...icons);
+  }
+
+  _ensureOverheadIconLayer() {
+    if (this._overheadIconLayer?.isConnected) return this._overheadIconLayer;
+    const layer = document.createElement("div");
+    layer.className = `${MODULE_ID}-overhead-icons`;
+    document.body.appendChild(layer);
+    this._overheadIconLayer = layer;
+    return layer;
+  }
+
+  _removeOverheadRegionIcons() {
+    this._overheadIconLayer?.remove();
+    this._overheadIconLayer = null;
+  }
+
   _setHoveredElevationRegion(region) {
     const nextId = region?.id ?? null;
     if (this._hoveredRegionId === nextId) return;
@@ -696,7 +772,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
         name: game.i18n.localize("SCENE_ELEVATION.RegionBehavior.Label"),
         type: REGION_BEHAVIOR_TYPE,
         system: {
-          elevation: 1,
+          elevation: _currentDrawElevationValue(),
           slope: false,
           slopeHeight: 0,
           slopeDirection: 0,
@@ -1098,8 +1174,12 @@ export function registerElevationControls() {
       }
       else layer.activateTool(toolName);
       layer.queueElevationRegionVisibilityRefresh();
+      _queueDrawElevationControlRender(layer._activeTool);
     }
-    else layer.deactivate();
+    else {
+      layer.deactivate();
+      _removeDrawElevationControl();
+    }
   });
 
   for (const hook of ["createRegion", "updateRegion", "deleteRegion", "createRegionBehavior", "updateRegionBehavior", "deleteRegionBehavior"]) {
@@ -1131,6 +1211,178 @@ export function registerElevationControls() {
     layer?.refreshElevationRegionVisibility();
     layer?._drawPerspectiveHandle?.();
   });
+
+  Hooks.on("canvasPan", () => {
+    canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.queueOverheadRegionIconRefresh();
+  });
+}
+
+function _currentDrawElevationValue() {
+  return Number.isFinite(_drawElevationValue) ? _drawElevationValue : 1;
+}
+
+function _queueDrawElevationControlRender(toolName) {
+  if (_drawElevationControlFrame) cancelAnimationFrame(_drawElevationControlFrame);
+  _drawElevationControlFrame = requestAnimationFrame(() => {
+    _drawElevationControlFrame = null;
+    _renderDrawElevationControl(toolName);
+  });
+}
+
+function _renderDrawElevationControl(toolName) {
+  if (!game.user?.isGM || !DRAW_TOOLS.has(toolName)) {
+    _removeDrawElevationControl();
+    return;
+  }
+  const anchor = _sceneSettingsControlHost();
+  if (!anchor) {
+    _removeDrawElevationControl();
+    return;
+  }
+  const control = document.getElementById(DRAW_ELEVATION_CONTROL_ID) ?? _createDrawElevationControl();
+  _syncDrawElevationControl(control);
+  if (!control.isConnected) document.body.appendChild(control);
+  _drawElevationAnchorElement = anchor;
+  _bindDrawElevationViewportListener();
+  _positionDrawElevationControl(control, anchor);
+}
+
+function _removeDrawElevationControl() {
+  if (_drawElevationControlFrame) {
+    cancelAnimationFrame(_drawElevationControlFrame);
+    _drawElevationControlFrame = null;
+  }
+  _drawElevationAnchorElement = null;
+  _unbindDrawElevationViewportListener();
+  document.getElementById(DRAW_ELEVATION_CONTROL_ID)?.remove();
+}
+
+function _createDrawElevationControl() {
+  const control = document.createElement("div");
+  control.id = DRAW_ELEVATION_CONTROL_ID;
+  control.className = `${MODULE_ID}-draw-elevation-control`;
+  control.setAttribute("role", "group");
+  control.title = game.i18n.localize("SCENE_ELEVATION.Control.DrawElevation");
+  const decrease = _createDrawElevationButton("decrease", "fa-solid fa-arrow-down", "SCENE_ELEVATION.Control.DrawElevationDecrease");
+  const input = document.createElement("input");
+  input.type = "number";
+  input.step = "1";
+  input.inputMode = "decimal";
+  input.className = `${MODULE_ID}-draw-elevation-input`;
+  input.title = game.i18n.localize("SCENE_ELEVATION.Control.DrawElevation");
+  input.setAttribute("aria-label", input.title);
+  const increase = _createDrawElevationButton("increase", "fa-solid fa-arrow-up", "SCENE_ELEVATION.Control.DrawElevationIncrease");
+  control.replaceChildren(decrease, input, increase);
+  control.addEventListener("pointerdown", event => event.stopPropagation(), { capture: true });
+  control.addEventListener("click", _onDrawElevationControlClick);
+  control.addEventListener("input", _onDrawElevationControlInput);
+  control.addEventListener("change", _onDrawElevationControlInput);
+  return control;
+}
+
+function _positionDrawElevationControl(control, anchor) {
+  const rect = anchor.getBoundingClientRect?.();
+  if (!rect) return;
+  const gap = 6;
+  const width = control.offsetWidth || 128;
+  const height = control.offsetHeight || 34;
+  const maxLeft = Math.max(gap, window.innerWidth - width - gap);
+  const maxTop = Math.max(gap, window.innerHeight - height - gap);
+  const rightSide = rect.right + gap;
+  const leftSide = rect.left - width - gap;
+  const left = rightSide <= maxLeft ? rightSide : Math.max(gap, Math.min(leftSide, maxLeft));
+  const centeredTop = rect.top + rect.height / 2 - height / 2;
+  const top = Math.max(gap, Math.min(centeredTop, maxTop));
+  control.style.left = `${left}px`;
+  control.style.top = `${top}px`;
+}
+
+function _bindDrawElevationViewportListener() {
+  if (_drawElevationResizeListenerBound) return;
+  window.addEventListener("resize", _onDrawElevationViewportChange, { passive: true });
+  _drawElevationResizeListenerBound = true;
+}
+
+function _unbindDrawElevationViewportListener() {
+  if (!_drawElevationResizeListenerBound) return;
+  window.removeEventListener("resize", _onDrawElevationViewportChange);
+  _drawElevationResizeListenerBound = false;
+}
+
+function _onDrawElevationViewportChange() {
+  const control = document.getElementById(DRAW_ELEVATION_CONTROL_ID);
+  const anchor = _drawElevationAnchorElement?.isConnected ? _drawElevationAnchorElement : _sceneSettingsControlHost();
+  if (!control || !anchor) {
+    _removeDrawElevationControl();
+    return;
+  }
+  _drawElevationAnchorElement = anchor;
+  _positionDrawElevationControl(control, anchor);
+}
+
+function _createDrawElevationButton(action, iconClass, titleKey) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.action = action;
+  button.title = game.i18n.localize(titleKey);
+  button.setAttribute("aria-label", button.title);
+  const icon = document.createElement("i");
+  icon.className = iconClass;
+  button.appendChild(icon);
+  return button;
+}
+
+function _syncDrawElevationControl(control) {
+  const input = control.querySelector("input");
+  if (!input) return;
+  const value = _formatElevationLabel(_currentDrawElevationValue());
+  if (document.activeElement !== input) input.value = value;
+}
+
+function _onDrawElevationControlClick(event) {
+  event.stopPropagation();
+  const button = event.target?.closest?.("button[data-action]");
+  if (!button) return;
+  event.preventDefault();
+  const step = button.dataset.action === "decrease" ? -1 : 1;
+  _setDrawElevationValue(_currentDrawElevationValue() + step);
+  const control = button.closest(`.${MODULE_ID}-draw-elevation-control`);
+  if (control) _syncDrawElevationControl(control);
+}
+
+function _onDrawElevationControlInput(event) {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  event.stopPropagation();
+  _setDrawElevationValue(input.value);
+}
+
+function _setDrawElevationValue(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return;
+  _drawElevationValue = next;
+}
+
+function _sceneSettingsControlHost() {
+  const selectors = [
+    `[data-tool="sceneSettings"]`,
+    `[data-action="sceneSettings"]`,
+    `[data-tool-name="sceneSettings"]`,
+    `[name="sceneSettings"]`
+  ];
+  for (const selector of selectors) {
+    const element = document.querySelector(selector);
+    if (element) return _sceneControlHostElement(element);
+  }
+  const title = game.i18n.localize("SCENE_ELEVATION.Control.SceneSettings");
+  for (const element of document.querySelectorAll("button, a, [role='button']")) {
+    if (element.title === title || element.getAttribute("aria-label") === title) return _sceneControlHostElement(element);
+  }
+  return null;
+}
+
+function _sceneControlHostElement(element) {
+  return element.closest("li") ?? element.closest(".control-tool") ?? element;
 }
 
 function _normalizeRegionPath(path) {
@@ -1204,6 +1456,24 @@ function _pathsBounds(paths) {
     width: Math.max(1, maxX - minX),
     height: Math.max(1, maxY - minY),
     center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
+  };
+}
+
+function _canvasPointToViewport(point) {
+  const renderer = canvas?.app?.renderer;
+  const view = renderer?.view ?? canvas?.app?.view ?? canvas?.app?.canvas;
+  const rect = view?.getBoundingClientRect?.();
+  const parent = canvas?.primary ?? canvas?.stage;
+  if (!renderer || !rect || !parent) return null;
+  const PointClass = globalThis.PIXI?.Point;
+  const pixiPoint = typeof PointClass === "function" ? new PointClass(point.x, point.y) : point;
+  const global = parent.toGlobal(pixiPoint);
+  const screen = renderer.screen ?? { x: 0, y: 0, width: view.width, height: view.height };
+  const scaleX = rect.width / Math.max(1, screen.width ?? view.width ?? rect.width);
+  const scaleY = rect.height / Math.max(1, screen.height ?? view.height ?? rect.height);
+  return {
+    x: rect.left + (global.x - (screen.x ?? 0)) * scaleX,
+    y: rect.top + (global.y - (screen.y ?? 0)) * scaleY
   };
 }
 

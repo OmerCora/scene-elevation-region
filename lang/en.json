@@ -13,6 +13,9 @@
       "DrawCircle": "Draw Elevation Circle",
       "SceneSettings": "Scene Elevation Settings",
       "ShowElevationRegions": "Show Elevation Regions",
+      "DrawElevation": "New Region Elevation",
+      "DrawElevationDecrease": "Decrease New Region Elevation",
+      "DrawElevationIncrease": "Increase New Region Elevation",
       "RegionName": "Elevation Region {number}"
     },
     "Notify": {

@@ -94,3 +94,76 @@
 	pointer-events: none;
 	text-shadow: 0 1px 1px rgba(0, 0, 0, 0.8);
 }
+
+.scene-elevation-region-draw-elevation-control {
+	position: fixed;
+	z-index: 10001;
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	min-height: 34px;
+	padding: 3px;
+	border: 1px solid var(--color-border-light-2, rgba(255, 255, 255, 0.35));
+	border-radius: 4px;
+	background: var(--color-bg-option, rgba(20, 20, 20, 0.9));
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+	color: var(--color-text-primary, inherit);
+	pointer-events: auto;
+}
+
+.scene-elevation-region-draw-elevation-control button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	min-width: 28px;
+	height: 28px;
+	margin: 0;
+	padding: 0;
+	font-size: 12px;
+	line-height: 1;
+}
+
+.scene-elevation-region-draw-elevation-input {
+	width: 42px;
+	height: 28px;
+	margin: 0;
+	padding: 0 4px;
+	text-align: center;
+	font-weight: 700;
+}
+
+.scene-elevation-region-draw-elevation-input::-webkit-outer-spin-button,
+.scene-elevation-region-draw-elevation-input::-webkit-inner-spin-button {
+	margin: 0;
+	-webkit-appearance: none;
+}
+
+.scene-elevation-region-draw-elevation-input[type="number"] {
+	appearance: textfield;
+	-moz-appearance: textfield;
+}
+
+.scene-elevation-region-overhead-icons {
+	position: fixed;
+	inset: 0;
+	z-index: 10000;
+	pointer-events: none;
+}
+
+.scene-elevation-region-overhead-icon {
+	position: absolute;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border: 1px solid rgba(255, 255, 255, 0.45);
+	border-radius: 50%;
+	background: rgba(20, 20, 20, 0.72);
+	color: #fff;
+	font-size: 15px;
+	line-height: 1;
+	text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+	transform: translate(-50%, -50%);
+}
