@@ -2,7 +2,6 @@
 
 [![Downloads](https://img.shields.io/github/downloads/OmerCora/scene-elevation-region/total?label=Downloads&color=4aa94a)](https://github.com/OmerCora/scene-elevation-region/releases)
 [![Latest Version Downloads](https://img.shields.io/github/downloads/OmerCora/scene-elevation-region/latest/total?label=Latest%20Version&color=4aa94a)](https://github.com/OmerCora/scene-elevation-region/releases/latest)
-[![Foundry Installs](https://img.shields.io/endpoint?url=https://foundryshields.com/installs?packageName=scene-elevation-region)](https://foundryvtt.com/packages/scene-elevation-region)
 
 System-agnostic visual scene elevation for Foundry VTT v14 using native Foundry Regions.
 
