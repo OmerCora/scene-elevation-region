@@ -22,8 +22,10 @@ const MIN_SHAPE_SIZE = 8;
 const POINT_CLOSE_DISTANCE = 10;
 const DOUBLE_CLICK_MS = 420;
 const DOUBLE_CLICK_DISTANCE = 8;
+const REGION_DRAG_MIN_DISTANCE = 3;
 const PREVIEW_COLOR = 0x66ccff;
 const OUTLINE_COLOR = 0xffd166;
+const SELECTED_OUTLINE_COLOR = 0x66ccff;
 const EDGE_HANDLE_COLOR = 0xff4d6d;
 const SUN_HANDLE_COLOR = 0xffd166;
 const EDGE_HANDLE_RADIUS = 9;
@@ -78,6 +80,8 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._overheadIconLayer = null;
     this._hoveredRegionId = null;
     this._editedRegionId = null;
+    this._selectedRegionId = null;
+    this._regionDrag = null;
     this._visibilityRefreshFrame = null;
     this._overheadIconRefreshFrame = null;
     this._edgePointPreviewRefreshFrame = null;
@@ -140,8 +144,10 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._sunEdgePointPreview = null;
     this._draggingPerspectivePoint = false;
     this._draggingSunPoint = false;
+    this._regionDrag = null;
     this._hoveredRegionId = null;
     this._editedRegionId = null;
+    this._selectedRegionId = null;
     clearTransientSceneElevationSettings(canvas?.scene);
     return super._tearDown?.(options);
   }
@@ -181,7 +187,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   }
 
   refreshElevationRegionVisibility(forceVisible = null) {
-    const visible = forceVisible ?? (this._activeTool !== null && (game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS) || this._hoveredRegionId || this._editedRegionId));
+    const visible = forceVisible ?? (this._activeTool !== null && (game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS) || this._hoveredRegionId || this._editedRegionId || this._selectedRegionId || this._regionDrag));
     if (this.outlines) this.outlines.visible = visible;
     if (!visible) this._hideElevationHoverLabel();
     if (this.outlines) this._drawElevationRegionOutlines();
@@ -244,9 +250,11 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._lastClick = null;
     this._draggingPerspectivePoint = false;
     this._draggingSunPoint = false;
+    this._regionDrag = null;
     this._edgePointPreview = null;
     this._sunEdgePointPreview = null;
     this._setHoveredElevationRegion(null);
+    this._setSelectedElevationRegion(null);
     clearTransientSceneElevationSettings(canvas?.scene);
     _queueDrawElevationControlRender(null);
     this.preview?.clear();
@@ -284,14 +292,24 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
   _onPointerMove(event) {
     if (!this._activeTool) return;
-    if (this._isRightMouseEvent(event) && !this._draggingPerspectivePoint && !this._draggingSunPoint && !this._drawingInProgress()) return;
+    if (this._isRightMouseEvent(event) && !this._draggingPerspectivePoint && !this._draggingSunPoint && !this._regionDrag && !this._drawingInProgress()) return;
     const isCanvasEvent = this._isCanvasEvent(event);
-    if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._shapeStart && !isCanvasEvent) {
+    if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._regionDrag && !this._shapeStart && !isCanvasEvent) {
       this._hideElevationHoverLabel();
       return;
     }
-    if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._drawingInProgress() && isCanvasEvent) this._updateElevationHoverLabel(event);
+    if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._regionDrag && !this._drawingInProgress() && isCanvasEvent) this._updateElevationHoverLabel(event);
     else this._hideElevationHoverLabel();
+    if (this._regionDrag) {
+      this._consumeEvent(event, { preventDefault: false });
+      const point = this._eventPosition(event);
+      const drag = this._regionDrag;
+      drag.current = point;
+      const delta = _regionDragDelta(drag);
+      if (Math.hypot(delta.x, delta.y) >= REGION_DRAG_MIN_DISTANCE) drag.moved = true;
+      this.refreshElevationRegionVisibility(true);
+      return;
+    }
     if (this._draggingSunPoint) {
       this._consumeEvent(event, { preventDefault: false });
       const rawPoint = this._eventPosition(event, { snap: false });
@@ -329,7 +347,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     if (!this._isCanvasEvent(event)) return;
     const button = event.button ?? event.data?.button ?? event.nativeEvent?.button ?? 0;
     if (button === 2) {
-      if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._drawingInProgress()) return;
+      if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._regionDrag && !this._drawingInProgress()) return;
       this._consumeEvent(event);
       this._cancelDrawing();
       return;
@@ -366,7 +384,23 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
         if (isDoubleClick && state?.entry?.region) {
           this._consumeEvent(event);
           this._openRegionDetails(state.entry.region);
+          return;
         }
+        if (state?.entry?.region) {
+          this._consumeEvent(event);
+          this._setSelectedElevationRegion(state.entry.region);
+          const start = this._eventPosition(event);
+          this._regionDrag = {
+            region: state.entry.region,
+            start,
+            current: start,
+            moved: false,
+            shapes: _cloneRegionShapes(state.entry.region)
+          };
+          this.refreshElevationRegionVisibility(true);
+          return;
+        }
+        this._setSelectedElevationRegion(null);
       }
       return;
     }
@@ -426,6 +460,10 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       RegionElevationRenderer.instance.update();
       return;
     }
+    if (this._regionDrag) {
+      await this._finishRegionDrag(event);
+      return;
+    }
     if ((this._activeTool !== TOOL_RECTANGLE && this._activeTool !== TOOL_CIRCLE) || !this._shapeStart) return;
     this._consumeEvent(event);
     const end = this._eventPosition(event);
@@ -442,9 +480,27 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
   _onContextMenu(event) {
     if (!this._isCanvasEvent(event)) return;
-    if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._drawingInProgress()) return;
+    if (!this._draggingPerspectivePoint && !this._draggingSunPoint && !this._regionDrag && !this._drawingInProgress()) return;
     this._consumeEvent(event);
     this._cancelDrawing();
+  }
+
+  async _finishRegionDrag(event) {
+    const drag = this._regionDrag;
+    this._consumeEvent(event);
+    const point = this._eventPosition(event);
+    drag.current = point;
+    const delta = _regionDragDelta(drag);
+    const moved = drag.moved || Math.hypot(delta.x, delta.y) >= REGION_DRAG_MIN_DISTANCE;
+    this._regionDrag = null;
+    if (!moved || !drag.region || !drag.shapes?.length) {
+      this.refreshElevationRegionVisibility();
+      return;
+    }
+    const shapes = _translateRegionShapes(drag.shapes, delta.x, delta.y);
+    await drag.region.update({ shapes });
+    this._setSelectedElevationRegion(drag.region);
+    this.refreshElevationRegionVisibility(true);
   }
 
   _appendPolygonPoint(point) {
@@ -474,6 +530,12 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 
   _onKeyDown(event) {
     if (!this._activeTool || this._isEditableEventTarget(event)) return;
+    if (event.key === "Escape" && this._regionDrag) {
+      event.preventDefault();
+      this._regionDrag = null;
+      this.refreshElevationRegionVisibility();
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
       if (this._undoDrawingStep()) {
         event.preventDefault();
@@ -598,6 +660,13 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     const nextId = region?.id ?? null;
     if (this._hoveredRegionId === nextId) return;
     this._hoveredRegionId = nextId;
+    this.refreshElevationRegionVisibility();
+  }
+
+  _setSelectedElevationRegion(region) {
+    const nextId = region?.id ?? null;
+    if (this._selectedRegionId === nextId) return;
+    this._selectedRegionId = nextId;
     this.refreshElevationRegionVisibility();
   }
 
@@ -1071,12 +1140,14 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     const entries = getActiveElevationRegions(canvas.scene);
     const scale = canvas.stage?.scale?.x || 1;
     for (const entry of entries) {
-      const paths = _regionPaths(entry.region);
+      const dragDelta = this._regionDrag?.region?.id === entry.region.id ? _regionDragDelta(this._regionDrag) : null;
+      const paths = dragDelta ? _translatePaths(_regionPaths(entry.region), dragDelta.x, dragDelta.y) : _regionPaths(entry.region);
       const outlineElevation = entry.slope ? entry.highestElevation : entry.elevation;
       const alpha = outlineElevation < 0 ? 0.7 : 0.9;
-      graphics.lineStyle(2 / scale, outlineElevation < 0 ? 0x8ec5ff : OUTLINE_COLOR, alpha);
+      const selected = this._selectedRegionId === entry.region.id || !!dragDelta;
+      graphics.lineStyle((selected ? 3.5 : 2) / scale, selected ? SELECTED_OUTLINE_COLOR : outlineElevation < 0 ? 0x8ec5ff : OUTLINE_COLOR, selected ? 0.98 : alpha);
       for (const path of paths) graphics.drawPolygon(path.flatMap(point => [point.x, point.y]));
-      if (entry.slope && (this._hoveredRegionId === entry.region.id || this._editedRegionId === entry.region.id || _isRegionSelected(entry.region))) this._drawSlopeArrow(graphics, entry, paths, scale);
+      if (entry.slope && (selected || this._hoveredRegionId === entry.region.id || this._editedRegionId === entry.region.id || _isRegionSelected(entry.region))) this._drawSlopeArrow(graphics, entry, paths, scale);
     }
   }
 
@@ -1446,6 +1517,32 @@ function _regionPaths(region) {
 function _hoverElevationStateAtPoint(point) {
   const state = getRegionElevationStateAtPoint(point, canvas.scene);
   return state.found ? state : null;
+}
+
+function _regionDragDelta(drag) {
+  return {
+    x: (drag?.current?.x ?? drag?.start?.x ?? 0) - (drag?.start?.x ?? 0),
+    y: (drag?.current?.y ?? drag?.start?.y ?? 0) - (drag?.start?.y ?? 0)
+  };
+}
+
+function _cloneRegionShapes(region) {
+  const shapes = region?.shapes ?? region?._source?.shapes ?? [];
+  return Array.from(shapes).map(shape => shape?.toObject ? shape.toObject() : foundry.utils.deepClone(shape));
+}
+
+function _translateRegionShapes(shapes, dx, dy) {
+  return shapes.map(shape => {
+    const next = foundry.utils.deepClone(shape);
+    if (Array.isArray(next.points)) next.points = next.points.map((value, index) => Number(value) + (index % 2 === 0 ? dx : dy));
+    if (Number.isFinite(Number(next.x))) next.x = Number(next.x) + dx;
+    if (Number.isFinite(Number(next.y))) next.y = Number(next.y) + dy;
+    return next;
+  });
+}
+
+function _translatePaths(paths, dx, dy) {
+  return paths.map(path => path.map(point => ({ x: point.x + dx, y: point.y + dy })));
 }
 
 function _renderDocumentSheet(document, sheet = document?.sheet) {
