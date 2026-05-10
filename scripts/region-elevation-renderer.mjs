@@ -19,6 +19,7 @@ const OVERLAY_LIFT_BASE = 0.225;
 const OVERLAY_LIFT_PARALLAX = 0.6;
 const OVERLAY_LIFT_MAX_GRID = 1.75;
 const OVERLAY_LIFT_MAX_PIXELS = 140;
+const PARALLAX_INTERNAL_STRENGTH = 1.22;
 const SMOOTH_PARALLAX_EPSILON = 0.35;
 const ANCHORED_CAMERA_MULTIPLIER = 0.75;
 const VELOCITY_CAMERA_MULTIPLIER = 0.9;
@@ -35,6 +36,7 @@ const ORTHOGRAPHIC_ANGLE_DIRECTION = Object.freeze({ x: 0, y: -1 });
 const LAYERED_CAMERA_MULTIPLIER = 1.12;
 const AXIS_SCROLL_CAMERA_MULTIPLIER = 1.15;
 const MOUSE_PARALLAX_MULTIPLIER = 1.45;
+const MOUSE_PARALLAX_INTERNAL_STRENGTH = 0.38;
 const LOW_ELEVATION_PARALLAX_FACTOR = 1.16;
 const HIGH_ELEVATION_PARALLAX_FACTOR = 0.52;
 const PARALLAX_DEPTH_CURVE_CENTER = 0.47;
@@ -1186,7 +1188,12 @@ export class RegionElevationRenderer {
     const parallaxLift = _parallaxMotionLift(lift, normalized, parallaxHeightContrast);
     const heightAdjustedParallax = lift > 0 ? parallax * (parallaxLift / lift) : parallax;
     const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * parallaxLift * sign, y: baseParallaxDirection.y * parallaxLift * sign } : { x: 0, y: 0 };
-    const parallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, parallaxLift, sign, heightAdjustedParallax) : { x: 0, y: 0 };
+    const rawParallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, parallaxLift, sign, heightAdjustedParallax) : { x: 0, y: 0 };
+    const parallaxModeStrength = parallaxMode === PARALLAX_MODES.MOUSE ? MOUSE_PARALLAX_INTERNAL_STRENGTH : 1;
+    const parallaxVector = {
+      x: rawParallaxVector.x * PARALLAX_INTERNAL_STRENGTH * parallaxModeStrength,
+      y: rawParallaxVector.y * PARALLAX_INTERNAL_STRENGTH * parallaxModeStrength
+    };
     const modeEffects = this._parallaxVisualEffectsForMode(visual, geo, parallaxMode, parallaxVector, parallaxLift, sign, heightAdjustedParallax, normalized, perspectivePoint);
     overlayScale *= modeEffects.overlayScaleMultiplier ?? 1;
     const overlayScaleX = overlayScale * (modeEffects.overlayScaleXMultiplier ?? 1);
