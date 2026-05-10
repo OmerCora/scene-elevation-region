@@ -19,7 +19,7 @@ const OVERLAY_LIFT_BASE = 0.225;
 const OVERLAY_LIFT_PARALLAX = 0.6;
 const OVERLAY_LIFT_MAX_GRID = 1.75;
 const OVERLAY_LIFT_MAX_PIXELS = 140;
-const PARALLAX_INTERNAL_STRENGTH = 1.22;
+const PARALLAX_INTERNAL_STRENGTH = 1.0;
 const SMOOTH_PARALLAX_EPSILON = 0.35;
 const ANCHORED_CAMERA_MULTIPLIER = 0.75;
 const VELOCITY_CAMERA_MULTIPLIER = 0.9;
@@ -35,8 +35,9 @@ const ORTHOGRAPHIC_TOP_DOWN_DIRECTION = Object.freeze({ x: 0, y: 0 });
 const ORTHOGRAPHIC_ANGLE_DIRECTION = Object.freeze({ x: 0, y: -1 });
 const LAYERED_CAMERA_MULTIPLIER = 1.12;
 const AXIS_SCROLL_CAMERA_MULTIPLIER = 1.15;
-const MOUSE_PARALLAX_MULTIPLIER = 1.45;
-const MOUSE_PARALLAX_INTERNAL_STRENGTH = 0.38;
+const MOUSE_PARALLAX_MULTIPLIER = 0.8;
+const MOUSE_PARALLAX_INTERNAL_STRENGTH = 0.15;
+const MOUSE_PARALLAX_LIFT_REFERENCE_GRID_RATIO = 0.24;
 const LOW_ELEVATION_PARALLAX_FACTOR = 1.16;
 const HIGH_ELEVATION_PARALLAX_FACTOR = 0.52;
 const PARALLAX_DEPTH_CURVE_CENTER = 0.47;
@@ -1185,7 +1186,9 @@ export class RegionElevationRenderer {
       liftCeilingLimit
     );
     const shadowLift = (liftMultiplier > 0 ? lift / liftMultiplier : lift) / 5;
-    const parallaxLift = _parallaxMotionLift(lift, normalized, parallaxHeightContrast);
+    const parallaxLift = parallaxMode === PARALLAX_MODES.MOUSE && depthScale === DEPTH_SCALES.LINEAR
+      ? lift
+      : _parallaxMotionLift(lift, normalized, parallaxHeightContrast);
     const heightAdjustedParallax = lift > 0 ? parallax * (parallaxLift / lift) : parallax;
     const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * parallaxLift * sign, y: baseParallaxDirection.y * parallaxLift * sign } : { x: 0, y: 0 };
     const rawParallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, parallaxLift, sign, heightAdjustedParallax) : { x: 0, y: 0 };
@@ -1499,9 +1502,12 @@ export class RegionElevationRenderer {
     const pointer = this._pointerFocus;
     const focus = this._cameraFocus;
     if (!pointer || !focus) return { x: 0, y: 0 };
+    const gridSize = _finiteNumber(canvas?.grid?.size ?? canvas?.scene?.grid?.size ?? canvas?.dimensions?.size, 100);
+    const liftReference = Math.max(1, gridSize * MOUSE_PARALLAX_LIFT_REFERENCE_GRID_RATIO);
+    const elevationFactor = lift / liftReference;
     return _limitVector({
-      x: (pointer.x - focus.x) * parallax * MOUSE_PARALLAX_MULTIPLIER * sign,
-      y: (pointer.y - focus.y) * parallax * MOUSE_PARALLAX_MULTIPLIER * sign
+      x: (pointer.x - focus.x) * parallax * MOUSE_PARALLAX_MULTIPLIER * elevationFactor * sign,
+      y: (pointer.y - focus.y) * parallax * MOUSE_PARALLAX_MULTIPLIER * elevationFactor * sign
     }, lift);
   }
 
