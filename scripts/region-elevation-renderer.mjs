@@ -46,10 +46,15 @@ const SLOPE_DROP_MAX_PIXELS = 14;
 const CLIFF_WARP_DROP_MAX_PIXELS = 42;
 const CLIFF_WARP_SOLID_ALPHA = 0.92;
 const CLIFF_WARP_SOURCE_RIM_PIXELS = 4;
-const CLIFF_WARP_SIMPLIFY_GRID_RATIO = 0.08;
-const CLIFF_WARP_SIMPLIFY_MIN_PIXELS = 3;
-const CLIFF_WARP_SIMPLIFY_MAX_PIXELS = 9;
-const CLIFF_WARP_PARTIAL_SAMPLE_EPSILON = 0.05;
+const CLIFF_WARP_SIMPLIFY_GRID_RATIO = 0.12;
+const CLIFF_WARP_SIMPLIFY_MIN_PIXELS = 4;
+const CLIFF_WARP_SIMPLIFY_MAX_PIXELS = 12;
+const CLIFF_WARP_EDGE_OVERHANG_RATIO = 0.45;
+const CLIFF_WARP_SIDE_ROWS = Object.freeze([
+  Object.freeze({ t: 0, normalOffset: 1.15, overhang: 0 }),
+  Object.freeze({ t: 0.52, normalOffset: 0.05, overhang: 0.2 }),
+  Object.freeze({ t: 1, normalOffset: -1.15, overhang: CLIFF_WARP_EDGE_OVERHANG_RATIO })
+]);
 const STRONG_TOP_DOWN_SHADOW_MULTIPLIER = 2.35;
 const STRONG_TOP_DOWN_BLUR_MULTIPLIER = 1.55;
 const SUN_EDGE_SHADOW_ALPHA_MULTIPLIER = 1.25;
@@ -632,6 +637,7 @@ export class RegionElevationRenderer {
     this._parallaxState = new Map();
     this._visualParams = new Map();
     this._generatedTextureCache = new Map();
+    this._cliffWarpPathCache = new WeakMap();
     this._needsParallaxFrame = false;
     this._pointerEventTarget = null;
     this._pointerMoveHandler = null;
@@ -691,6 +697,7 @@ export class RegionElevationRenderer {
     this._previousCameraFocus = null;
     this._parallaxState.clear();
     this._visualParams.clear();
+    this._cliffWarpPathCache = new WeakMap();
     this._overheadContainers.clear();
     this._needsParallaxFrame = false;
     this._pointerEventTarget = null;
@@ -703,6 +710,7 @@ export class RegionElevationRenderer {
     this._parallaxState.clear();
     this._clearRegionChildren();
     this._clearGeneratedTextureCache();
+    this._cliffWarpPathCache = new WeakMap();
     this._entries = this._visualEntries(this._scene);
     this._pruneParallaxState();
     this.container.visible = this._entries.length > 0;
@@ -1131,10 +1139,10 @@ export class RegionElevationRenderer {
     const textureSoftShadowAlphaBase = textureShadow && !shadowDisabled ? Math.clamp((fullTextureMeldShadow ? FULL_TEXTURE_MELD_SOFT_ALPHA : TEXTURE_MELD_SOFT_ALPHA) * shadowStrength * shadowAlphaMultiplier * (0.72 + normalized * 0.28), 0, fullTextureMeldShadow ? 0.98 : 0.92) : 0;
     const textureContactShadowAlphaBase = textureShadow && !shadowDisabled ? Math.clamp((fullTextureMeldShadow ? FULL_TEXTURE_MELD_CONTACT_ALPHA : TEXTURE_MELD_CONTACT_ALPHA) * shadowStrength * shadowAlphaMultiplier * (0.72 + normalized * 0.28), 0, fullTextureMeldShadow ? 0.92 : 0.82) : 0;
     const blendWidth = this._blendWidth(gridSize, transitionNormalized, parallax, blendProfile);
-    const edgeGlueAlpha = !shadowDisabled && blendWidth > 0
+    const cliffWarpActive = !isHole && absElevation > 0 && !!blendProfile.cliffWarp;
+    const edgeGlueAlpha = !cliffWarpActive && !shadowDisabled && blendWidth > 0
       ? Math.clamp(blendProfile.glueAlpha * shadowStrength * (0.65 + transitionNormalized * 0.35), 0, EDGE_GLUE_ALPHA_MAX)
       : 0;
-    const cliffWarpActive = !isHole && absElevation > 0 && !!blendProfile.cliffWarp;
     let slopeWidth = blendWidth > 0 ? Math.clamp(blendWidth * blendProfile.slopeWidthMultiplier, 0, blendProfile.maxWidth * 1.9) : 0;
     let slopeDropMaxPixels = Number(blendProfile.dropMaxPixels ?? SLOPE_DROP_MAX_PIXELS);
     let slopeDropPixels = Math.clamp(blendProfile.slopeDropPixels * (0.75 + transitionNormalized * 0.25), SLOPE_DROP_MIN_PIXELS, slopeDropMaxPixels);
@@ -1628,34 +1636,6 @@ export class RegionElevationRenderer {
     return paths.map(path => path.map(point => this._slopedOverlayPoint(point, params)));
   }
 
-  _cliffWarpLiftFractionAtPoint(point, outwardNormal, params) {
-    const entry = params.entry;
-    if (!entry) return 1;
-    const localElevation = params.slope ? this._slopeElevationAtPoint(point, params) : entry.elevation;
-    if (!Number.isFinite(localElevation)) return 1;
-    return this._hasMatchingElevationNeighbor(point, outwardNormal, entry, localElevation, params) ? 0 : 1;
-  }
-
-  _hasMatchingElevationNeighbor(point, outwardNormal, entry, localElevation, params) {
-    const sampleDistance = Math.max(2, Number(params.cliffWarpSourceWidth ?? CLIFF_WARP_SOURCE_RIM_PIXELS));
-    const samplePoints = [
-      point,
-      { x: point.x + outwardNormal.x * sampleDistance, y: point.y + outwardNormal.y * sampleDistance },
-      { x: point.x + outwardNormal.x * sampleDistance * 2, y: point.y + outwardNormal.y * sampleDistance * 2 }
-    ];
-    for (const visual of this._entries) {
-      const candidate = visual.entry;
-      if (!candidate || candidate === entry || candidate.region === entry.region) continue;
-      for (const samplePoint of samplePoints) {
-        if (!_regionContains(candidate.region, samplePoint)) continue;
-        const candidateElevation = _entryElevationAtPoint(candidate, samplePoint);
-        if (!Number.isFinite(candidateElevation)) continue;
-        if (candidateElevation >= localElevation - CLIFF_WARP_ELEVATION_MATCH_TOLERANCE) return true;
-      }
-    }
-    return false;
-  }
-
   _shadowDirection(bounds, parallax, shadowMode, perspectivePoint) {
     switch (shadowMode) {
       case SHADOW_MODES.OFF:
@@ -1719,16 +1699,14 @@ export class RegionElevationRenderer {
   _createCliffWarpShadow(paths, params) {
     const shadow = new PIXI.Container();
     shadow.eventMode = "none";
-    const shadowPaths = this._slopedOverlayPaths(this._cliffWarpRenderPaths(paths, params), params);
-    const allAround = this._createLiveRimShadowLayer(shadowPaths, { x: 0, y: 0 }, params.allAroundShadowAlpha, params.allAroundShadowBlur, Math.max(2, params.allAroundShadowBlur * 0.8), true);
-    const soft = this._createLiveRimShadowLayer(shadowPaths, params.softShadowOffset, params.softShadowAlpha, params.softShadowBlur, Math.max(2, params.softShadowBlur * 0.7), true);
-    const bridge = this._createLiveRimShadowLayer(shadowPaths, params.bridgeShadowOffset, params.bridgeShadowAlpha, params.bridgeShadowBlur, Math.max(2, params.bridgeShadowBlur * 0.75), true);
-    const contact = this._createLiveRimShadowLayer(shadowPaths, params.contactShadowOffset, params.contactShadowAlpha, params.contactShadowBlur, Math.max(2, params.contactShadowBlur * 1.1), true);
+    const shadowPaths = this._cliffWarpRenderPaths(paths, params);
+    const contactAlpha = Math.max(params.contactShadowAlpha, params.softShadowAlpha * 0.35, params.bridgeShadowAlpha * 0.55);
+    const contactBlur = Math.min(Math.max(params.contactShadowBlur, params.softShadowBlur * 0.42), params.gridSize * 0.22);
+    const contactWidth = Math.max(2, Math.min(params.slopeWidth * 0.55, params.gridSize * 0.18));
+    const allAround = this._createRimShadowLayer(shadowPaths, { x: 0, y: 0 }, params.allAroundShadowAlpha, Math.min(params.allAroundShadowBlur, params.gridSize * 0.18), Math.max(2, params.allAroundShadowBlur * 0.55), true);
+    const contact = this._createRimShadowLayer(shadowPaths, params.contactShadowOffset, contactAlpha, contactBlur, contactWidth, true);
     if (allAround) shadow.addChild(allAround);
-    if (soft) shadow.addChild(soft);
-    if (bridge) shadow.addChild(bridge);
     if (contact) shadow.addChild(contact);
-    if (params.slope) shadow._sceneElevationPreTransformed = true;
     return shadow.children.length ? shadow : null;
   }
 
@@ -1819,12 +1797,8 @@ export class RegionElevationRenderer {
     const overlayScale = params.overlayScale ?? 1;
     const center = params.center;
     const sourceWidth = Math.max(1, params.cliffWarpSourceWidth || CLIFF_WARP_SOURCE_RIM_PIXELS);
-    const sign = params.isHole ? -1 : 1;
-    const sampleRows = [
-      { t: 0, normalOffset: -1 },
-      { t: 1, normalOffset: 1 }
-    ];
-    const rowCount = sampleRows.length;
+    const landingOverhang = Math.min(sourceWidth * CLIFF_WARP_EDGE_OVERHANG_RATIO, Math.max(1, params.slopeWidth * 0.12));
+    const rowCount = CLIFF_WARP_SIDE_ROWS.length;
     const container = new PIXI.Container();
     container.eventMode = "none";
 
@@ -1850,60 +1824,24 @@ export class RegionElevationRenderer {
           inwardNormalX = -inwardNormalX;
           inwardNormalY = -inwardNormalY;
         }
-        const outwardNormal = { x: -inwardNormalX, y: -inwardNormalY };
-        const startLiftFraction = this._cliffWarpLiftFractionAtPoint(startPoint, outwardNormal, params);
-        const endLiftFraction = this._cliffWarpLiftFractionAtPoint(endPoint, outwardNormal, params);
-        const midpointLiftFraction = this._cliffWarpLiftFractionAtPoint(midpoint, outwardNormal, params);
-        if (Math.max(startLiftFraction, endLiftFraction, midpointLiftFraction) <= 0.001) continue;
-
         const baseIndex = positions.length / 2;
-        const midpointDelta = Math.abs(midpointLiftFraction - (startLiftFraction + endLiftFraction) / 2);
-        const edgeSamples = midpointDelta > CLIFF_WARP_PARTIAL_SAMPLE_EPSILON
-          ? [
-            { point: startPoint, liftFraction: startLiftFraction },
-            { point: midpoint, liftFraction: midpointLiftFraction },
-            { point: endPoint, liftFraction: endLiftFraction }
-          ]
-          : [
-            { point: startPoint, liftFraction: startLiftFraction },
-            { point: endPoint, liftFraction: endLiftFraction }
-          ];
-        for (const sample of edgeSamples) {
-          const { point, liftFraction } = sample;
-          const fullTop = params.slope
-            ? this._slopedOverlayPoint(point, params)
-            : {
-              x: center.x + (point.x - center.x) * overlayScale + overlayOffset.x,
-              y: center.y + (point.y - center.y) * overlayScale + overlayOffset.y
-            };
-          const fullTopX = fullTop.x;
-          const fullTopY = fullTop.y;
-          const topX = point.x + (fullTopX - point.x) * liftFraction;
-          const topY = point.y + (fullTopY - point.y) * liftFraction;
-          const bottomX = point.x;
-          const bottomY = point.y;
-          for (let row = 0; row < rowCount; row++) {
-            const sampleRow = sampleRows[row];
-            const rowX = topX + (bottomX - topX) * sampleRow.t;
-            const rowY = topY + (bottomY - topY) * sampleRow.t;
-            const sampleX = point.x + inwardNormalX * sourceWidth * sampleRow.normalOffset * sign;
-            const sampleY = point.y + inwardNormalY * sourceWidth * sampleRow.normalOffset * sign;
+        const edgeSamples = [startPoint, endPoint];
+        for (const point of edgeSamples) {
+          const top = this._cliffWarpTopPoint(point, params, overlayScale, overlayOffset, center);
+          for (const row of CLIFF_WARP_SIDE_ROWS) {
+            const overhang = landingOverhang * row.overhang;
+            const rowX = top.x + (point.x - top.x) * row.t - inwardNormalX * overhang;
+            const rowY = top.y + (point.y - top.y) * row.t - inwardNormalY * overhang;
+            const sampleX = point.x + inwardNormalX * sourceWidth * row.normalOffset;
+            const sampleY = point.y + inwardNormalY * sourceWidth * row.normalOffset;
             positions.push(rowX, rowY);
-            uvs.push(
-              Math.clamp((sampleX - geo.x) / geo.width, 0, 1),
-              Math.clamp((sampleY - geo.y) / geo.height, 0, 1)
-            );
+            uvs.push(Math.clamp((sampleX - geo.x) / geo.width, 0, 1), Math.clamp((sampleY - geo.y) / geo.height, 0, 1));
           }
         }
-        for (let segmentIndex = 0; segmentIndex < edgeSamples.length - 1; segmentIndex++) {
-          if (edgeSamples[segmentIndex].liftFraction <= 0.001 && edgeSamples[segmentIndex + 1].liftFraction <= 0.001) continue;
-          const left = baseIndex + segmentIndex * rowCount;
+        for (let row = 0; row < rowCount - 1; row++) {
+          const left = baseIndex + row;
           const right = left + rowCount;
-          if (params.isHole) {
-            indices.push(left, left + 1, right, left + 1, right + 1, right);
-          } else {
-            indices.push(left, right, left + 1, left + 1, right, right + 1);
-          }
+          indices.push(left, right, left + 1, left + 1, right, right + 1);
         }
       }
 
@@ -1923,13 +1861,26 @@ export class RegionElevationRenderer {
     return container;
   }
 
+  _cliffWarpTopPoint(point, params, overlayScale, overlayOffset, center) {
+    if (params.slope) return this._overlayPointAtFactor(point, params, this._slopeElevationFactorAtPoint(point, params));
+    return {
+      x: center.x + (point.x - center.x) * overlayScale + overlayOffset.x,
+      y: center.y + (point.y - center.y) * overlayScale + overlayOffset.y
+    };
+  }
+
   _cliffWarpRenderPaths(paths, params) {
     const tolerance = Math.clamp(
       Number(params.gridSize ?? canvas?.grid?.size ?? 100) * CLIFF_WARP_SIMPLIFY_GRID_RATIO,
       CLIFF_WARP_SIMPLIFY_MIN_PIXELS,
       CLIFF_WARP_SIMPLIFY_MAX_PIXELS
     );
-    return paths.map(path => _simplifyClosedPath(path, tolerance)).filter(path => path.length >= 3);
+    const cacheKey = Math.round(tolerance * 100) / 100;
+    const cached = this._cliffWarpPathCache?.get(paths);
+    if (cached?.key === cacheKey) return cached.paths;
+    const renderPaths = paths.map(path => _simplifyClosedPath(path, tolerance)).filter(path => path.length >= 3);
+    this._cliffWarpPathCache?.set(paths, { key: cacheKey, paths: renderPaths });
+    return renderPaths;
   }
 
   _createTextureSprite(texture, geo, { shift = { x: 0, y: 0 }, alpha = 1, center = null, stretchScale = 1 } = {}) {
