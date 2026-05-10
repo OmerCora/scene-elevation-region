@@ -901,6 +901,7 @@ export class RegionElevationRenderer {
   _withNearestLowerLayer(visual, visuals) {
     let lowerElevation = 0;
     let lowerArea = Infinity;
+    let lowerVisual = null;
     const point = visual.bounds.center;
     const visualElevation = _entryElevationAtPoint(visual.entry, point);
     for (const candidate of visuals) {
@@ -912,10 +913,12 @@ export class RegionElevationRenderer {
       if (candidateElevation > lowerElevation || (candidateElevation === lowerElevation && area < lowerArea)) {
         lowerElevation = candidateElevation;
         lowerArea = area;
+        lowerVisual = candidate;
       }
     }
     return {
       ...visual,
+      supportVisual: lowerVisual,
       visualElevation,
       lowerElevation,
       elevationDelta: visualElevation - lowerElevation
@@ -1060,6 +1063,15 @@ export class RegionElevationRenderer {
     return tokenParent ?? canvas?.primary ?? null;
   }
 
+  _supportOverlayOffsetForVisual(visual, point) {
+    const supportVisual = visual?.supportVisual;
+    if (!supportVisual) return { x: 0, y: 0 };
+    const supportParams = this._visualParams.get(this._parallaxStateKey(supportVisual));
+    if (!supportParams?.overlayOffset) return { x: 0, y: 0 };
+    const elevation = Number.isFinite(visual.lowerElevation) ? visual.lowerElevation : (supportParams.visualElevation ?? 0);
+    return this._supportOverlayOffsetAtPoint(point, { elevation, visual: supportVisual, params: supportParams }, supportParams);
+  }
+
   _overheadVisibilityState(visual) {
     if (!visual?.entry?.overhead) return { alpha: 1, aboveTokens: false };
     const tokens = this._tokensUnderOverhead(visual.entry);
@@ -1119,11 +1131,20 @@ export class RegionElevationRenderer {
     // and every step is roughly 1.6x (rather than 1.667x) finer.
     const visualElevationScale = elevationScaleValue(elevationScale) * ELEVATION_SCALE_RENDER_COMPENSATION;
     const visualElevation = visual.visualElevation ?? entry.elevation;
-    const rawAbsElevation = entry.slope ? (entry.maxAbsElevation ?? Math.abs(visualElevation)) : Math.abs(visualElevation);
+    const supportElevation = Number.isFinite(visual.lowerElevation) ? visual.lowerElevation : 0;
+    const localElevationDelta = Number.isFinite(visual.elevationDelta) ? visual.elevationDelta : visualElevation;
+    const rawAbsElevation = entry.slope
+      ? Math.max(
+        Math.abs((entry.lowestElevation ?? visualElevation) - supportElevation),
+        Math.abs((entry.highestElevation ?? visualElevation) - supportElevation),
+        Math.abs(localElevationDelta)
+      )
+      : Math.abs(localElevationDelta);
+    const absoluteAbsElevation = entry.slope ? (entry.maxAbsElevation ?? Math.abs(visualElevation)) : Math.abs(visualElevation);
     const absElevation = rawAbsElevation * visualElevationScale;
     const magnitude = Math.min(absElevation, reference);
     const normalized = Math.clamp(_depthNormalize(magnitude, reference, depthScale), 0.1, 1);
-    const absDelta = Math.abs(visual.elevationDelta ?? entry.elevation) * visualElevationScale;
+    const absDelta = Math.abs(localElevationDelta) * visualElevationScale;
     const deltaMagnitude = Math.min(absDelta, reference);
     const transitionNormalized = Math.clamp(_depthNormalize(deltaMagnitude, reference, depthScale), 0.1, 1);
     const isHole = entry.slope ? entry.highestElevation < 0 : visualElevation < 0;
@@ -1171,7 +1192,12 @@ export class RegionElevationRenderer {
     const overlayScaleX = overlayScale * (modeEffects.overlayScaleXMultiplier ?? 1);
     const overlayScaleY = overlayScale * (modeEffects.overlayScaleYMultiplier ?? 1);
     const blendDirection = parallax > 0 ? (_vectorDirection(parallaxVector) ?? baseParallaxDirection) : STATIC_SHADOW_DIRECTION;
-    const overlayOffset = this._overlayOffsetForMode(parallaxVector, parallaxMode);
+    const localOverlayOffset = this._overlayOffsetForMode(parallaxVector, parallaxMode);
+    const supportOverlayOffset = this._supportOverlayOffsetForVisual(visual, bounds.center);
+    const overlayOffset = {
+      x: supportOverlayOffset.x + localOverlayOffset.x,
+      y: supportOverlayOffset.y + localOverlayOffset.y
+    };
     const textureShift = modeEffects.textureShift ?? { x: 0, y: 0 };
     const transitionShift = this._transitionShiftForMode(parallaxVector, parallaxMode, blendProfile);
     const longShadowBlend = Math.clamp((shadowLengthMultiplier - SHADOW_BRIDGE_THRESHOLD) / 2.6, 0, 1);
@@ -1302,7 +1328,10 @@ export class RegionElevationRenderer {
       slopeVector: entry.slopeVector,
       slopeMinProjection: entry.slopeMinProjection,
       slopeMaxProjection: entry.slopeMaxProjection,
-      slopeMaxAbsElevation: Math.max(entry.maxAbsElevation ?? rawAbsElevation, MIN_ELEVATION_DELTA),
+      slopeMaxAbsElevation: Math.max(absoluteAbsElevation, MIN_ELEVATION_DELTA),
+      supportVisual: visual.supportVisual ?? null,
+      supportElevation,
+      localElevationDelta,
       center: bounds.center,
       transformCenter: modeEffects.transformCenter ?? bounds.center,
       projectionCenter: useProjectionPerspective && !orthographicMode ? perspectivePoint : bounds.center,
@@ -1313,6 +1342,8 @@ export class RegionElevationRenderer {
       overlaySkewX: modeEffects.overlaySkewX ?? 0,
       overlaySkewY: modeEffects.overlaySkewY ?? 0,
       overlayOffset,
+      localOverlayOffset,
+      supportOverlayOffset,
       textureShift,
       transitionShift,
       blendWidth,
@@ -1720,6 +1751,15 @@ export class RegionElevationRenderer {
     return this._overlayPointAtFactor(point, supportParams, factor);
   }
 
+  _baseOverlayPointAtPoint(point, params) {
+    const supportVisual = params?.supportVisual;
+    if (!supportVisual) return point;
+    const supportParams = this._visualParams.get(this._parallaxStateKey(supportVisual));
+    if (!supportParams) return point;
+    const elevation = Number.isFinite(params.supportElevation) ? params.supportElevation : 0;
+    return this._supportOverlayPointAtPoint(point, { elevation, visual: supportVisual, params: supportParams }, params);
+  }
+
   _supportOverlayOffsetAtPoint(point, support, fallbackParams) {
     const supportParams = support.params;
     if (!supportParams) {
@@ -1956,10 +1996,11 @@ export class RegionElevationRenderer {
         const edgeSamples = [startPoint, endPoint];
         for (const point of edgeSamples) {
           const top = this._cliffWarpTopPoint(point, params, overlayScale, overlayOffset, center);
+          const base = this._baseOverlayPointAtPoint(point, params);
           for (const row of CLIFF_WARP_SIDE_ROWS) {
             const overhang = landingOverhang * row.overhang;
-            const rowX = top.x + (point.x - top.x) * row.t - inwardNormalX * overhang;
-            const rowY = top.y + (point.y - top.y) * row.t - inwardNormalY * overhang;
+            const rowX = top.x + (base.x - top.x) * row.t - inwardNormalX * overhang;
+            const rowY = top.y + (base.y - top.y) * row.t - inwardNormalY * overhang;
             const sampleX = point.x + inwardNormalX * sourceWidth * row.normalOffset;
             const sampleY = point.y + inwardNormalY * sourceWidth * row.normalOffset;
             positions.push(rowX, rowY);
@@ -2034,10 +2075,11 @@ export class RegionElevationRenderer {
         const edgeSamples = [startPoint, endPoint];
         for (const point of edgeSamples) {
           const top = this._cliffWarpTopPoint(point, params, overlayScale, overlayOffset, center);
+          const base = this._baseOverlayPointAtPoint(point, params);
           for (const row of EDGE_STRETCH_SIDE_ROWS) {
             const overhang = landingOverhang * row.overhang;
-            const rowX = top.x + (point.x - top.x) * row.t - inwardNormalX * overhang;
-            const rowY = top.y + (point.y - top.y) * row.t - inwardNormalY * overhang;
+            const rowX = top.x + (base.x - top.x) * row.t - inwardNormalX * overhang;
+            const rowY = top.y + (base.y - top.y) * row.t - inwardNormalY * overhang;
             const sampleX = point.x + inwardNormalX * sourceWidth * row.source;
             const sampleY = point.y + inwardNormalY * sourceWidth * row.source;
             positions.push(rowX, rowY);
@@ -2069,9 +2111,11 @@ export class RegionElevationRenderer {
 
   _cliffWarpTopPoint(point, params, overlayScale, overlayOffset, center) {
     if (params.slope) return this._overlayPointAtFactor(point, params, this._slopeElevationFactorAtPoint(point, params));
+    const base = this._baseOverlayPointAtPoint(point, params);
+    const localOverlayOffset = params.localOverlayOffset ?? overlayOffset;
     return {
-      x: center.x + (point.x - center.x) * overlayScale + overlayOffset.x,
-      y: center.y + (point.y - center.y) * overlayScale + overlayOffset.y
+      x: base.x + (point.x - center.x) * (overlayScale - 1) + localOverlayOffset.x,
+      y: base.y + (point.y - center.y) * (overlayScale - 1) + localOverlayOffset.y
     };
   }
 
