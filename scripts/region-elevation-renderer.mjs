@@ -974,7 +974,7 @@ export class RegionElevationRenderer {
         if (!params.isHole) {
           const shadow = this._createShadow(visual.paths, texture, geo, params);
           if (shadow) {
-            if (!shadow._sceneElevationPreTransformed) this._applyRegionTransform(shadow, params, { includeOverlayOffset: false });
+            if (!shadow._sceneElevationPreTransformed) this._applyRegionTransform(shadow, params, { includeOverlayOffset: false, includeSupportOffset: true });
             this._addRegionDisplayObject(shadow, params);
           }
         }
@@ -1643,13 +1643,12 @@ export class RegionElevationRenderer {
     );
   }
 
-  _applyRegionTransform(displayObject, params, { includeOverlayOffset = true } = {}) {
+  _applyRegionTransform(displayObject, params, { includeOverlayOffset = true, includeSupportOffset = false } = {}) {
     const center = params.transformCenter ?? params.center;
     displayObject.pivot.set(center.x, center.y);
-    displayObject.position.set(
-      center.x + (includeOverlayOffset ? params.overlayOffset.x : 0),
-      center.y + (includeOverlayOffset ? params.overlayOffset.y : 0)
-    );
+    const offsetX = includeOverlayOffset ? params.overlayOffset.x : (includeSupportOffset ? (params.supportOverlayOffset?.x ?? 0) : 0);
+    const offsetY = includeOverlayOffset ? params.overlayOffset.y : (includeSupportOffset ? (params.supportOverlayOffset?.y ?? 0) : 0);
+    displayObject.position.set(center.x + offsetX, center.y + offsetY);
     displayObject.scale.set(params.overlayScaleX ?? params.overlayScale, params.overlayScaleY ?? params.overlayScale);
     displayObject.rotation = params.overlayRotation ?? 0;
     displayObject.skew?.set?.(params.overlaySkewX ?? 0, params.overlaySkewY ?? 0);
