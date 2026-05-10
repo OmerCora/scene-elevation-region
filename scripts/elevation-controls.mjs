@@ -2,6 +2,7 @@ import {
   MODULE_ID,
   SETTINGS,
   SCENE_SETTING_KEYS,
+  PARALLAX_MODES,
   PERSPECTIVE_POINTS,
   SHADOW_MODES,
   REGION_BEHAVIOR_TYPE,
@@ -811,6 +812,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
           shadowModeOverride: "",
           shadowLengthOverride: "",
           blendModeOverride: "",
+          edgeStretchPercentOverride: "",
           depthScaleOverride: "",
           elevationScaleOverride: "",
           modifyTokenElevation: true,
@@ -1014,7 +1016,10 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   }
 
   _isPerspectiveHandleVisible() {
-    return this._activeTool === TOOL_SELECT && canvas?.scene && getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT) === PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE;
+    return this._activeTool === TOOL_SELECT && canvas?.scene && (
+      getSceneElevationSetting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT) === PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE
+      || getSceneElevationSetting(SCENE_SETTING_KEYS.PARALLAX_MODE) === PARALLAX_MODES.ORTHOGRAPHIC_ANGLE
+    );
   }
 
   _isSunHandleVisible() {

@@ -1,4 +1,4 @@
-import { BLEND_MODES, DEPTH_SCALES, ELEVATION_PRESETS, ELEVATION_SCALE_LIMITS, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, shadowLengthKey } from "./config.mjs";
+import { BLEND_MODES, DEPTH_SCALES, ELEVATION_PRESETS, ELEVATION_SCALE_LIMITS, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, edgeStretchPercentValue, shadowLengthKey } from "./config.mjs";
 
 const fields = foundry.data.fields;
 const USE_SCENE_SETTING = "";
@@ -32,6 +32,8 @@ const PARALLAX_MODE_CHOICES = Object.freeze({
   [PARALLAX_MODES.ANCHORED_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard",
   [PARALLAX_MODES.VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard",
   [PARALLAX_MODES.ANCHORED_VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard",
+  [PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN]: "SCENE_ELEVATION.Settings.ParallaxModeOrthographicTopDown",
+  [PARALLAX_MODES.ORTHOGRAPHIC_ANGLE]: "SCENE_ELEVATION.Settings.ParallaxModeOrthographicAngle",
   [PARALLAX_MODES.LAYERED]: "SCENE_ELEVATION.Settings.ParallaxModeLayered",
   [PARALLAX_MODES.HORIZONTAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeHorizontalScroll",
   [PARALLAX_MODES.VERTICAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeVerticalScroll",
@@ -89,6 +91,7 @@ const BLEND_MODE_CHOICES = Object.freeze({
   [BLEND_MODES.OFF]: "SCENE_ELEVATION.Settings.BlendModeOff",
   [BLEND_MODES.SOFT]: "SCENE_ELEVATION.Settings.BlendModeSoft",
   [BLEND_MODES.WIDE]: "SCENE_ELEVATION.Settings.BlendModeWide",
+  [BLEND_MODES.EDGE_STRETCH]: "SCENE_ELEVATION.Settings.BlendModeEdgeStretch",
   [BLEND_MODES.CLIFF_WARP]: "SCENE_ELEVATION.Settings.BlendModeCliffWarp"
 });
 
@@ -153,6 +156,12 @@ function _elevationScaleOverrideChoice(value) {
   return number >= ELEVATION_SCALE_LIMITS.MIN && number <= ELEVATION_SCALE_LIMITS.MAX ? String(number) : USE_SCENE_SETTING;
 }
 
+function _edgeStretchPercentOverrideChoice(value) {
+  const override = String(value ?? USE_SCENE_SETTING).trim();
+  if (!override) return USE_SCENE_SETTING;
+  return String(edgeStretchPercentValue(override));
+}
+
 function _numberValue(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -198,6 +207,7 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
   static migrateData(data) {
     data.presetOverride = _presetOverrideChoice(data.presetOverride);
     data.elevationScaleOverride = _elevationScaleOverrideChoice(data.elevationScaleOverride);
+    data.edgeStretchPercentOverride = _edgeStretchPercentOverrideChoice(data.edgeStretchPercentOverride);
     if (data.shadowModeOverride && !Object.values(SHADOW_MODES).includes(String(data.shadowModeOverride))) data.shadowModeOverride = SHADOW_MODES.TOP_DOWN;
     data.shadowLengthOverride = _shadowLengthChoice(data.shadowLengthOverride);
     data.slope = _booleanValue(data.slope, false);
@@ -294,6 +304,13 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         initial: USE_SCENE_SETTING,
         choices: BLEND_MODE_CHOICES,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.blendModeOverride.label"
+      }),
+      edgeStretchPercentOverride: new fields.StringField({
+        required: true,
+        blank: true,
+        initial: USE_SCENE_SETTING,
+        label: "SCENE_ELEVATION.RegionBehavior.FIELDS.edgeStretchPercentOverride.label",
+        hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.edgeStretchPercentOverride.hint"
       }),
       overlayScaleOverride: new fields.StringField({
         required: true,

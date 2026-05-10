@@ -65,10 +65,12 @@
       "ParallaxHeightContrastDramatic": "Dramatic",
       "ParallaxHeightContrastExtreme": "Extreme",
       "ParallaxMode": "Parallax Type",
-      "ParallaxModeHint": "How elevated overlays react to camera or pointer movement. Includes camera-origin, velocity drift, multi-layer, axis-only, mouse, fade/zoom, and shadow-only modes.",
+      "ParallaxModeHint": "How elevated overlays react to camera or pointer movement. Includes camera-origin, velocity drift, orthographic, multi-layer, axis-only, mouse, fade/zoom, and shadow-only modes.",
       "ParallaxModeAnchoredCard": "Camera-origin card lift",
       "ParallaxModeVelocityCard": "Camera velocity drift",
       "ParallaxModeAnchoredVelocityCard": "Camera lift + velocity drift",
+      "ParallaxModeOrthographicTopDown": "Orthographic top-down drift",
+      "ParallaxModeOrthographicAngle": "Orthographic edge-angle lift",
       "ParallaxModeLayered": "Multi-layer drift",
       "ParallaxModeHorizontalScroll": "Horizontal scroll parallax",
       "ParallaxModeVerticalScroll": "Vertical scroll parallax",
@@ -101,7 +103,10 @@
       "BlendModeOff": "Off",
       "BlendModeSoft": "Soft edge",
       "BlendModeWide": "Wide transition",
+      "BlendModeEdgeStretch": "Edge texture wrap",
       "BlendModeCliffWarp": "3D cliff warp",
+      "EdgeStretchPercent": "Edge stretch percent",
+      "EdgeStretchPercentHint": "How much of the overlay texture inside each boundary is wrapped and stretched down over the transition edge.",
       "DepthScale": "Depth Scale",
       "DepthScaleHint": "How strongly perceived height scales with elevation. Compressed (default) keeps the legacy soft curve. Linear makes elevation 4 feel double elevation 2 and elevation 20 feel ten times elevation 2. Dramatic adds a super-linear boost for towering cliffs.",
       "DepthScaleCompressed": "Compressed (sqrt)",
@@ -219,6 +224,10 @@
         "blendModeOverride": {
           "label": "Transition style",
           "hint": "Optional elevation transition style for this region only. Use scene setting keeps the scene-level transition style."
+        },
+        "edgeStretchPercentOverride": {
+          "label": "Edge stretch percent",
+          "hint": "Optional texture-wrap source strip size for this region only. Use scene setting keeps the scene-level edge stretch percent."
         },
         "depthScaleOverride": {
           "label": "Depth scale",

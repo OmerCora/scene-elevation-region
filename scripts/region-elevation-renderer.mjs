@@ -1,4 +1,4 @@
-import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey, elevationScaleValue } from "./config.mjs";
+import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey, elevationScaleValue, edgeStretchPercentValue } from "./config.mjs";
 
 /**
  * Per-draw settings cache. `getSceneElevationSettings()` rebuilds via two deep clones
@@ -25,6 +25,13 @@ const VELOCITY_CAMERA_MULTIPLIER = 0.9;
 const VELOCITY_PARALLAX_DECAY = 0.82;
 const ANCHORED_VELOCITY_ANCHOR_WEIGHT = 0.6;
 const ANCHORED_VELOCITY_DRIFT_WEIGHT = 0.55;
+const ORTHOGRAPHIC_PAN_MULTIPLIER = 0.72;
+const ORTHOGRAPHIC_PAN_EASE = 0.28;
+const ORTHOGRAPHIC_TOP_DOWN_PAN_LIFT_RATIO = 0.92;
+const ORTHOGRAPHIC_ANGLE_PROJECTION_RATIO = 0.58;
+const ORTHOGRAPHIC_ANGLE_PAN_LIFT_RATIO = 0.45;
+const ORTHOGRAPHIC_TOP_DOWN_DIRECTION = Object.freeze({ x: 0, y: 0 });
+const ORTHOGRAPHIC_ANGLE_DIRECTION = Object.freeze({ x: 0, y: -1 });
 const LAYERED_CAMERA_MULTIPLIER = 1.12;
 const AXIS_SCROLL_CAMERA_MULTIPLIER = 1.15;
 const MOUSE_PARALLAX_MULTIPLIER = 1.45;
@@ -54,6 +61,13 @@ const CLIFF_WARP_SIDE_ROWS = Object.freeze([
   Object.freeze({ t: 0, normalOffset: 1.15, overhang: 0 }),
   Object.freeze({ t: 0.52, normalOffset: 0.05, overhang: 0.2 }),
   Object.freeze({ t: 1, normalOffset: -1.15, overhang: CLIFF_WARP_EDGE_OVERHANG_RATIO })
+]);
+const EDGE_STRETCH_SOLID_ALPHA = 0.9;
+const EDGE_STRETCH_SIDE_ROWS = Object.freeze([
+  Object.freeze({ t: 0, source: 0, overhang: 0 }),
+  Object.freeze({ t: 0.18, source: 0.16, overhang: 0.04 }),
+  Object.freeze({ t: 0.58, source: 0.62, overhang: 0.13 }),
+  Object.freeze({ t: 1, source: 1, overhang: 0.26 })
 ]);
 const STRONG_TOP_DOWN_SHADOW_MULTIPLIER = 2.35;
 const STRONG_TOP_DOWN_BLUR_MULTIPLIER = 1.55;
@@ -147,6 +161,33 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
     slopeTextureShiftRatio: 0,
     slopeDropPixels: 0
   }),
+  [BLEND_MODES.EDGE_STRETCH]: Object.freeze({
+    widthMultiplier: 2.05,
+    widthAdd: 6,
+    maxWidth: 42,
+    textureShiftRatio: 0.22,
+    overlayAlpha: 0.985,
+    glueAlpha: 0.12,
+    glueBlurMultiplier: 0.12,
+    slopeAlpha: EDGE_STRETCH_SOLID_ALPHA,
+    slopeAlphaMax: EDGE_STRETCH_SOLID_ALPHA,
+    slopeWidthMultiplier: 1.5,
+    slopeTextureShiftRatio: 0,
+    slopeDropPixels: 20,
+    dropMaxPixels: 34,
+    stretchAlpha: 0,
+    stretchSteps: 0,
+    stretchScaleMin: 1.02,
+    stretchScaleMax: 1.18,
+    bridgeBaseAlpha: 0,
+    edgeStretch: true,
+    edgeStretchAlpha: EDGE_STRETCH_SOLID_ALPHA,
+    edgeStretchAlphaMax: EDGE_STRETCH_SOLID_ALPHA,
+    edgeStretchWidthBase: 0.18,
+    edgeStretchWidthElevationRatio: 0.2,
+    liftMultiplier: 1.18,
+    overlayScaleBonus: 0.004
+  }),
   [BLEND_MODES.CLIFF_WARP]: Object.freeze({
     widthMultiplier: 2.35,
     widthAdd: 8,
@@ -232,6 +273,7 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
       shadowModeOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.SHADOW_MODE, behavior.system?.shadowModeOverride ?? sourceSystem.shadowModeOverride), SHADOW_MODES),
       shadowLengthOverride: _shadowLengthOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.SHADOW_LENGTH, behavior.system?.shadowLengthOverride ?? sourceSystem.shadowLengthOverride)),
       blendModeOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.BLEND_MODE, behavior.system?.blendModeOverride ?? sourceSystem.blendModeOverride), BLEND_MODES),
+      edgeStretchPercentOverride: _edgeStretchPercentOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT, behavior.system?.edgeStretchPercentOverride ?? sourceSystem.edgeStretchPercentOverride)),
       depthScaleOverride: _settingOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.DEPTH_SCALE, behavior.system?.depthScaleOverride ?? sourceSystem.depthScaleOverride), DEPTH_SCALES),
       elevationScaleOverride: _elevationScaleOverride(behavior.system?.elevationScaleOverride ?? sourceSystem.elevationScaleOverride),
       parallaxHeightContrastOverride: _keyOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST, behavior.system?.parallaxHeightContrastOverride ?? sourceSystem.parallaxHeightContrastOverride), PARALLAX_HEIGHT_CONTRASTS),
@@ -376,6 +418,11 @@ function _shadowLengthOverride(value) {
 function _elevationScaleOverride(value) {
   if (String(value ?? "").trim() === "") return null;
   return elevationScaleValue(value);
+}
+
+function _edgeStretchPercentOverride(value) {
+  if (String(value ?? "").trim() === "") return null;
+  return edgeStretchPercentValue(value);
 }
 
 function _regionPresetOverride(value) {
@@ -908,8 +955,9 @@ export class RegionElevationRenderer {
         const visualDepthScale = visual.entry.depthScaleOverride || depthScale;
         const visualElevationScale = visual.entry.elevationScaleOverride ?? elevationScale;
         const visualParallaxHeightContrast = visual.entry.parallaxHeightContrastOverride ? parallaxHeightContrastValue(visual.entry.parallaxHeightContrastOverride) : parallaxHeightContrast;
+        const visualEdgeStretchPercent = visual.entry.edgeStretchPercentOverride ?? edgeStretchPercentValue(_setting(SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT));
         const perspectivePoint = _perspectivePoint(geo, visual.bounds, visualPerspectivePointMode);
-        const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualElevationScale, visualShadowLength, visualParallaxHeightContrast);
+        const params = this._regionVisualParameters(visual, geo, visualParallax, visualParallaxMode, visualBlendMode, visualOverlayScaleStrength, visualShadowMode, perspectivePoint, visualDepthScale, visualElevationScale, visualShadowLength, visualParallaxHeightContrast, visualEdgeStretchPercent);
         const overheadVisibility = this._overheadVisibilityState(visual);
         params.overheadVisibilityAlpha = overheadVisibility.alpha;
         params.overheadAboveTokens = overheadVisibility.aboveTokens;
@@ -1060,7 +1108,7 @@ export class RegionElevationRenderer {
     return _validTexture(texture) ? texture : null;
   }
 
-  _regionVisualParameters(visual, geo, parallax, parallaxMode, blendMode, overlayScaleStrength, shadowMode, perspectivePoint, depthScale = DEPTH_SCALES.COMPRESSED, elevationScale = 1, shadowLength = 1, parallaxHeightContrast = 1) {
+  _regionVisualParameters(visual, geo, parallax, parallaxMode, blendMode, overlayScaleStrength, shadowMode, perspectivePoint, depthScale = DEPTH_SCALES.COMPRESSED, elevationScale = 1, shadowLength = 1, parallaxHeightContrast = 1, edgeStretchPercent = edgeStretchPercentValue(_setting(SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT))) {
     const gridSize = geo.gridSize;
     const { entry, bounds } = visual;
     const reference = DEPTH_SCALE_REFERENCE[depthScale] ?? DEPTH_SCALE_REFERENCE[DEPTH_SCALES.COMPRESSED];
@@ -1079,9 +1127,12 @@ export class RegionElevationRenderer {
     const deltaMagnitude = Math.min(absDelta, reference);
     const transitionNormalized = Math.clamp(_depthNormalize(deltaMagnitude, reference, depthScale), 0.1, 1);
     const isHole = entry.slope ? entry.highestElevation < 0 : visualElevation < 0;
-    const baseParallaxDirection = parallax > 0 ? this._perspectiveDirection(bounds, perspectivePoint) : STATIC_SHADOW_DIRECTION;
+    const orthographicMode = _isOrthographicParallaxMode(parallaxMode);
+    const baseParallaxDirection = parallax > 0
+      ? (this._orthographicDirectionForMode(parallaxMode, geo) ?? this._perspectiveDirection(bounds, perspectivePoint))
+      : STATIC_SHADOW_DIRECTION;
     const sunShadow = _sunShadowState(shadowMode, geo, bounds);
-    const shadowDirection = sunShadow?.direction ?? this._shadowDirection(bounds, parallax, shadowMode, perspectivePoint);
+    const shadowDirection = sunShadow?.direction ?? this._shadowDirection(bounds, parallax, shadowMode, perspectivePoint, parallaxMode, geo);
     const blendProfile = this._blendProfile(blendMode);
     const shadowDisabled = shadowMode === SHADOW_MODES.OFF;
     const textureMeldShadow = shadowMode === SHADOW_MODES.TEXTURE_MELD;
@@ -1096,7 +1147,7 @@ export class RegionElevationRenderer {
     const overlayScaleDepth = _overlayScaleDepthFactor(absElevation, reference, depthScale);
     const overlayScaleDelta = overlayScaleDepth * (overlayScaleStrength + (blendProfile.overlayScaleBonus ?? 0)) * sign;
     let overlayScale = 1 + overlayScaleDelta;
-    const perspectiveDistance = Math.hypot(perspectivePoint.x - bounds.center.x, perspectivePoint.y - bounds.center.y);
+    const perspectiveDistance = orthographicMode ? 0 : Math.hypot(perspectivePoint.x - bounds.center.x, perspectivePoint.y - bounds.center.y);
     const distanceBoost = _parallaxDistanceBoost(perspectiveDistance, geo);
     const liftFactor = _depthLiftFactor(absElevation, depthScale);
     const liftMultiplier = blendProfile.liftMultiplier ?? 1;
@@ -1140,7 +1191,8 @@ export class RegionElevationRenderer {
     const textureContactShadowAlphaBase = textureShadow && !shadowDisabled ? Math.clamp((fullTextureMeldShadow ? FULL_TEXTURE_MELD_CONTACT_ALPHA : TEXTURE_MELD_CONTACT_ALPHA) * shadowStrength * shadowAlphaMultiplier * (0.72 + normalized * 0.28), 0, fullTextureMeldShadow ? 0.92 : 0.82) : 0;
     const blendWidth = this._blendWidth(gridSize, transitionNormalized, parallax, blendProfile);
     const cliffWarpActive = !isHole && absElevation > 0 && !!blendProfile.cliffWarp;
-    const edgeGlueAlpha = !cliffWarpActive && !shadowDisabled && blendWidth > 0
+    const edgeStretchActive = !isHole && absElevation > 0 && !!blendProfile.edgeStretch;
+    const edgeGlueAlpha = !cliffWarpActive && !edgeStretchActive && !shadowDisabled && blendWidth > 0
       ? Math.clamp(blendProfile.glueAlpha * shadowStrength * (0.65 + transitionNormalized * 0.35), 0, EDGE_GLUE_ALPHA_MAX)
       : 0;
     let slopeWidth = blendWidth > 0 ? Math.clamp(blendWidth * blendProfile.slopeWidthMultiplier, 0, blendProfile.maxWidth * 1.9) : 0;
@@ -1163,6 +1215,8 @@ export class RegionElevationRenderer {
     let slopeTextureShiftRatio = blendProfile.slopeTextureShiftRatio;
     let cliffWarpAlpha = 0;
     let cliffWarpSourceWidth = 0;
+    let edgeStretchAlpha = 0;
+    let edgeStretchSourceWidth = 0;
     if (cliffWarpActive) {
       const cliffWarpWidthRatio = (blendProfile.cliffWarpWidthBase ?? 0.18) + transitionNormalized * (blendProfile.cliffWarpWidthElevationRatio ?? 0.18);
       slopeWidth = Math.max(slopeWidth, Math.min(blendProfile.maxWidth, gridSize * cliffWarpWidthRatio));
@@ -1172,6 +1226,17 @@ export class RegionElevationRenderer {
       bridgeBaseAlphaBase = 0;
       cliffWarpSourceWidth = Math.max(1, Number(blendProfile.cliffWarpSourceWidth ?? CLIFF_WARP_SOURCE_RIM_PIXELS));
       cliffWarpAlpha = Math.clamp(blendProfile.cliffWarpAlpha ?? CLIFF_WARP_SOLID_ALPHA, 0, blendProfile.cliffWarpAlphaMax ?? CLIFF_WARP_SOLID_ALPHA);
+    }
+    if (edgeStretchActive) {
+      const edgeStretchWidthRatio = (blendProfile.edgeStretchWidthBase ?? 0.16) + transitionNormalized * (blendProfile.edgeStretchWidthElevationRatio ?? 0.16);
+      slopeWidth = Math.max(slopeWidth, Math.min(blendProfile.maxWidth, gridSize * edgeStretchWidthRatio));
+      slopeAlphaBase = Math.max(slopeAlphaBase, blendProfile.edgeStretchAlpha ?? EDGE_STRETCH_SOLID_ALPHA);
+      slopeStretchAlphaBase = 0;
+      slopeStretchStepsBase = 0;
+      bridgeBaseAlphaBase = 0;
+      const stretchPercent = edgeStretchPercentValue(edgeStretchPercent) / 100;
+      edgeStretchSourceWidth = Math.max(1, Math.min(bounds.width, bounds.height) * stretchPercent);
+      edgeStretchAlpha = Math.clamp(blendProfile.edgeStretchAlpha ?? EDGE_STRETCH_SOLID_ALPHA, 0, blendProfile.edgeStretchAlphaMax ?? EDGE_STRETCH_SOLID_ALPHA);
     }
     const slopeTextureShift = slopeWidth > 0
       ? {
@@ -1240,7 +1305,7 @@ export class RegionElevationRenderer {
       slopeMaxAbsElevation: Math.max(entry.maxAbsElevation ?? rawAbsElevation, MIN_ELEVATION_DELTA),
       center: bounds.center,
       transformCenter: modeEffects.transformCenter ?? bounds.center,
-      projectionCenter: useProjectionPerspective ? perspectivePoint : bounds.center,
+      projectionCenter: useProjectionPerspective && !orthographicMode ? perspectivePoint : bounds.center,
       overlayScale,
       overlayScaleX,
       overlayScaleY,
@@ -1259,9 +1324,12 @@ export class RegionElevationRenderer {
       slopeStretchAlpha: slopeWidth > 0 ? Math.clamp(slopeStretchAlphaBase * (0.72 + transitionNormalized * 0.28), 0, 1) : 0,
       bridgeBaseAlpha: slopeWidth > 0 ? Math.clamp(bridgeBaseAlphaBase * (0.68 + transitionNormalized * 0.32), 0, 1) : 0,
       cliffWarp: cliffWarpActive,
-      edgeOnlyShadow: blendMode === BLEND_MODES.WIDE || cliffWarpActive,
+      edgeStretch: edgeStretchActive,
+      edgeOnlyShadow: blendMode === BLEND_MODES.WIDE || cliffWarpActive || edgeStretchActive,
       cliffWarpAlpha,
       cliffWarpSourceWidth,
+      edgeStretchAlpha,
+      edgeStretchSourceWidth,
       textureMeldShadow: textureShadow,
       textureSoftShadowAlpha: textureSoftShadowAlphaBase,
       textureBridgeShadowAlpha,
@@ -1298,6 +1366,8 @@ export class RegionElevationRenderer {
       case PARALLAX_MODES.ANCHORED_CARD:
       case PARALLAX_MODES.VELOCITY_CARD:
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
+      case PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN:
+      case PARALLAX_MODES.ORTHOGRAPHIC_ANGLE:
       case PARALLAX_MODES.LAYERED:
       case PARALLAX_MODES.HORIZONTAL_SCROLL:
       case PARALLAX_MODES.VERTICAL_SCROLL:
@@ -1314,6 +1384,8 @@ export class RegionElevationRenderer {
       case PARALLAX_MODES.ANCHORED_CARD:
       case PARALLAX_MODES.VELOCITY_CARD:
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
+      case PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN:
+      case PARALLAX_MODES.ORTHOGRAPHIC_ANGLE:
       case PARALLAX_MODES.LAYERED:
       case PARALLAX_MODES.HORIZONTAL_SCROLL:
       case PARALLAX_MODES.VERTICAL_SCROLL:
@@ -1333,6 +1405,10 @@ export class RegionElevationRenderer {
         return this._combineParallaxVectors(baseVector, this._velocityParallaxVector(visual, lift, sign, parallax), lift);
       case PARALLAX_MODES.ANCHORED_VELOCITY_CARD:
         return this._combineParallaxVectors(baseVector, this._anchoredVelocityParallaxVector(visual, lift, sign, parallax), lift);
+      case PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN:
+        return this._orthographicParallaxVector(visual, baseVector, lift, sign, parallax, PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN);
+      case PARALLAX_MODES.ORTHOGRAPHIC_ANGLE:
+        return this._orthographicParallaxVector(visual, baseVector, lift, sign, parallax, PARALLAX_MODES.ORTHOGRAPHIC_ANGLE);
       case PARALLAX_MODES.LAYERED:
         return this._combineParallaxVectors(baseVector, this._layeredParallaxVector(visual, lift, sign, parallax), lift);
       case PARALLAX_MODES.HORIZONTAL_SCROLL:
@@ -1389,6 +1465,57 @@ export class RegionElevationRenderer {
       x: (pointer.x - focus.x) * parallax * MOUSE_PARALLAX_MULTIPLIER * sign,
       y: (pointer.y - focus.y) * parallax * MOUSE_PARALLAX_MULTIPLIER * sign
     }, lift);
+  }
+
+  _orthographicDirectionForMode(parallaxMode, geo = null) {
+    switch (parallaxMode) {
+      case PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN:
+        return ORTHOGRAPHIC_TOP_DOWN_DIRECTION;
+      case PARALLAX_MODES.ORTHOGRAPHIC_ANGLE:
+        return _orthographicAngleDirection(geo);
+      default:
+        return null;
+    }
+  }
+
+  _orthographicParallaxVector(visual, baseVector, lift, sign, parallax, parallaxMode) {
+    const projectionRatio = parallaxMode === PARALLAX_MODES.ORTHOGRAPHIC_ANGLE ? ORTHOGRAPHIC_ANGLE_PROJECTION_RATIO : 0;
+    const projectionVector = {
+      x: (baseVector?.x ?? 0) * projectionRatio,
+      y: (baseVector?.y ?? 0) * projectionRatio
+    };
+    const panLift = lift * (parallaxMode === PARALLAX_MODES.ORTHOGRAPHIC_ANGLE ? ORTHOGRAPHIC_ANGLE_PAN_LIFT_RATIO : ORTHOGRAPHIC_TOP_DOWN_PAN_LIFT_RATIO);
+    const panVector = this._smoothPanParallaxVector(visual, panLift, sign, parallax, parallaxMode);
+    return _limitVector({ x: projectionVector.x + panVector.x, y: projectionVector.y + panVector.y }, lift);
+  }
+
+  _smoothPanParallaxVector(visual, lift, sign, parallax, parallaxMode) {
+    const focus = this._cameraFocus;
+    if (!focus || lift <= 0) return { x: 0, y: 0 };
+    const state = this._parallaxStateFor(visual);
+    const lagKey = `${parallaxMode}PanLagFocus`;
+    const vectorKey = `${parallaxMode}PanVector`;
+    state[lagKey] ??= { x: focus.x, y: focus.y };
+    const lag = state[lagKey];
+    lag.x += (focus.x - lag.x) * ORTHOGRAPHIC_PAN_EASE;
+    lag.y += (focus.y - lag.y) * ORTHOGRAPHIC_PAN_EASE;
+    const vector = _limitVector({
+      x: (focus.x - lag.x) * parallax * ORTHOGRAPHIC_PAN_MULTIPLIER * sign,
+      y: (focus.y - lag.y) * parallax * ORTHOGRAPHIC_PAN_MULTIPLIER * sign
+    }, lift);
+    const length = Math.hypot(vector.x, vector.y);
+    const cameraDelta = this._cameraDelta();
+    const moving = Math.hypot(cameraDelta.x, cameraDelta.y) > 0.5;
+    if (length > SMOOTH_PARALLAX_EPSILON) state[vectorKey] = vector;
+    else {
+      state[vectorKey] = { x: 0, y: 0 };
+      if (!moving) {
+        lag.x = focus.x;
+        lag.y = focus.y;
+      }
+    }
+    if (length > SMOOTH_PARALLAX_EPSILON || moving) this._needsParallaxFrame = true;
+    return state[vectorKey];
   }
 
   _parallaxVisualEffectsForMode(visual, geo, parallaxMode, parallaxVector, lift, sign, parallax, normalized, perspectivePoint) {
@@ -1636,20 +1763,20 @@ export class RegionElevationRenderer {
     return paths.map(path => path.map(point => this._slopedOverlayPoint(point, params)));
   }
 
-  _shadowDirection(bounds, parallax, shadowMode, perspectivePoint) {
+  _shadowDirection(bounds, parallax, shadowMode, perspectivePoint, parallaxMode = null, geo = null) {
     switch (shadowMode) {
       case SHADOW_MODES.OFF:
       case SHADOW_MODES.TOP_DOWN:
       case SHADOW_MODES.TOP_DOWN_STRONG:
         return { x: 0, y: 0 };
       case SHADOW_MODES.REVERSED_RESPONSIVE: {
-        const direction = parallax > 0 ? this._perspectiveDirection(bounds, perspectivePoint) : STATIC_SHADOW_DIRECTION;
+        const direction = parallax > 0 ? (this._orthographicDirectionForMode(parallaxMode, geo) ?? this._perspectiveDirection(bounds, perspectivePoint)) : STATIC_SHADOW_DIRECTION;
         return { x: -direction.x, y: -direction.y };
       }
       case SHADOW_MODES.RESPONSIVE_ALL_AROUND:
       case SHADOW_MODES.RESPONSIVE:
       default:
-        return parallax > 0 ? this._perspectiveDirection(bounds, perspectivePoint) : STATIC_SHADOW_DIRECTION;
+        return parallax > 0 ? (this._orthographicDirectionForMode(parallaxMode, geo) ?? this._perspectiveDirection(bounds, perspectivePoint)) : STATIC_SHADOW_DIRECTION;
     }
   }
 
@@ -1673,7 +1800,7 @@ export class RegionElevationRenderer {
 
   _createShadow(paths, texture, geo, params) {
     if (params.softShadowAlpha <= 0 && params.allAroundShadowAlpha <= 0 && params.bridgeShadowAlpha <= 0 && params.contactShadowAlpha <= 0 && params.textureSoftShadowAlpha <= 0 && params.textureBridgeShadowAlpha <= 0 && params.textureContactShadowAlpha <= 0) return null;
-    if (params.cliffWarp) return this._createCliffWarpShadow(paths, params);
+    if (params.cliffWarp || params.edgeStretch) return this._createCliffWarpShadow(paths, params);
     if (params.edgeOnlyShadow) return this._createEdgeTransitionShadow(paths, params);
     const shadow = new PIXI.Container();
     shadow.eventMode = "none";
@@ -1738,6 +1865,7 @@ export class RegionElevationRenderer {
 
   _createSlopeLayer(paths, texture, geo, params) {
     if (params.cliffWarp) return this._createCliffWarpLayer(paths, texture, geo, params);
+    if (params.edgeStretch) return this._createEdgeStretchLayer(paths, texture, geo, params);
     if (!texture || params.slopeAlpha <= 0 || params.slopeWidth <= 0) return null;
     const slope = new PIXI.Container();
     slope.eventMode = "none";
@@ -1849,6 +1977,84 @@ export class RegionElevationRenderer {
       const indexArray = positions.length / 2 > 65535 ? Uint32Array : Uint16Array;
       const meshGeo = new MeshGeometry(new Float32Array(positions), new Float32Array(uvs), new indexArray(indices));
       const material = new MeshMaterial(texture, { alpha: params.cliffWarpAlpha });
+      const mesh = new Mesh(meshGeo, material);
+      mesh.eventMode = "none";
+      container.addChild(mesh);
+    }
+
+    if (!container.children.length) {
+      container.destroy({ children: true });
+      return null;
+    }
+    return container;
+  }
+
+  _createEdgeStretchLayer(paths, texture, geo, params) {
+    if (!texture || params.edgeStretchAlpha <= 0) return null;
+    const overlayOffset = params.overlayOffset || { x: 0, y: 0 };
+    const liftLength = Math.hypot(overlayOffset.x, overlayOffset.y);
+    if (liftLength < 0.5) return null;
+
+    const Mesh = PIXI.Mesh;
+    const MeshGeometry = PIXI.MeshGeometry;
+    const MeshMaterial = PIXI.MeshMaterial;
+    if (!Mesh || !MeshGeometry || !MeshMaterial) return null;
+
+    const overlayScale = params.overlayScale ?? 1;
+    const center = params.center;
+    const sourceWidth = Math.max(1, Number(params.edgeStretchSourceWidth ?? 1));
+    const landingOverhang = Math.min(Math.max(1, params.slopeWidth * 0.18), sourceWidth * 0.45);
+    const rowCount = EDGE_STRETCH_SIDE_ROWS.length;
+    const container = new PIXI.Container();
+    container.eventMode = "none";
+
+    for (const path of this._cliffWarpRenderPaths(paths, params)) {
+      if (!path || path.length < 3) continue;
+      const positions = [];
+      const uvs = [];
+      const indices = [];
+
+      for (let edgeIndex = 0; edgeIndex < path.length; edgeIndex++) {
+        const startPoint = path[edgeIndex];
+        const endPoint = path[(edgeIndex + 1) % path.length];
+        const edgeX = endPoint.x - startPoint.x;
+        const edgeY = endPoint.y - startPoint.y;
+        const edgeLength = Math.hypot(edgeX, edgeY);
+        if (edgeLength < 0.001) continue;
+        const midpoint = { x: (startPoint.x + endPoint.x) / 2, y: (startPoint.y + endPoint.y) / 2 };
+        let inwardNormalX = -edgeY / edgeLength;
+        let inwardNormalY = edgeX / edgeLength;
+        const centerDirectionX = center.x - midpoint.x;
+        const centerDirectionY = center.y - midpoint.y;
+        if (inwardNormalX * centerDirectionX + inwardNormalY * centerDirectionY < 0) {
+          inwardNormalX = -inwardNormalX;
+          inwardNormalY = -inwardNormalY;
+        }
+        const baseIndex = positions.length / 2;
+        const edgeSamples = [startPoint, endPoint];
+        for (const point of edgeSamples) {
+          const top = this._cliffWarpTopPoint(point, params, overlayScale, overlayOffset, center);
+          for (const row of EDGE_STRETCH_SIDE_ROWS) {
+            const overhang = landingOverhang * row.overhang;
+            const rowX = top.x + (point.x - top.x) * row.t - inwardNormalX * overhang;
+            const rowY = top.y + (point.y - top.y) * row.t - inwardNormalY * overhang;
+            const sampleX = point.x + inwardNormalX * sourceWidth * row.source;
+            const sampleY = point.y + inwardNormalY * sourceWidth * row.source;
+            positions.push(rowX, rowY);
+            uvs.push(Math.clamp((sampleX - geo.x) / geo.width, 0, 1), Math.clamp((sampleY - geo.y) / geo.height, 0, 1));
+          }
+        }
+        for (let row = 0; row < rowCount - 1; row++) {
+          const left = baseIndex + row;
+          const right = left + rowCount;
+          indices.push(left, right, left + 1, left + 1, right, right + 1);
+        }
+      }
+
+      if (!indices.length) continue;
+      const indexArray = positions.length / 2 > 65535 ? Uint32Array : Uint16Array;
+      const meshGeo = new MeshGeometry(new Float32Array(positions), new Float32Array(uvs), new indexArray(indices));
+      const material = new MeshMaterial(texture, { alpha: params.edgeStretchAlpha });
       const mesh = new Mesh(meshGeo, material);
       mesh.eventMode = "none";
       container.addChild(mesh);
@@ -2306,6 +2512,21 @@ function _vectorDirection(vector) {
 function _parallaxMode() {
   const mode = _setting(SCENE_SETTING_KEYS.PARALLAX_MODE) ?? PARALLAX_MODES.ANCHORED_CARD;
   return Object.values(PARALLAX_MODES).includes(mode) ? mode : PARALLAX_MODES.ANCHORED_CARD;
+}
+
+function _isOrthographicParallaxMode(mode) {
+  return mode === PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN || mode === PARALLAX_MODES.ORTHOGRAPHIC_ANGLE;
+}
+
+function _orthographicAngleDirection(geo) {
+  if (!geo) return ORTHOGRAPHIC_ANGLE_DIRECTION;
+  const edgePoint = _clampPointToSceneEdge(_setting(SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT), geo);
+  const center = { x: geo.x + geo.width / 2, y: geo.y + geo.height / 2 };
+  const dx = edgePoint.x - center.x;
+  const dy = edgePoint.y - center.y;
+  const distance = Math.hypot(dx, dy);
+  if (!Number.isFinite(distance) || distance < 1) return ORTHOGRAPHIC_ANGLE_DIRECTION;
+  return { x: dx / distance, y: dy / distance };
 }
 
 function _blendMode() {

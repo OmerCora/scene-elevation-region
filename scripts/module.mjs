@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, REGION_BEHAVIOR_TYPE, elevationPresetValues, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, EDGE_STRETCH_LIMITS, REGION_BEHAVIOR_TYPE, edgeStretchPercentValue, elevationPresetValues, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -31,6 +31,7 @@ const REGION_PRESET_FIELD_MAP = Object.freeze({
   [SCENE_SETTING_KEYS.PARALLAX_MODE]: "parallaxModeOverride",
   [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: "perspectivePointOverride",
   [SCENE_SETTING_KEYS.BLEND_MODE]: "blendModeOverride",
+  [SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT]: "edgeStretchPercentOverride",
   [SCENE_SETTING_KEYS.OVERLAY_SCALE]: "overlayScaleOverride",
   [SCENE_SETTING_KEYS.SHADOW_MODE]: "shadowModeOverride",
   [SCENE_SETTING_KEYS.SHADOW_LENGTH]: "shadowLengthOverride",
@@ -156,6 +157,8 @@ Hooks.once("init", () => {
       [PARALLAX_MODES.ANCHORED_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard",
       [PARALLAX_MODES.VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard",
       [PARALLAX_MODES.ANCHORED_VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard",
+      [PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN]: "SCENE_ELEVATION.Settings.ParallaxModeOrthographicTopDown",
+      [PARALLAX_MODES.ORTHOGRAPHIC_ANGLE]: "SCENE_ELEVATION.Settings.ParallaxModeOrthographicAngle",
       [PARALLAX_MODES.LAYERED]: "SCENE_ELEVATION.Settings.ParallaxModeLayered",
       [PARALLAX_MODES.HORIZONTAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeHorizontalScroll",
       [PARALLAX_MODES.VERTICAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeVerticalScroll",
@@ -204,12 +207,23 @@ Hooks.once("init", () => {
       [BLEND_MODES.OFF]: "SCENE_ELEVATION.Settings.BlendModeOff",
       [BLEND_MODES.SOFT]: "SCENE_ELEVATION.Settings.BlendModeSoft",
       [BLEND_MODES.WIDE]: "SCENE_ELEVATION.Settings.BlendModeWide",
+      [BLEND_MODES.EDGE_STRETCH]: "SCENE_ELEVATION.Settings.BlendModeEdgeStretch",
       [BLEND_MODES.CLIFF_WARP]: "SCENE_ELEVATION.Settings.BlendModeCliffWarp"
     },
     onChange: () => {
       RegionElevationRenderer.instance.update();
       _refreshAllTokenScales();
     }
+  });
+  game.settings.register(MODULE_ID, SETTINGS.EDGE_STRETCH_PERCENT, {
+    name: "SCENE_ELEVATION.Settings.EdgeStretchPercent",
+    hint: "SCENE_ELEVATION.Settings.EdgeStretchPercentHint",
+    scope: "world",
+    config: true,
+    type: Number,
+    default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.EDGE_STRETCH_PERCENT],
+    range: { min: EDGE_STRETCH_LIMITS.MIN, max: EDGE_STRETCH_LIMITS.MAX, step: EDGE_STRETCH_LIMITS.STEP },
+    onChange: () => RegionElevationRenderer.instance.update()
   });
   game.settings.register(MODULE_ID, SETTINGS.OVERLAY_SCALE, {
     name: "SCENE_ELEVATION.Settings.OverlayScale",
@@ -404,6 +418,8 @@ function _insertRegionBehaviorDivider(app, html) {
   if (!root?.querySelectorAll) return;
   _insertRegionDividerAfterField(root, "underOverheadMode", `${MODULE_ID}-region-settings-divider`);
   _insertRegionDividerAfterField(root, "depthScaleOverride", `${MODULE_ID}-region-settings-preset-end-divider`);
+  _enhanceRegionEdgeStretchControl(root);
+  _syncRegionEdgeStretchVisibility(root);
   _wireRegionPresetControls(root);
   app?.setPosition?.({ height: "auto" });
 }
@@ -444,12 +460,15 @@ function _wireRegionPresetControls(root) {
         }
       }
       _applyRegionPresetToForm(root, target.value);
+      _syncRegionEdgeStretchControl(root);
+      _syncRegionEdgeStretchVisibility(root);
       return;
     }
     if (REGION_PRESET_CONTROL_FIELDS.has(fieldName)) {
       const currentPresetField = _regionBehaviorField(root, "presetOverride");
       if (currentPresetField && currentPresetField.value !== ELEVATION_PRESETS.CUSTOM) currentPresetField.value = ELEVATION_PRESETS.CUSTOM;
     }
+    _syncRegionEdgeStretchVisibility(root);
   });
 }
 
@@ -461,6 +480,99 @@ function _applyRegionPresetToForm(root, presetKey) {
     if (!field || values[settingKey] === undefined) continue;
     field.value = values[settingKey];
   }
+  const edgeStretchField = _regionBehaviorField(root, "edgeStretchPercentOverride");
+  if (edgeStretchField && values[SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT] === undefined) edgeStretchField.value = String(EDGE_STRETCH_LIMITS.DEFAULT);
+  _syncRegionEdgeStretchControl(root);
+  _syncRegionEdgeStretchVisibility(root);
+}
+
+function _enhanceRegionEdgeStretchControl(root) {
+  const field = _regionBehaviorField(root, "edgeStretchPercentOverride");
+  if (!(field instanceof HTMLInputElement)) return;
+  const formGroup = field.closest?.(".form-group") ?? field.parentElement;
+  if (!formGroup) return;
+  formGroup.dataset.sceneElevationEdgeStretchPercent = "true";
+  if (formGroup.dataset.sceneElevationEdgeStretchEnhanced) {
+    _syncRegionEdgeStretchControl(root);
+    return;
+  }
+  formGroup.dataset.sceneElevationEdgeStretchEnhanced = "true";
+  field.type = "hidden";
+  const value = _regionEdgeStretchDisplayValue(root, field);
+  const control = document.createElement("div");
+  control.style.display = "grid";
+  control.style.gridTemplateColumns = "1fr 4ch";
+  control.style.gap = "8px";
+  control.style.alignItems = "center";
+  const range = document.createElement("input");
+  range.type = "range";
+  range.min = String(EDGE_STRETCH_LIMITS.MIN);
+  range.max = String(EDGE_STRETCH_LIMITS.MAX);
+  range.step = String(EDGE_STRETCH_LIMITS.STEP);
+  range.value = String(value);
+  range.dataset.sceneElevationEdgeStretchRange = "true";
+  const output = document.createElement("output");
+  output.dataset.sceneElevationEdgeStretchOutput = "true";
+  output.value = String(value);
+  output.textContent = String(value);
+  control.append(range, output);
+  field.after(control);
+  range.addEventListener("input", () => {
+    const next = String(edgeStretchPercentValue(range.value));
+    range.value = next;
+    output.value = next;
+    output.textContent = next;
+    field.value = next;
+  });
+  range.addEventListener("change", () => {
+    field.value = String(edgeStretchPercentValue(range.value));
+    field.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+function _syncRegionEdgeStretchControl(root) {
+  const field = _regionBehaviorField(root, "edgeStretchPercentOverride");
+  if (!(field instanceof HTMLInputElement)) return;
+  const formGroup = field.closest?.(".form-group") ?? field.parentElement;
+  const range = formGroup?.querySelector?.("[data-scene-elevation-edge-stretch-range]");
+  const output = formGroup?.querySelector?.("[data-scene-elevation-edge-stretch-output]");
+  if (!(range instanceof HTMLInputElement)) return;
+  const value = String(_regionEdgeStretchDisplayValue(root, field));
+  range.value = value;
+  if (output instanceof HTMLOutputElement) {
+    output.value = value;
+    output.textContent = value;
+  }
+}
+
+function _syncRegionEdgeStretchVisibility(root) {
+  const field = _regionBehaviorField(root, "edgeStretchPercentOverride");
+  const formGroup = field?.closest?.(".form-group") ?? field?.parentElement;
+  if (!formGroup) return;
+  formGroup.hidden = _regionEffectiveBlendMode(root) !== BLEND_MODES.EDGE_STRETCH;
+}
+
+function _regionEffectiveBlendMode(root) {
+  const presetField = _regionBehaviorField(root, "presetOverride");
+  const presetValues = elevationPresetValues(presetField?.value, canvas?.scene);
+  if (presetValues?.[SCENE_SETTING_KEYS.BLEND_MODE]) return presetValues[SCENE_SETTING_KEYS.BLEND_MODE];
+  const blendField = _regionBehaviorField(root, "blendModeOverride");
+  const blendOverride = String(blendField?.value ?? "");
+  return blendOverride || String(getSceneElevationSetting(SCENE_SETTING_KEYS.BLEND_MODE) ?? "");
+}
+
+function _regionEdgeStretchDisplayValue(root, field) {
+  const override = _regionEdgeStretchOverrideValue(field?.value);
+  if (override !== null) return override;
+  const presetField = _regionBehaviorField(root, "presetOverride");
+  const presetValue = elevationPresetValues(presetField?.value, canvas?.scene)?.[SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT];
+  if (presetValue !== undefined) return edgeStretchPercentValue(presetValue);
+  return edgeStretchPercentValue(getSceneElevationSetting(SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT));
+}
+
+function _regionEdgeStretchOverrideValue(value) {
+  const text = String(value ?? "").trim();
+  return text ? edgeStretchPercentValue(text) : null;
 }
 
 function _regionBehaviorField(root, fieldName) {

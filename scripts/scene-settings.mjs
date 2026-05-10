@@ -12,9 +12,11 @@ import {
   TOKEN_ELEVATION_MODES,
   DEPTH_SCALES,
   ELEVATION_SCALE_LIMITS,
+  EDGE_STRETCH_LIMITS,
   ELEVATION_PRESETS,
   ELEVATION_PRESET_SETTING_KEYS,
   elevationScaleValue,
+  edgeStretchPercentValue,
   elevationPresetKey,
   elevationPresetValues,
   elevationDefaultSettings,
@@ -49,6 +51,8 @@ const SELECT_GROUPS = Object.freeze({
     [PARALLAX_MODES.ANCHORED_CARD, "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard"],
     [PARALLAX_MODES.VELOCITY_CARD, "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard"],
     [PARALLAX_MODES.ANCHORED_VELOCITY_CARD, "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard"],
+    [PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN, "SCENE_ELEVATION.Settings.ParallaxModeOrthographicTopDown"],
+    [PARALLAX_MODES.ORTHOGRAPHIC_ANGLE, "SCENE_ELEVATION.Settings.ParallaxModeOrthographicAngle"],
     [PARALLAX_MODES.LAYERED, "SCENE_ELEVATION.Settings.ParallaxModeLayered"],
     [PARALLAX_MODES.HORIZONTAL_SCROLL, "SCENE_ELEVATION.Settings.ParallaxModeHorizontalScroll"],
     [PARALLAX_MODES.VERTICAL_SCROLL, "SCENE_ELEVATION.Settings.ParallaxModeVerticalScroll"],
@@ -87,6 +91,7 @@ const SELECT_GROUPS = Object.freeze({
     [BLEND_MODES.OFF, "SCENE_ELEVATION.Settings.BlendModeOff"],
     [BLEND_MODES.SOFT, "SCENE_ELEVATION.Settings.BlendModeSoft"],
     [BLEND_MODES.WIDE, "SCENE_ELEVATION.Settings.BlendModeWide"],
+    [BLEND_MODES.EDGE_STRETCH, "SCENE_ELEVATION.Settings.BlendModeEdgeStretch"],
     [BLEND_MODES.CLIFF_WARP, "SCENE_ELEVATION.Settings.BlendModeCliffWarp"]
   ],
   [SCENE_SETTING_KEYS.OVERLAY_SCALE]: [
@@ -159,6 +164,7 @@ class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
     if (!form) return;
     form.addEventListener("change", event => {
       this._syncPresetFields(form, event.target);
+      _syncEdgeStretchVisibility(form);
       void this._applyFormSettings();
     });
     form.addEventListener("input", event => {
@@ -170,6 +176,7 @@ class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
       event.preventDefault();
       void this._setToDefault();
     });
+    _syncEdgeStretchVisibility(form);
   }
 
   _syncPresetFields(form, target) {
@@ -211,6 +218,7 @@ function _settingsForm(settings) {
     ${_selectField(SCENE_SETTING_KEYS.PARALLAX_MODE, "SCENE_ELEVATION.Settings.ParallaxMode", settings)}
     ${_selectField(SCENE_SETTING_KEYS.PERSPECTIVE_POINT, "SCENE_ELEVATION.Settings.PerspectivePoint", settings)}
     ${_selectField(SCENE_SETTING_KEYS.BLEND_MODE, "SCENE_ELEVATION.Settings.TransitionMode", settings)}
+    ${_edgeStretchRangeField(settings)}
     ${_selectField(SCENE_SETTING_KEYS.OVERLAY_SCALE, "SCENE_ELEVATION.Settings.OverlayScale", settings)}
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_MODE, "SCENE_ELEVATION.Settings.ShadowMode", settings)}
     ${_selectField(SCENE_SETTING_KEYS.SHADOW_LENGTH, "SCENE_ELEVATION.Settings.ShadowLength", settings)}
@@ -273,6 +281,20 @@ function _rangeField(name, labelKey, hintKey, settings, { MIN: min, MAX: max, ST
   </div>`;
 }
 
+function _edgeStretchRangeField(settings) {
+  const name = SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT;
+  const value = edgeStretchPercentValue(settings[name] ?? EDGE_STRETCH_LIMITS.DEFAULT);
+  const hidden = settings[SCENE_SETTING_KEYS.BLEND_MODE] !== BLEND_MODES.EDGE_STRETCH ? " hidden" : "";
+  return `<div class="form-group" data-edge-stretch-percent style="margin-bottom: 4px;"${hidden}>
+    <label>${game.i18n.localize("SCENE_ELEVATION.Settings.EdgeStretchPercent")}</label>
+    <div style="display: grid; grid-template-columns: 1fr 4ch; gap: 8px; align-items: center;">
+      <input type="range" name="${name}" min="${EDGE_STRETCH_LIMITS.MIN}" max="${EDGE_STRETCH_LIMITS.MAX}" step="${EDGE_STRETCH_LIMITS.STEP}" value="${value}">
+      <output data-for="${name}">${value}</output>
+    </div>
+    <p class="hint">${game.i18n.localize("SCENE_ELEVATION.Settings.EdgeStretchPercentHint")}</p>
+  </div>`;
+}
+
 function _populateSettingsForm(form, settings) {
   for (const [key, value] of Object.entries(settings)) {
     const field = form.elements.namedItem(key);
@@ -281,6 +303,7 @@ function _populateSettingsForm(form, settings) {
     else field.value = value;
     if (field instanceof HTMLInputElement && field.type === "range") _syncRangeOutput(form, field);
   }
+  _syncEdgeStretchVisibility(form);
 }
 
 function _formSettings(data, current, scene) {
@@ -294,6 +317,7 @@ function _formSettings(data, current, scene) {
     [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: presetValues[SCENE_SETTING_KEYS.PERSPECTIVE_POINT] ?? _choice(data, SCENE_SETTING_KEYS.PERSPECTIVE_POINT, Object.values(PERSPECTIVE_POINTS), current, PERSPECTIVE_POINTS.FAR_BOTTOM),
     [SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT]: current[SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT],
     [SCENE_SETTING_KEYS.BLEND_MODE]: presetValues[SCENE_SETTING_KEYS.BLEND_MODE] ?? _choice(data, SCENE_SETTING_KEYS.BLEND_MODE, Object.values(BLEND_MODES), current, BLEND_MODES.SOFT),
+    [SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT]: presetValues[SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT] ?? edgeStretchPercentValue(data.get(SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT) ?? current[SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT]),
     [SCENE_SETTING_KEYS.OVERLAY_SCALE]: presetValues[SCENE_SETTING_KEYS.OVERLAY_SCALE] ?? _choice(data, SCENE_SETTING_KEYS.OVERLAY_SCALE, Object.keys(OVERLAY_SCALE_STRENGTHS), current, "subtle"),
     [SCENE_SETTING_KEYS.SHADOW_MODE]: presetValues[SCENE_SETTING_KEYS.SHADOW_MODE] ?? _choice(data, SCENE_SETTING_KEYS.SHADOW_MODE, Object.values(SHADOW_MODES), current, SHADOW_MODES.TOP_DOWN),
     [SCENE_SETTING_KEYS.SHADOW_LENGTH]: presetValues[SCENE_SETTING_KEYS.SHADOW_LENGTH] ?? _shadowLengthChoice(data, current),
@@ -309,7 +333,17 @@ function _formSettings(data, current, scene) {
 
 function _syncRangeOutput(form, field) {
   const output = form.querySelector(`output[data-for="${field.name}"]`);
-  if (output) output.value = field.value;
+  if (output) {
+    output.value = field.value;
+    output.textContent = field.value;
+  }
+}
+
+function _syncEdgeStretchVisibility(form) {
+  const group = form.querySelector("[data-edge-stretch-percent]");
+  const blendField = form.elements.namedItem(SCENE_SETTING_KEYS.BLEND_MODE);
+  if (!group || !blendField) return;
+  group.hidden = blendField.value !== BLEND_MODES.EDGE_STRETCH;
 }
 
 function _choice(data, key, choices, current, fallback = choices[0]) {
@@ -336,8 +370,16 @@ function _applyPresetToSettingsForm(form, presetKey, scene) {
   if (!values) return;
   for (const [key, value] of Object.entries(values)) {
     const field = form.elements.namedItem(key);
-    if (field) field.value = value;
+    if (!field) continue;
+    field.value = value;
+    if (field instanceof HTMLInputElement && field.type === "range") _syncRangeOutput(form, field);
   }
+  const edgeStretchField = form.elements.namedItem(SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT);
+  if (edgeStretchField && values[SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT] === undefined) {
+    edgeStretchField.value = String(EDGE_STRETCH_LIMITS.DEFAULT);
+    if (edgeStretchField instanceof HTMLInputElement && edgeStretchField.type === "range") _syncRangeOutput(form, edgeStretchField);
+  }
+  _syncEdgeStretchVisibility(form);
 }
 
 function _setSettingsFormPreset(form, presetKey) {
