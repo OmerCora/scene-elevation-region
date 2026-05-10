@@ -23,6 +23,9 @@ const POINT_CLOSE_DISTANCE = 10;
 const DOUBLE_CLICK_MS = 420;
 const DOUBLE_CLICK_DISTANCE = 8;
 const REGION_DRAG_MIN_DISTANCE = 3;
+const REGION_ROTATE_DEGREES = 5;
+const REGION_ROTATE_FINE_DEGREES = 1;
+const REGION_ROTATE_COARSE_DEGREES = 15;
 const PREVIEW_COLOR = 0x66ccff;
 const OUTLINE_COLOR = 0xffd166;
 const SELECTED_OUTLINE_COLOR = 0x66ccff;
@@ -72,7 +75,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._draggingSunPoint = false;
     this._edgePointPreview = null;
     this._sunEdgePointPreview = null;
-    this._createdRegionOperations = [];
+    this._regionUndoOperations = [];
     this._undoingRegionIds = new Set();
     this._nativeRegionVisibility = null;
     this._nativeRegionLayerState = null;
@@ -82,6 +85,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._editedRegionId = null;
     this._selectedRegionId = null;
     this._regionDrag = null;
+    this._regionRotationQueue = Promise.resolve();
     this._visibilityRefreshFrame = null;
     this._overheadIconRefreshFrame = null;
     this._edgePointPreviewRefreshFrame = null;
@@ -271,12 +275,14 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     const onUp = event => this._onPointerUp(event);
     const onContextMenu = event => this._onContextMenu(event);
     const onKeyDown = event => this._onKeyDown(event);
+    const onWheel = event => this._onWheel(event);
     window.addEventListener("pointermove", onMove, { capture: true, passive: true });
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("pointerup", onUp, true);
     window.addEventListener("contextmenu", onContextMenu, true);
     window.addEventListener("keydown", onKeyDown);
-    this._listeners = { canvasElement, onMove, onDown, onUp, onContextMenu, onKeyDown };
+    window.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    this._listeners = { canvasElement, onMove, onDown, onUp, onContextMenu, onKeyDown, onWheel };
   }
 
   _unbindStageListeners() {
@@ -286,6 +292,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       window.removeEventListener("pointerup", this._listeners.onUp, true);
       window.removeEventListener("contextmenu", this._listeners.onContextMenu, true);
       window.removeEventListener("keydown", this._listeners.onKeyDown);
+      window.removeEventListener("wheel", this._listeners.onWheel, { capture: true });
     }
     this._listeners = null;
   }
@@ -485,6 +492,21 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._cancelDrawing();
   }
 
+  _onWheel(event) {
+    if (this._activeTool !== TOOL_SELECT || this._creating || this._regionDrag || this._isEditableEventTarget(event)) return;
+    if (!this._isCanvasEvent(event)) return;
+    const region = this._selectedElevationRegion();
+    if (!region) return;
+    const point = this._eventPosition(event, { snap: false });
+    if (!_regionContainsPoint(region, point)) return;
+    const angle = _regionRotationAngleFromWheel(event);
+    if (!angle) return;
+    this._consumeEvent(event);
+    this._regionRotationQueue = this._regionRotationQueue
+      .then(() => this._rotateSelectedElevationRegion(angle))
+      .catch(error => console.warn(`${MODULE_ID} | Failed to rotate elevation region.`, error));
+  }
+
   async _finishRegionDrag(event) {
     const drag = this._regionDrag;
     this._consumeEvent(event);
@@ -498,7 +520,8 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
       return;
     }
     const shapes = _translateRegionShapes(drag.shapes, delta.x, delta.y);
-    await drag.region.update({ shapes });
+    const updated = await drag.region.update({ shapes });
+    if (updated) this._recordRegionShapeUpdate(drag.region, drag.shapes);
     this._setSelectedElevationRegion(drag.region);
     this.refreshElevationRegionVisibility(true);
   }
@@ -541,9 +564,11 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
         event.preventDefault();
         return;
       }
-      if (this._createdRegionOperations.length) {
+      if (this._regionUndoOperations.length || this._activeTool === TOOL_SELECT) {
         event.preventDefault();
-        void this._undoLastRegionCreation();
+        this._regionRotationQueue = this._regionRotationQueue
+          .then(() => this._undoLastRegionOperation())
+          .catch(error => console.warn(`${MODULE_ID} | Failed to undo elevation region operation.`, error));
         return;
       }
     }
@@ -670,6 +695,27 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this.refreshElevationRegionVisibility();
   }
 
+  _selectedElevationRegion() {
+    if (!this._selectedRegionId) return null;
+    const region = canvas.scene?.regions?.get(this._selectedRegionId) ?? null;
+    if (!region) this._setSelectedElevationRegion(null);
+    return region;
+  }
+
+  async _rotateSelectedElevationRegion(angle) {
+    const region = this._selectedElevationRegion();
+    if (!region) return;
+    const pivot = _regionRotationPivot(region);
+    if (!pivot) return;
+    const previousShapes = _cloneRegionShapes(region);
+    const shapes = _rotateRegionShapes(region, angle, pivot);
+    if (!shapes.length) return;
+    const updated = await region.update({ shapes });
+    if (updated) this._recordRegionShapeUpdate(region, previousShapes);
+    this._setSelectedElevationRegion(region);
+    this.refreshElevationRegionVisibility(true);
+  }
+
   _openRegionDetails(region) {
     this._editedRegionId = region?.id ?? null;
     this.refreshElevationRegionVisibility();
@@ -771,6 +817,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     this._lastClick = null;
     this._draggingPerspectivePoint = false;
     this._draggingSunPoint = false;
+    this._regionDrag = null;
     this._edgePointPreview = null;
     this._sunEdgePointPreview = null;
     clearTransientSceneElevationSettings(canvas?.scene);
@@ -908,26 +955,47 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   }
 
   _recordRegionCreation(region) {
-    this._createdRegionOperations.push({ type: "createRegion", sceneId: canvas.scene?.id, regionId: region.id });
+    this._regionUndoOperations.push({ type: "createRegion", sceneId: canvas.scene?.id, regionId: region.id });
+  }
+
+  _recordRegionShapeUpdate(region, shapes) {
+    if (!region || !Array.isArray(shapes) || !shapes.length) return;
+    this._regionUndoOperations.push({
+      type: "updateRegionShapes",
+      sceneId: canvas.scene?.id,
+      regionId: region.id,
+      shapes: foundry.utils.deepClone(shapes)
+    });
   }
 
   _clearRegionUndo() {
-    this._createdRegionOperations = [];
+    this._regionUndoOperations = [];
   }
 
-  async _undoLastRegionCreation() {
-    while (this._createdRegionOperations.length) {
-      const operation = this._createdRegionOperations.pop();
+  async _undoLastRegionOperation() {
+    if (!canvas.scene) return;
+    while (this._regionUndoOperations.length) {
+      const operation = this._regionUndoOperations.pop();
       if (operation?.sceneId !== canvas.scene?.id || !operation.regionId) continue;
       const region = canvas.scene.regions?.get(operation.regionId);
-      if (!region) continue;
-      this._undoingRegionIds.add(operation.regionId);
-      try {
-        await region.delete();
-      } finally {
-        this._undoingRegionIds.delete(operation.regionId);
+      if (operation.type === "createRegion") {
+        if (!region) continue;
+        this._undoingRegionIds.add(operation.regionId);
+        try {
+          await region.delete();
+        } finally {
+          this._undoingRegionIds.delete(operation.regionId);
+        }
+        if (this._selectedRegionId === operation.regionId) this._setSelectedElevationRegion(null);
+        return;
       }
-      return;
+      if (operation.type === "updateRegionShapes") {
+        if (!region || !Array.isArray(operation.shapes) || !operation.shapes.length) continue;
+        await region.update({ shapes: foundry.utils.deepClone(operation.shapes) });
+        this._setSelectedElevationRegion(region);
+        this.refreshElevationRegionVisibility(true);
+        return;
+      }
     }
   }
 
@@ -1517,6 +1585,112 @@ function _regionPaths(region) {
 function _hoverElevationStateAtPoint(point) {
   const state = getRegionElevationStateAtPoint(point, canvas.scene);
   return state.found ? state : null;
+}
+
+function _regionContainsPoint(region, point) {
+  for (const shape of Array.from(region?.shapes ?? [])) {
+    try {
+      if (shape?.testPoint?.(point)) return true;
+    } catch (err) {}
+  }
+  return _regionPaths(region).some(path => _pointInPolygon(point, path));
+}
+
+function _pointInPolygon(point, path) {
+  let inside = false;
+  for (let index = 0, previous = path.length - 1; index < path.length; previous = index++) {
+    const currentPoint = path[index];
+    const previousPoint = path[previous];
+    const crosses = (currentPoint.y > point.y) !== (previousPoint.y > point.y);
+    if (!crosses) continue;
+    const x = ((previousPoint.x - currentPoint.x) * (point.y - currentPoint.y)) / (previousPoint.y - currentPoint.y) + currentPoint.x;
+    if (point.x < x) inside = !inside;
+  }
+  return inside;
+}
+
+function _regionRotationAngleFromWheel(event) {
+  const delta = Math.abs(Number(event.deltaY ?? 0)) >= Math.abs(Number(event.deltaX ?? 0)) ? Number(event.deltaY ?? 0) : Number(event.deltaX ?? 0);
+  if (!Number.isFinite(delta) || delta === 0) return 0;
+  const step = event.shiftKey ? REGION_ROTATE_FINE_DEGREES : event.altKey ? REGION_ROTATE_COARSE_DEGREES : REGION_ROTATE_DEGREES;
+  return Math.sign(delta) * step;
+}
+
+function _regionRotationPivot(region) {
+  const bounds = _pathsBounds(_regionPaths(region));
+  if (bounds) return bounds.center;
+  const centers = Array.from(region?.shapes ?? [])
+    .map(shape => _shapeCenter(shape))
+    .filter(Boolean);
+  if (!centers.length) return null;
+  const x = centers.reduce((sum, point) => sum + point.x, 0) / centers.length;
+  const y = centers.reduce((sum, point) => sum + point.y, 0) / centers.length;
+  return { x, y };
+}
+
+function _shapeCenter(shape) {
+  const center = shape?.center;
+  if (Number.isFinite(Number(center?.x)) && Number.isFinite(Number(center?.y))) return { x: Number(center.x), y: Number(center.y) };
+  const source = shape?.toObject ? shape.toObject() : shape;
+  if (Number.isFinite(Number(source?.x)) && Number.isFinite(Number(source?.y))) return { x: Number(source.x), y: Number(source.y) };
+  return null;
+}
+
+function _rotateRegionShapes(region, angle, pivot) {
+  return Array.from(region?.shapes ?? region?._source?.shapes ?? [])
+    .map(shape => _rotateRegionShape(shape, angle, pivot))
+    .filter(Boolean);
+}
+
+function _rotateRegionShape(shape, angle, pivot) {
+  if (shape?.clone && typeof shape.rotate === "function" && typeof shape.toObject === "function") {
+    const clone = shape.clone();
+    clone.rotate(angle, { pivot });
+    return clone.toObject();
+  }
+  const source = shape?.toObject ? shape.toObject() : foundry.utils.deepClone(shape);
+  return _rotateRegionShapeSource(source, angle, pivot);
+}
+
+function _rotateRegionShapeSource(shape, angle, pivot) {
+  const next = foundry.utils.deepClone(shape);
+  const radians = angle * Math.PI / 180;
+  if (Array.isArray(next.points)) {
+    const points = [];
+    for (let index = 0; index < next.points.length - 1; index += 2) {
+      const sourcePoint = { x: Number(next.points[index]), y: Number(next.points[index + 1]) };
+      if (!Number.isFinite(sourcePoint.x) || !Number.isFinite(sourcePoint.y)) continue;
+      const point = _rotatePoint(sourcePoint, pivot, radians);
+      points.push(_roundCoordinate(point.x), _roundCoordinate(point.y));
+    }
+    next.points = points;
+  }
+  if (Number.isFinite(Number(next.x)) && Number.isFinite(Number(next.y))) {
+    const point = _rotatePoint({ x: Number(next.x), y: Number(next.y) }, pivot, radians);
+    next.x = _roundCoordinate(point.x);
+    next.y = _roundCoordinate(point.y);
+  }
+  if (Number.isFinite(Number(next.rotation))) next.rotation = _normalizeDegrees(Number(next.rotation) + angle);
+  return next;
+}
+
+function _rotatePoint(point, pivot, radians) {
+  const dx = point.x - pivot.x;
+  const dy = point.y - pivot.y;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return {
+    x: pivot.x + dx * cos - dy * sin,
+    y: pivot.y + dx * sin + dy * cos
+  };
+}
+
+function _normalizeDegrees(degrees) {
+  return _roundCoordinate(((degrees % 360) + 360) % 360);
+}
+
+function _roundCoordinate(value) {
+  return Number(Number(value).toFixed(3));
 }
 
 function _regionDragDelta(drag) {
