@@ -1108,12 +1108,23 @@ export class RegionElevationRenderer {
         const overlay = this._createOverlay(visual.paths, texture, geo, params);
         if (params.isHole && overlay) this._addRegionDisplayObject(overlay, params);
         const slope = this._createSlopeLayer(visual.paths, texture, geo, params);
-        if (slope) this._addRegionDisplayObject(slope, params);
+        // Extruded walls are part of the lifted plateau silhouette: they must
+        // occlude lower-elevation tokens/tiles for the 2.5D effect to read.
+        if (slope) {
+          if (params.extrudedWalls) slope._sceneElevationOcclude = true;
+          this._addRegionDisplayObject(slope, params);
+        }
         if (!params.isHole) {
           const edgeGlue = this._createEdgeGlue(visual.paths, params);
           if (edgeGlue) this._addRegionDisplayObject(edgeGlue, params);
         }
-        if (!params.isHole && overlay) this._addRegionDisplayObject(overlay, params);
+        // The displaced overlay top is the actual "roof" for plateau rendering;
+        // route it through the elevation-sortable parent so any token or tile
+        // beneath the region elevation is occluded by the parallax-shifted top.
+        if (!params.isHole && overlay) {
+          overlay._sceneElevationOcclude = true;
+          this._addRegionDisplayObject(overlay, params);
+        }
         if (params.isHole) {
           const innerShadow = this._createInnerShadow(visual.paths, params);
           if (innerShadow) this._addRegionDisplayObject(innerShadow, params);
@@ -1142,7 +1153,16 @@ export class RegionElevationRenderer {
     const alpha = Math.clamp(Number(params.overheadVisibilityAlpha ?? 1), 0, 1);
     if (alpha <= 0.001) return;
     displayObject.alpha *= alpha;
-    const useOverheadLayer = params.entry?.overhead === true;
+    // Two paths into the elevation-sortable parent:
+    //  1. The user explicitly enabled "overhead" on the region (legacy path).
+    //  2. The display object is tagged for plateau occlusion AND the region
+    //     has positive elevation. This lets the displaced overlay top and
+    //     extruded walls naturally occlude tokens/tiles at lower elevations
+    //     via PrimaryCanvasGroup's elevation sort, without forcing the user
+    //     to toggle overhead (which has additional fade-on-hover behaviors).
+    const occludeLowerElevations = displayObject._sceneElevationOcclude === true
+      && Number(params?.visualElevation ?? params?.entry?.elevation ?? 0) > 0;
+    const useOverheadLayer = params.entry?.overhead === true || occludeLowerElevations;
     if (useOverheadLayer) {
       const sortElevation = this._overheadSortElevation(params);
       displayObject.zIndex = sortElevation;
@@ -1615,22 +1635,28 @@ export class RegionElevationRenderer {
     // change X displacement, and vertical camera movement can only change Y.
     // There is no radial normalization/clamp here; those rotate diagonal
     // vectors and make one axis "borrow" movement from the other.
+    //
+    // The pivot and reference are SCENE-WIDE, not per-region. This is what
+    // makes a real 2.5D look read correctly when several plateaus share an
+    // elevation: a 10ft roof on building A and a 10ft roof on building B
+    // shift by the exact same vector at the exact same time, instead of
+    // each one tracking its own (region-center - camera) offset and ending
+    // up at different points along the tanh response curve.
     const focus = this._cameraFocus;
-    const center = visual?.bounds?.center ?? null;
-    if (!focus || !center || lift <= 0) return { x: 0, y: 0 };
-    const bounds = visual?.bounds;
+    if (!focus || lift <= 0) return { x: 0, y: 0 };
     const gridSize = _finiteNumber(canvas?.grid?.size ?? canvas?.scene?.grid?.size ?? canvas?.dimensions?.size, 100);
     const strengthScale = Math.clamp(parallax / TOP_DOWN_HEIGHT_REFERENCE_PARALLAX, 0, TOP_DOWN_HEIGHT_MAX_STRENGTH_SCALE);
     const movementLift = lift * strengthScale;
     if (movementLift <= 0) return { x: 0, y: 0 };
-    // Expand the reference past the region bounds so the plateau starts
-    // changing before the camera center reaches a region edge-line. The
-    // response below uses a soft cap, not a hard clamp, so displacement keeps
-    // changing as the camera moves farther away instead of stopping at the
-    // edge.
+    const geo = sceneGeometry(this._scene);
+    const pivotX = (geo?.x ?? 0) + (geo?.width ?? gridSize) * 0.5;
+    const pivotY = (geo?.y ?? 0) + (geo?.height ?? gridSize) * 0.5;
+    // Scene-wide reference: half the scene span plus a grid-sized preview
+    // band. Shared across every region so all same-elevation plateaus reach
+    // the soft cap at the same camera position.
     const edgePreview = gridSize * TOP_DOWN_HEIGHT_EDGE_PREVIEW_GRID_RATIO;
-    const referenceX = Math.max((bounds?.width ?? gridSize * 4) * 0.5 + edgePreview, gridSize * 2);
-    const referenceY = Math.max((bounds?.height ?? gridSize * 4) * 0.5 + edgePreview, gridSize * 2);
+    const referenceX = Math.max((geo?.width ?? gridSize * 4) * 0.5 + edgePreview, gridSize * 4);
+    const referenceY = Math.max((geo?.height ?? gridSize * 4) * 0.5 + edgePreview, gridSize * 4);
     // Pure tanh response: monotonic, soft-capped at
     // ±TOP_DOWN_HEIGHT_SOFT_CAP_MULTIPLIER, with derivative
     // TOP_DOWN_HEIGHT_RESPONSE_GAIN at the origin. No flat spot at zero, so
@@ -1642,8 +1668,8 @@ export class RegionElevationRenderer {
         * Math.tanh((ratio * TOP_DOWN_HEIGHT_RESPONSE_GAIN) / TOP_DOWN_HEIGHT_SOFT_CAP_MULTIPLIER);
     };
     const target = {
-      x: softenedRatio(center.x - focus.x, referenceX) * movementLift * sign,
-      y: softenedRatio(center.y - focus.y, referenceY) * movementLift * sign
+      x: softenedRatio(pivotX - focus.x, referenceX) * movementLift * sign,
+      y: softenedRatio(pivotY - focus.y, referenceY) * movementLift * sign
     };
     const state = this._parallaxStateFor(visual);
     const current = state.topDownHeightOffset ?? target;
