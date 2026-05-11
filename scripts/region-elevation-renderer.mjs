@@ -557,6 +557,16 @@ function _pathArea(path) {
   return Math.abs(area) / 2;
 }
 
+function _pathSignedArea(path) {
+  let area = 0;
+  for (let index = 0; index < path.length; index++) {
+    const point = path[index];
+    const next = path[(index + 1) % path.length];
+    area += point.x * next.y - next.x * point.y;
+  }
+  return area / 2;
+}
+
 function _pathCentroid(path) {
   if (!path?.length) return null;
   let x = 0;
@@ -730,6 +740,7 @@ export class RegionElevationRenderer {
     if (this._panRaf) cancelAnimationFrame(this._panRaf);
     this._panRaf = null;
     try { this._pointerEventTarget?.removeEventListener?.("pointermove", this._pointerMoveHandler); } catch (err) {}
+    try { this.resetTileParallax(); } catch (err) {}
     try { this.container?.parent?.removeChild(this.container); } catch (err) {}
     try { this.overheadContainer?.parent?.removeChild(this.overheadContainer); } catch (err) {}
     try { this.mask?.parent?.removeChild(this.mask); } catch (err) {}
@@ -818,6 +829,67 @@ export class RegionElevationRenderer {
     if (!params) return { x: 0, y: 0 };
     if (params.slope) return this._slopeOverlayOffsetAtPoint(point, params);
     return params.overlayOffset ? { x: params.overlayOffset.x, y: params.overlayOffset.y } : { x: 0, y: 0 };
+  }
+
+  /**
+   * Compute the parallax offset for a Tile based on its elevation and footprint.
+   * Tiles inherit the overlay offset of the elevation region under their center
+   * (matching their own elevation), so a tile placed on a higher-elevation
+   * region drifts with that region's parallax.
+   */
+  tileParallaxOffset(tileDocument) {
+    if (!this.container || !this._scene || tileDocument?.parent !== this._scene) return { x: 0, y: 0 };
+    const elevation = Number(tileDocument.elevation ?? 0);
+    if (!Number.isFinite(elevation) || Math.abs(elevation) < MIN_ELEVATION_DELTA) return { x: 0, y: 0 };
+    const x = Number(tileDocument.x ?? 0);
+    const y = Number(tileDocument.y ?? 0);
+    const width = Number(tileDocument.width ?? 0);
+    const height = Number(tileDocument.height ?? 0);
+    const point = { x: x + width / 2, y: y + height / 2, elevation };
+    const state = getRegionElevationStateAtPoint(point, this._scene, this._entries.map(visual => visual.entry), { allowOverheadSupport: true });
+    if (!state.found) return { x: 0, y: 0 };
+    const visual = this._entries.find(candidate => candidate.entry === state.entry);
+    if (!visual) return { x: 0, y: 0 };
+    const params = this._visualParams.get(this._parallaxStateKey(visual));
+    if (!params) return { x: 0, y: 0 };
+    if (params.slope) return this._slopeOverlayOffsetAtPoint(point, params);
+    return params.overlayOffset ? { x: params.overlayOffset.x, y: params.overlayOffset.y } : { x: 0, y: 0 };
+  }
+
+  /** Apply the parallax offset to all tile meshes in the scene. */
+  applyTileParallax() {
+    const placeables = canvas?.tiles?.placeables;
+    if (!placeables?.length) return;
+    for (const tile of placeables) this.applyTileParallaxForTile(tile);
+  }
+
+  /** Apply (or update) the parallax offset for a single Tile. */
+  applyTileParallaxForTile(tile) {
+    const mesh = tile?.mesh;
+    if (!mesh || !tile.document) return;
+    const offset = this.tileParallaxOffset(tile.document);
+    const prev = mesh._sceneElevationParallaxOffset ?? { x: 0, y: 0 };
+    const dx = offset.x - prev.x;
+    const dy = offset.y - prev.y;
+    if (dx || dy) {
+      mesh.position.x += dx;
+      mesh.position.y += dy;
+    }
+    mesh._sceneElevationParallaxOffset = offset;
+  }
+
+  /** Remove any tile parallax offset we previously applied. */
+  resetTileParallax() {
+    const placeables = canvas?.tiles?.placeables;
+    if (!placeables?.length) return;
+    for (const tile of placeables) {
+      const mesh = tile?.mesh;
+      const prev = mesh?._sceneElevationParallaxOffset;
+      if (!mesh || !prev) continue;
+      mesh.position.x -= prev.x;
+      mesh.position.y -= prev.y;
+      mesh._sceneElevationParallaxOffset = null;
+    }
   }
 
   _updateCameraFocus(force) {
@@ -994,6 +1066,7 @@ export class RegionElevationRenderer {
         }
       }
       if (this._needsParallaxFrame) this._requestParallaxFrame();
+      this.applyTileParallax();
       // Token-overhead redraws only need to rebuild the region layer, not feed back into token visuals.
       if (emitVisualRefresh) Hooks.callAll(`${MODULE_ID}.visualRefresh`);
     } finally {
@@ -1984,6 +2057,10 @@ export class RegionElevationRenderer {
 
     for (const path of this._cliffWarpRenderPaths(paths, params)) {
       if (!path || path.length < 3) continue;
+      // Inward direction is derived from polygon winding (signed area), not
+      // from a direction-to-bounds-center, so concave / horseshoe regions
+      // sample the texture on the correct side of each edge.
+      const windingSign = _pathSignedArea(path) >= 0 ? 1 : -1;
       const positions = [];
       const uvs = [];
       const indices = [];
@@ -1995,12 +2072,15 @@ export class RegionElevationRenderer {
         const edgeY = endPoint.y - startPoint.y;
         const edgeLength = Math.hypot(edgeX, edgeY);
         if (edgeLength < 0.001) continue;
-        const midpoint = { x: (startPoint.x + endPoint.x) / 2, y: (startPoint.y + endPoint.y) / 2 };
-        let inwardNormalX = -edgeY / edgeLength;
-        let inwardNormalY = edgeX / edgeLength;
-        const centerDirectionX = center.x - midpoint.x;
-        const centerDirectionY = center.y - midpoint.y;
-        if (inwardNormalX * centerDirectionX + inwardNormalY * centerDirectionY < 0) {
+        let inwardNormalX = (-edgeY / edgeLength) * windingSign;
+        let inwardNormalY = (edgeX / edgeLength) * windingSign;
+        // Robustness fallback: probe a tiny step inward from the edge
+        // midpoint and flip if it falls outside the polygon (handles
+        // unusual / non-simple paths the winding test can mis-classify).
+        const probeStep = Math.max(1, edgeLength * 0.01);
+        const probeX = (startPoint.x + endPoint.x) / 2 + inwardNormalX * probeStep;
+        const probeY = (startPoint.y + endPoint.y) / 2 + inwardNormalY * probeStep;
+        if (!_pointInPolygon({ x: probeX, y: probeY }, path)) {
           inwardNormalX = -inwardNormalX;
           inwardNormalY = -inwardNormalY;
         }
@@ -2063,6 +2143,10 @@ export class RegionElevationRenderer {
 
     for (const path of this._cliffWarpRenderPaths(paths, params)) {
       if (!path || path.length < 3) continue;
+      // Inward direction is derived from polygon winding (signed area), not
+      // from a direction-to-bounds-center, so concave / horseshoe regions
+      // sample the texture on the correct side of each edge.
+      const windingSign = _pathSignedArea(path) >= 0 ? 1 : -1;
       const positions = [];
       const uvs = [];
       const indices = [];
@@ -2074,12 +2158,15 @@ export class RegionElevationRenderer {
         const edgeY = endPoint.y - startPoint.y;
         const edgeLength = Math.hypot(edgeX, edgeY);
         if (edgeLength < 0.001) continue;
-        const midpoint = { x: (startPoint.x + endPoint.x) / 2, y: (startPoint.y + endPoint.y) / 2 };
-        let inwardNormalX = -edgeY / edgeLength;
-        let inwardNormalY = edgeX / edgeLength;
-        const centerDirectionX = center.x - midpoint.x;
-        const centerDirectionY = center.y - midpoint.y;
-        if (inwardNormalX * centerDirectionX + inwardNormalY * centerDirectionY < 0) {
+        let inwardNormalX = (-edgeY / edgeLength) * windingSign;
+        let inwardNormalY = (edgeX / edgeLength) * windingSign;
+        // Robustness fallback: probe a tiny step inward from the edge
+        // midpoint and flip if it falls outside the polygon (handles
+        // unusual / non-simple paths the winding test can mis-classify).
+        const probeStep = Math.max(1, edgeLength * 0.01);
+        const probeX = (startPoint.x + endPoint.x) / 2 + inwardNormalX * probeStep;
+        const probeY = (startPoint.y + endPoint.y) / 2 + inwardNormalY * probeStep;
+        if (!_pointInPolygon({ x: probeX, y: probeY }, path)) {
           inwardNormalX = -inwardNormalX;
           inwardNormalY = -inwardNormalY;
         }

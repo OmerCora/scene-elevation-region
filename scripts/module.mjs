@@ -398,6 +398,16 @@ Hooks.on("canvasPan", () => {
   RegionElevationRenderer.instance.onPan();
 });
 
+Hooks.on("refreshTile", (tile) => {
+  const mesh = tile?.mesh;
+  if (!mesh) return;
+  // Foundry just reset the mesh transform back to its base position. Clear
+  // our recorded offset so the next apply pass treats it as a fresh state,
+  // then re-apply the current parallax offset on top.
+  mesh._sceneElevationParallaxOffset = null;
+  RegionElevationRenderer.instance.applyTileParallaxForTile(tile);
+});
+
 Hooks.on(`${MODULE_ID}.visualRefresh`, () => _queueTokenVisualRefresh());
 
 Hooks.on("updateScene", (scene, change) => {
@@ -1164,8 +1174,22 @@ function _roundOverheadRefreshValue(value) {
   return Number.isFinite(number) ? Math.round(number * 2) / 2 : 0;
 }
 
+function _canUserModifyToken(tokenDocument) {
+  const user = game.user;
+  if (!user || !tokenDocument) return false;
+  try {
+    return tokenDocument.canUserModify(user, "update");
+  } catch (err) {
+    return user.isGM === true;
+  }
+}
+
 async function _syncTokenElevation(tokenDocument, position = {}, options = {}) {
   if (!canvas?.scene || tokenDocument?.parent !== canvas.scene) return;
+  // Only the user(s) who can actually modify this token should write the
+  // elevation update. Other clients (e.g. players watching the GM move a
+  // non-owned token) would otherwise hit a server-side permission error.
+  if (!_canUserModifyToken(tokenDocument)) return;
   const uuid = tokenDocument.uuid ?? tokenDocument.id;
   if (_syncingTokenElevation.has(uuid)) return;
 
@@ -1272,6 +1296,7 @@ function _tokenStillWithinMovementStartRegion(tokenDocument, position, startStat
 async function _promoteNegativeTokenElevationForVisibleMovement(tokenDocument, position = {}) {
   const uuid = tokenDocument?.uuid ?? tokenDocument?.id;
   if (!uuid || _syncingTokenElevation.has(uuid)) return;
+  if (!_canUserModifyToken(tokenDocument)) return;
   const current = Number(tokenDocument.elevation ?? 0);
   if (!Number.isFinite(current) || current >= -0.001) return;
   const state = _highestTokenElevationState(tokenDocument, position);
