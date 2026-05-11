@@ -57,7 +57,8 @@ const SELECT_GROUPS = Object.freeze({
     [PARALLAX_MODES.HORIZONTAL_SCROLL, "SCENE_ELEVATION.Settings.ParallaxModeHorizontalScroll"],
     [PARALLAX_MODES.VERTICAL_SCROLL, "SCENE_ELEVATION.Settings.ParallaxModeVerticalScroll"],
     [PARALLAX_MODES.MOUSE, "SCENE_ELEVATION.Settings.ParallaxModeMouse"],
-    [PARALLAX_MODES.SHADOW, "SCENE_ELEVATION.Settings.ParallaxModeShadow"]
+    [PARALLAX_MODES.SHADOW, "SCENE_ELEVATION.Settings.ParallaxModeShadow"],
+    [PARALLAX_MODES.TOP_DOWN_HEIGHT, "SCENE_ELEVATION.Settings.ParallaxModeTopDownHeight"]
   ],
   [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: [
     ["reduced", "SCENE_ELEVATION.Settings.ParallaxHeightContrastReduced"],
@@ -85,14 +86,16 @@ const SELECT_GROUPS = Object.freeze({
     [PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE, "SCENE_ELEVATION.Settings.PerspectivePointSceneEdge"],
     [PERSPECTIVE_POINTS.CAMERA_CENTER, "SCENE_ELEVATION.Settings.PerspectivePointCameraCenter"],
     [PERSPECTIVE_POINTS.FURTHEST_EDGE, "SCENE_ELEVATION.Settings.PerspectivePointFurthestEdge"],
-    [PERSPECTIVE_POINTS.NEAREST_EDGE, "SCENE_ELEVATION.Settings.PerspectivePointNearestEdge"]
+    [PERSPECTIVE_POINTS.NEAREST_EDGE, "SCENE_ELEVATION.Settings.PerspectivePointNearestEdge"],
+    [PERSPECTIVE_POINTS.SCENE_CAMERA_OFFSET, "SCENE_ELEVATION.Settings.PerspectivePointSceneCameraOffset"]
   ],
   [SCENE_SETTING_KEYS.BLEND_MODE]: [
     [BLEND_MODES.OFF, "SCENE_ELEVATION.Settings.BlendModeOff"],
     [BLEND_MODES.SOFT, "SCENE_ELEVATION.Settings.BlendModeSoft"],
     [BLEND_MODES.WIDE, "SCENE_ELEVATION.Settings.BlendModeWide"],
     [BLEND_MODES.EDGE_STRETCH, "SCENE_ELEVATION.Settings.BlendModeEdgeStretch"],
-    [BLEND_MODES.CLIFF_WARP, "SCENE_ELEVATION.Settings.BlendModeCliffWarp"]
+    [BLEND_MODES.CLIFF_WARP, "SCENE_ELEVATION.Settings.BlendModeCliffWarp"],
+    [BLEND_MODES.EXTRUDED_WALLS, "SCENE_ELEVATION.Settings.BlendModeExtrudedWalls"]
   ],
   [SCENE_SETTING_KEYS.OVERLAY_SCALE]: [
     ["shrinkMedium", "SCENE_ELEVATION.Settings.OverlayScaleShrinkMedium"],

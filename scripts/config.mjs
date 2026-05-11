@@ -104,7 +104,13 @@ export const PERSPECTIVE_POINTS = Object.freeze({
   POINT_ON_SCENE_EDGE: "sceneEdgePoint",
   CAMERA_CENTER: "cameraCenter",
   FURTHEST_EDGE: "furthestEdge",
-  NEAREST_EDGE: "nearestEdge"
+  NEAREST_EDGE: "nearestEdge",
+  // Smooth global camera-relative anchor: returns a point projected far away
+  // from the camera through the scene center, so every elevated region sees an
+  // (almost) identical perspective direction. Avoids the per-region direction
+  // "flip" that happens with CAMERA_CENTER when the camera passes a region
+  // center, which is what the top-down height/plateau-walls pipeline needs.
+  SCENE_CAMERA_OFFSET: "sceneCameraOffset"
 });
 
 export const PARALLAX_MODES = Object.freeze({
@@ -117,7 +123,12 @@ export const PARALLAX_MODES = Object.freeze({
   HORIZONTAL_SCROLL: "horizontalScroll",
   VERTICAL_SCROLL: "verticalScroll",
   MOUSE: "mouse",
-  SHADOW: "shadow"
+  SHADOW: "shadow",
+  // Smooth top-down 2.5D height parallax: combines the perspective-derived
+  // base direction (uniform across regions when paired with
+  // SCENE_CAMERA_OFFSET) with a smoothed pan contribution. Designed for the
+  // EXTRUDED_WALLS plateau renderer.
+  TOP_DOWN_HEIGHT: "topDownHeight"
 });
 
 export const SHADOW_MODES = Object.freeze({
@@ -149,7 +160,11 @@ export const BLEND_MODES = Object.freeze({
   SOFT: "soft",
   WIDE: "wide",
   EDGE_STRETCH: "edgeStretch",
-  CLIFF_WARP: "cliffWarp"
+  CLIFF_WARP: "cliffWarp",
+  // 2.5D plateau side-walls extruded from the elevated region's edges down
+  // to the base footprint, with backface culling so only walls facing the
+  // camera shift direction are visible.
+  EXTRUDED_WALLS: "extrudedWalls"
 });
 
 export const EDGE_STRETCH_LIMITS = Object.freeze({

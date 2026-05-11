@@ -92,7 +92,8 @@ const BLEND_MODE_CHOICES = Object.freeze({
   [BLEND_MODES.SOFT]: "SCENE_ELEVATION.Settings.BlendModeSoft",
   [BLEND_MODES.WIDE]: "SCENE_ELEVATION.Settings.BlendModeWide",
   [BLEND_MODES.EDGE_STRETCH]: "SCENE_ELEVATION.Settings.BlendModeEdgeStretch",
-  [BLEND_MODES.CLIFF_WARP]: "SCENE_ELEVATION.Settings.BlendModeCliffWarp"
+  [BLEND_MODES.CLIFF_WARP]: "SCENE_ELEVATION.Settings.BlendModeCliffWarp",
+  [BLEND_MODES.EXTRUDED_WALLS]: "SCENE_ELEVATION.Settings.BlendModeExtrudedWalls"
 });
 
 const DEPTH_SCALE_CHOICES = Object.freeze({

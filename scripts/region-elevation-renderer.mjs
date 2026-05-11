@@ -33,6 +33,16 @@ const ORTHOGRAPHIC_ANGLE_PROJECTION_RATIO = 0.58;
 const ORTHOGRAPHIC_ANGLE_PAN_LIFT_RATIO = 0.45;
 const ORTHOGRAPHIC_TOP_DOWN_DIRECTION = Object.freeze({ x: 0, y: 0 });
 const ORTHOGRAPHIC_ANGLE_DIRECTION = Object.freeze({ x: 0, y: -1 });
+const TOP_DOWN_HEIGHT_REFERENCE_PARALLAX = PARALLAX_STRENGTHS.medium;
+const TOP_DOWN_HEIGHT_MAX_STRENGTH_SCALE = 1.65;
+// Inner-gain for the tanh response curve. Slope at zero equals this value,
+// so motion through the region center stays continuous with no flat spot.
+// Values >1 over-drive the curve back toward a flat-at-center shape; keep
+// at or below 1.0 so the camera never "pauses" while crossing an axis.
+const TOP_DOWN_HEIGHT_RESPONSE_GAIN = 1.0;
+const TOP_DOWN_HEIGHT_SOFT_CAP_MULTIPLIER = 1.75;
+const TOP_DOWN_HEIGHT_OFFSET_EASE = 0.34;
+const TOP_DOWN_HEIGHT_EDGE_PREVIEW_GRID_RATIO = 1.5;
 const LAYERED_CAMERA_MULTIPLIER = 1.12;
 const AXIS_SCROLL_CAMERA_MULTIPLIER = 1.15;
 const MOUSE_PARALLAX_MULTIPLIER = 0.8;
@@ -64,6 +74,18 @@ const CLIFF_WARP_SIDE_ROWS = Object.freeze([
   Object.freeze({ t: 0, normalOffset: 1.15, overhang: 0 }),
   Object.freeze({ t: 0.52, normalOffset: 0.05, overhang: 0.2 }),
   Object.freeze({ t: 1, normalOffset: -1.15, overhang: CLIFF_WARP_EDGE_OVERHANG_RATIO })
+]);
+// 2.5D plateau-walls row set: adds overshoot rows above the top (tuck under
+// the lifted overlay) and below the base (extend slightly past the base
+// footprint) so the wall reads as a continuous opaque band with no seam.
+const EXTRUDED_WALLS_SOLID_ALPHA = 1;
+const EXTRUDED_WALLS_SIDE_ROWS = Object.freeze([
+  Object.freeze({ t: -0.08, sourcePixels: 8, overhang: -0.22 }),
+  Object.freeze({ t: 0, sourcePixels: 6, overhang: -0.04 }),
+  Object.freeze({ t: 0.05, sourcePixels: 4, overhang: 0.08 }),
+  Object.freeze({ t: 0.35, sourceGrid: -0.18, overhang: 0.36 }),
+  Object.freeze({ t: 0.72, sourceGrid: -0.34, overhang: 0.58 }),
+  Object.freeze({ t: 1.12, sourceGrid: -0.5, overhang: 0.82 })
 ]);
 const EDGE_STRETCH_SOLID_ALPHA = 0.9;
 const EDGE_STRETCH_SIDE_ROWS = Object.freeze([
@@ -217,6 +239,38 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
     cliffWarpWidthBase: 0.22,
     cliffWarpWidthElevationRatio: 0.24,
     liftMultiplier: 1.25,
+    overlayScaleBonus: 0.006
+  }),
+  // 2.5D plateau side-walls. Reuses the cliff-warp wall infrastructure (same
+  // top/base anchor math, same texture-strip sampling) but the renderer culls
+  // edges whose outward normal opposes the parallax direction, so only the
+  // walls "facing" the camera shift remain visible. Driven by `extrudedWalls`.
+  [BLEND_MODES.EXTRUDED_WALLS]: Object.freeze({
+    widthMultiplier: 2.35,
+    widthAdd: 8,
+    maxWidth: 56,
+    textureShiftRatio: 0.22,
+    overlayAlpha: 0.99,
+    glueAlpha: 0.18,
+    glueBlurMultiplier: 0.12,
+    slopeAlpha: CLIFF_WARP_SOLID_ALPHA,
+    slopeAlphaMax: CLIFF_WARP_SOLID_ALPHA,
+    slopeWidthMultiplier: 1.7,
+    slopeTextureShiftRatio: 0.18,
+    slopeDropPixels: 24,
+    dropMaxPixels: CLIFF_WARP_DROP_MAX_PIXELS,
+    stretchAlpha: 0,
+    stretchSteps: 0,
+    stretchScaleMin: 1.03,
+    stretchScaleMax: 1.28,
+    bridgeBaseAlpha: 0,
+    extrudedWalls: true,
+    cliffWarpAlpha: EXTRUDED_WALLS_SOLID_ALPHA,
+    cliffWarpAlphaMax: EXTRUDED_WALLS_SOLID_ALPHA,
+    cliffWarpSourceWidth: CLIFF_WARP_SOURCE_RIM_PIXELS,
+    cliffWarpWidthBase: 0.22,
+    cliffWarpWidthElevationRatio: 0.24,
+    liftMultiplier: 1.3,
     overlayScaleBonus: 0.006
   })
 });
@@ -1300,8 +1354,9 @@ export class RegionElevationRenderer {
     const textureContactShadowAlphaBase = textureShadow && !shadowDisabled ? Math.clamp((fullTextureMeldShadow ? FULL_TEXTURE_MELD_CONTACT_ALPHA : TEXTURE_MELD_CONTACT_ALPHA) * shadowStrength * shadowAlphaMultiplier * (0.72 + normalized * 0.28), 0, fullTextureMeldShadow ? 0.92 : 0.82) : 0;
     const blendWidth = this._blendWidth(gridSize, transitionNormalized, parallax, blendProfile);
     const cliffWarpActive = !isHole && absElevation > 0 && !!blendProfile.cliffWarp;
+    const extrudedWallsActive = !isHole && absElevation > 0 && !!blendProfile.extrudedWalls;
     const edgeStretchActive = !isHole && absElevation > 0 && !!blendProfile.edgeStretch;
-    const edgeGlueAlpha = !cliffWarpActive && !edgeStretchActive && !shadowDisabled && blendWidth > 0
+    const edgeGlueAlpha = !cliffWarpActive && !extrudedWallsActive && !edgeStretchActive && !shadowDisabled && blendWidth > 0
       ? Math.clamp(blendProfile.glueAlpha * shadowStrength * (0.65 + transitionNormalized * 0.35), 0, EDGE_GLUE_ALPHA_MAX)
       : 0;
     let slopeWidth = blendWidth > 0 ? Math.clamp(blendWidth * blendProfile.slopeWidthMultiplier, 0, blendProfile.maxWidth * 1.9) : 0;
@@ -1336,6 +1391,19 @@ export class RegionElevationRenderer {
       cliffWarpSourceWidth = Math.max(1, Number(blendProfile.cliffWarpSourceWidth ?? CLIFF_WARP_SOURCE_RIM_PIXELS));
       cliffWarpAlpha = Math.clamp(blendProfile.cliffWarpAlpha ?? CLIFF_WARP_SOLID_ALPHA, 0, blendProfile.cliffWarpAlphaMax ?? CLIFF_WARP_SOLID_ALPHA);
     }
+    if (extrudedWallsActive) {
+      // Same wall geometry knobs as cliff warp so we can re-use the
+      // _cliffWarpRenderPaths / _cliffWarpTopPoint helpers; only the
+      // backface culling step differs in the dedicated layer renderer.
+      const wallWidthRatio = (blendProfile.cliffWarpWidthBase ?? 0.22) + transitionNormalized * (blendProfile.cliffWarpWidthElevationRatio ?? 0.24);
+      slopeWidth = Math.max(slopeWidth, Math.min(blendProfile.maxWidth, gridSize * wallWidthRatio));
+      slopeAlphaBase = Math.max(slopeAlphaBase, blendProfile.cliffWarpAlpha ?? CLIFF_WARP_SOLID_ALPHA);
+      slopeStretchAlphaBase = 0;
+      slopeStretchStepsBase = 0;
+      bridgeBaseAlphaBase = 0;
+      cliffWarpSourceWidth = Math.max(1, Number(blendProfile.cliffWarpSourceWidth ?? CLIFF_WARP_SOURCE_RIM_PIXELS));
+      cliffWarpAlpha = Math.clamp(blendProfile.cliffWarpAlpha ?? CLIFF_WARP_SOLID_ALPHA, 0, blendProfile.cliffWarpAlphaMax ?? CLIFF_WARP_SOLID_ALPHA);
+    }
     if (edgeStretchActive) {
       const edgeStretchWidthRatio = (blendProfile.edgeStretchWidthBase ?? 0.16) + transitionNormalized * (blendProfile.edgeStretchWidthElevationRatio ?? 0.16);
       slopeWidth = Math.max(slopeWidth, Math.min(blendProfile.maxWidth, gridSize * edgeStretchWidthRatio));
@@ -1353,7 +1421,7 @@ export class RegionElevationRenderer {
         y: transitionShift.y * slopeTextureShiftRatio + blendDirection.y * slopeDropPixels * sign
       }
       : { x: 0, y: 0 };
-    const useProjectionPerspective = bridgeBaseAlphaBase > 0 || cliffWarpActive;
+    const useProjectionPerspective = bridgeBaseAlphaBase > 0 || cliffWarpActive || extrudedWallsActive;
     const innerShadowWidth = Math.clamp(
       gridSize * (INNER_SHADOW_WIDTH_GRID_RATIO + normalized * INNER_SHADOW_WIDTH_ELEVATION_RATIO),
       6,
@@ -1438,8 +1506,9 @@ export class RegionElevationRenderer {
       slopeStretchAlpha: slopeWidth > 0 ? Math.clamp(slopeStretchAlphaBase * (0.72 + transitionNormalized * 0.28), 0, 1) : 0,
       bridgeBaseAlpha: slopeWidth > 0 ? Math.clamp(bridgeBaseAlphaBase * (0.68 + transitionNormalized * 0.32), 0, 1) : 0,
       cliffWarp: cliffWarpActive,
+      extrudedWalls: extrudedWallsActive,
       edgeStretch: edgeStretchActive,
-      edgeOnlyShadow: blendMode === BLEND_MODES.WIDE || cliffWarpActive || edgeStretchActive,
+      edgeOnlyShadow: blendMode === BLEND_MODES.WIDE || cliffWarpActive || extrudedWallsActive || edgeStretchActive,
       cliffWarpAlpha,
       cliffWarpSourceWidth,
       edgeStretchAlpha,
@@ -1486,6 +1555,7 @@ export class RegionElevationRenderer {
       case PARALLAX_MODES.HORIZONTAL_SCROLL:
       case PARALLAX_MODES.VERTICAL_SCROLL:
       case PARALLAX_MODES.MOUSE:
+      case PARALLAX_MODES.TOP_DOWN_HEIGHT:
         return parallaxVector;
       case PARALLAX_MODES.SHADOW:
       default:
@@ -1504,6 +1574,7 @@ export class RegionElevationRenderer {
       case PARALLAX_MODES.HORIZONTAL_SCROLL:
       case PARALLAX_MODES.VERTICAL_SCROLL:
       case PARALLAX_MODES.MOUSE:
+      case PARALLAX_MODES.TOP_DOWN_HEIGHT:
         return { x: parallaxVector.x * CARD_TRANSITION_SHIFT_RATIO, y: parallaxVector.y * CARD_TRANSITION_SHIFT_RATIO };
       case PARALLAX_MODES.SHADOW:
       default:
@@ -1531,9 +1602,58 @@ export class RegionElevationRenderer {
         return this._combineParallaxVectors({ x: 0, y: baseVector.y }, this._axisScrollParallaxVector(visual, lift, sign, parallax, "y"), lift);
       case PARALLAX_MODES.MOUSE:
         return this._mouseParallaxVector(visual, lift, sign, parallax);
+      case PARALLAX_MODES.TOP_DOWN_HEIGHT:
+        return this._topDownHeightParallaxVector(visual, baseVector, lift, sign, parallax);
       default:
         return baseVector;
     }
+  }
+
+  _topDownHeightParallaxVector(visual, baseVector, lift, sign, parallax) {
+    // Persistent top-down orthographic parallax. Each axis is solved
+    // independently from camera position: horizontal camera movement can only
+    // change X displacement, and vertical camera movement can only change Y.
+    // There is no radial normalization/clamp here; those rotate diagonal
+    // vectors and make one axis "borrow" movement from the other.
+    const focus = this._cameraFocus;
+    const center = visual?.bounds?.center ?? null;
+    if (!focus || !center || lift <= 0) return { x: 0, y: 0 };
+    const bounds = visual?.bounds;
+    const gridSize = _finiteNumber(canvas?.grid?.size ?? canvas?.scene?.grid?.size ?? canvas?.dimensions?.size, 100);
+    const strengthScale = Math.clamp(parallax / TOP_DOWN_HEIGHT_REFERENCE_PARALLAX, 0, TOP_DOWN_HEIGHT_MAX_STRENGTH_SCALE);
+    const movementLift = lift * strengthScale;
+    if (movementLift <= 0) return { x: 0, y: 0 };
+    // Expand the reference past the region bounds so the plateau starts
+    // changing before the camera center reaches a region edge-line. The
+    // response below uses a soft cap, not a hard clamp, so displacement keeps
+    // changing as the camera moves farther away instead of stopping at the
+    // edge.
+    const edgePreview = gridSize * TOP_DOWN_HEIGHT_EDGE_PREVIEW_GRID_RATIO;
+    const referenceX = Math.max((bounds?.width ?? gridSize * 4) * 0.5 + edgePreview, gridSize * 2);
+    const referenceY = Math.max((bounds?.height ?? gridSize * 4) * 0.5 + edgePreview, gridSize * 2);
+    // Pure tanh response: monotonic, soft-capped at
+    // ±TOP_DOWN_HEIGHT_SOFT_CAP_MULTIPLIER, with derivative
+    // TOP_DOWN_HEIGHT_RESPONSE_GAIN at the origin. No flat spot at zero, so
+    // single-axis motion across the region center stays continuous and
+    // diagonal crossings do not sling/zig-zag.
+    const softenedRatio = (value, reference) => {
+      const ratio = value / reference;
+      return TOP_DOWN_HEIGHT_SOFT_CAP_MULTIPLIER
+        * Math.tanh((ratio * TOP_DOWN_HEIGHT_RESPONSE_GAIN) / TOP_DOWN_HEIGHT_SOFT_CAP_MULTIPLIER);
+    };
+    const target = {
+      x: softenedRatio(center.x - focus.x, referenceX) * movementLift * sign,
+      y: softenedRatio(center.y - focus.y, referenceY) * movementLift * sign
+    };
+    const state = this._parallaxStateFor(visual);
+    const current = state.topDownHeightOffset ?? target;
+    const offset = {
+      x: current.x + (target.x - current.x) * TOP_DOWN_HEIGHT_OFFSET_EASE,
+      y: current.y + (target.y - current.y) * TOP_DOWN_HEIGHT_OFFSET_EASE
+    };
+    state.topDownHeightOffset = offset;
+    if (Math.hypot(target.x - offset.x, target.y - offset.y) > SMOOTH_PARALLAX_EPSILON) this._needsParallaxFrame = true;
+    return offset;
   }
 
   _combineParallaxVectors(baseVector, modeVector, lift) {
@@ -1925,7 +2045,7 @@ export class RegionElevationRenderer {
 
   _createShadow(paths, texture, geo, params) {
     if (params.softShadowAlpha <= 0 && params.allAroundShadowAlpha <= 0 && params.bridgeShadowAlpha <= 0 && params.contactShadowAlpha <= 0 && params.textureSoftShadowAlpha <= 0 && params.textureBridgeShadowAlpha <= 0 && params.textureContactShadowAlpha <= 0) return null;
-    if (params.cliffWarp || params.edgeStretch) return this._createCliffWarpShadow(paths, params);
+    if (params.cliffWarp || params.extrudedWalls || params.edgeStretch) return this._createCliffWarpShadow(paths, params);
     if (params.edgeOnlyShadow) return this._createEdgeTransitionShadow(paths, params);
     const shadow = new PIXI.Container();
     shadow.eventMode = "none";
@@ -1989,6 +2109,7 @@ export class RegionElevationRenderer {
   }
 
   _createSlopeLayer(paths, texture, geo, params) {
+    if (params.extrudedWalls) return this._createExtrudedWallsLayer(paths, texture, geo, params);
     if (params.cliffWarp) return this._createCliffWarpLayer(paths, texture, geo, params);
     if (params.edgeStretch) return this._createEdgeStretchLayer(paths, texture, geo, params);
     if (!texture || params.slopeAlpha <= 0 || params.slopeWidth <= 0) return null;
@@ -2095,6 +2216,144 @@ export class RegionElevationRenderer {
             const rowY = top.y + (base.y - top.y) * row.t - inwardNormalY * overhang;
             const sampleX = point.x + inwardNormalX * sourceWidth * row.normalOffset;
             const sampleY = point.y + inwardNormalY * sourceWidth * row.normalOffset;
+            positions.push(rowX, rowY);
+            uvs.push(Math.clamp((sampleX - geo.x) / geo.width, 0, 1), Math.clamp((sampleY - geo.y) / geo.height, 0, 1));
+          }
+        }
+        for (let row = 0; row < rowCount - 1; row++) {
+          const left = baseIndex + row;
+          const right = left + rowCount;
+          indices.push(left, right, left + 1, left + 1, right, right + 1);
+        }
+      }
+
+      if (!indices.length) continue;
+      const indexArray = positions.length / 2 > 65535 ? Uint32Array : Uint16Array;
+      const meshGeo = new MeshGeometry(new Float32Array(positions), new Float32Array(uvs), new indexArray(indices));
+      const material = new MeshMaterial(texture, { alpha: params.cliffWarpAlpha });
+      const mesh = new Mesh(meshGeo, material);
+      mesh.eventMode = "none";
+      container.addChild(mesh);
+    }
+
+    if (!container.children.length) {
+      container.destroy({ children: true });
+      return null;
+    }
+    return container;
+  }
+
+  /**
+   * 2.5D plateau-style side walls extruded from each region edge.
+   *
+   * Geometry per edge:
+   *   base_A, base_B    -> the actual region footprint (no parallax shift)
+   *   top_A,  top_B     -> the lifted overlay edge (base + overlayOffset)
+   *
+  * Backface culling: only render walls whose outward normal has negative dot
+  * with the parallax overlay offset. These are the closest walls in the
+  * inverted top-down convention requested for plateau rendering; walls on the
+  * opposite side would be facing away from the viewer, so we skip them.
+   */
+  _createExtrudedWallsLayer(paths, texture, geo, params) {
+    if (!texture || params.cliffWarpAlpha <= 0) return null;
+    const overlayOffset = params.overlayOffset || { x: 0, y: 0 };
+    const liftLength = Math.hypot(overlayOffset.x, overlayOffset.y);
+    if (liftLength < 0.5) return null;
+    const visualState = this._parallaxStateFor({ entry: params.entry });
+    const previousCullOffset = visualState.extrudedWallsCullOffset ?? overlayOffset;
+    // Hold the cull vector through the center deadzone. While the live
+    // overlay offset is small (camera near the region center) we keep the
+    // previously-resolved facing direction so walls do not flip mid-crossing
+    // and produce a zig-zag when the camera passes through center along a
+    // diagonal. Once the offset clears the deadzone we ease back toward the
+    // live value, more aggressively the larger the offset.
+    const deadzoneRadius = params.gridSize * 0.18;
+    const liftRamp = Math.min(1, Math.max(0, (liftLength - deadzoneRadius) / Math.max(deadzoneRadius, 1)));
+    const cullBlend = 0.12 + 0.4 * liftRamp;
+    const cullOffset = liftLength <= deadzoneRadius * 0.5
+      ? { x: previousCullOffset.x, y: previousCullOffset.y }
+      : {
+          x: previousCullOffset.x + (overlayOffset.x - previousCullOffset.x) * cullBlend,
+          y: previousCullOffset.y + (overlayOffset.y - previousCullOffset.y) * cullBlend
+        };
+    visualState.extrudedWallsCullOffset = cullOffset;
+    if (Math.hypot(overlayOffset.x - cullOffset.x, overlayOffset.y - cullOffset.y) > SMOOTH_PARALLAX_EPSILON) this._needsParallaxFrame = true;
+    const cullLength = Math.hypot(cullOffset.x, cullOffset.y);
+
+    const Mesh = PIXI.Mesh;
+    const MeshGeometry = PIXI.MeshGeometry;
+    const MeshMaterial = PIXI.MeshMaterial;
+    if (!Mesh || !MeshGeometry || !MeshMaterial) return null;
+
+    const overlayScale = params.overlayScale ?? 1;
+    const center = params.center;
+    const sourceWidth = Math.max(1, params.cliffWarpSourceWidth || CLIFF_WARP_SOURCE_RIM_PIXELS);
+    const landingOverhang = Math.min(params.gridSize * 0.16, Math.max(params.gridSize * 0.035, params.slopeWidth * 0.35));
+    const outsideSourceWidth = Math.max(params.gridSize, sourceWidth);
+    const rowCount = EXTRUDED_WALLS_SIDE_ROWS.length;
+    // Cull threshold: dot(outwardNormal, overlayOffset) must exceed this for
+    // the wall to be visible. Use a small positive epsilon (relative to the
+    // lift length) so wobbling near grazing edges does not flicker walls in
+    // and out at sub-pixel offsets.
+    const cullEpsilon = Math.max(cullLength * 0.05, 0.25);
+    const container = new PIXI.Container();
+    container.eventMode = "none";
+
+    for (const path of this._cliffWarpRenderPaths(paths, params)) {
+      if (!path || path.length < 3) continue;
+      // Same winding-based inward normal as cliff warp; outward normal is
+      // simply its negation. Probe-step fallback handles non-simple paths.
+      const windingSign = _pathSignedArea(path) >= 0 ? 1 : -1;
+      const positions = [];
+      const uvs = [];
+      const indices = [];
+
+      for (let edgeIndex = 0; edgeIndex < path.length; edgeIndex++) {
+        const startPoint = path[edgeIndex];
+        const endPoint = path[(edgeIndex + 1) % path.length];
+        const edgeX = endPoint.x - startPoint.x;
+        const edgeY = endPoint.y - startPoint.y;
+        const edgeLength = Math.hypot(edgeX, edgeY);
+        if (edgeLength < 0.001) continue;
+        let inwardNormalX = (-edgeY / edgeLength) * windingSign;
+        let inwardNormalY = (edgeX / edgeLength) * windingSign;
+        const probeStep = Math.max(1, edgeLength * 0.01);
+        const probeX = (startPoint.x + endPoint.x) / 2 + inwardNormalX * probeStep;
+        const probeY = (startPoint.y + endPoint.y) / 2 + inwardNormalY * probeStep;
+        if (!_pointInPolygon({ x: probeX, y: probeY }, path)) {
+          inwardNormalX = -inwardNormalX;
+          inwardNormalY = -inwardNormalY;
+        }
+        const outwardNormalX = -inwardNormalX;
+        const outwardNormalY = -inwardNormalY;
+        // Backface cull (inverted vs. far-wall convention): only the walls
+        // whose outward normal *opposes* the parallax overlay offset remain
+        // visible. Those are the edges closest to the camera shift; the
+        // opposite walls would be facing away from the viewer in a real
+        // 2.5D scene.
+        const facing = -(outwardNormalX * cullOffset.x + outwardNormalY * cullOffset.y);
+        if (facing <= cullEpsilon) continue;
+
+        const baseIndex = positions.length / 2;
+        const edgeSamples = [startPoint, endPoint];
+        for (const point of edgeSamples) {
+          const top = this._cliffWarpTopPoint(point, params, overlayScale, overlayOffset, center);
+          const base = this._baseOverlayPointAtPoint(point, params);
+          for (const row of EXTRUDED_WALLS_SIDE_ROWS) {
+            const overhang = landingOverhang * row.overhang;
+            // Walls extend slightly outward (away from polygon interior) so
+            // the seam against the top sprite reads as a clean cliff edge.
+            const rowX = top.x + (base.x - top.x) * row.t + outwardNormalX * overhang;
+            const rowY = top.y + (base.y - top.y) * row.t + outwardNormalY * overhang;
+            // Only the top lip samples a few pixels inside the plateau. The
+            // rest samples progressively outward, reaching half a grid outside
+            // by the base so ~95% of the wall is made from outside-edge pixels.
+            const sampleOffset = Number.isFinite(row.sourcePixels)
+              ? row.sourcePixels
+              : outsideSourceWidth * (row.sourceGrid ?? 0);
+            const sampleX = point.x + inwardNormalX * sampleOffset;
+            const sampleY = point.y + inwardNormalY * sampleOffset;
             positions.push(rowX, rowY);
             uvs.push(Math.clamp((sampleX - geo.x) / geo.width, 0, 1), Math.clamp((sampleY - geo.y) / geo.height, 0, 1));
           }
@@ -2688,6 +2947,24 @@ function _perspectivePoint(geo, bounds = null, point = _perspectivePointMode()) 
       return _perspectivePointPastSceneEdge(_setting(SCENE_SETTING_KEYS.PERSPECTIVE_EDGE_POINT), geo);
     case PERSPECTIVE_POINTS.CAMERA_CENTER:
       return _cameraCenter(geo);
+    case PERSPECTIVE_POINTS.SCENE_CAMERA_OFFSET: {
+      // Build a single anchor that is far away from every region in the same
+      // direction relative to the camera. Because we project the offset out
+      // by many scene-widths, _perspectiveDirection() returns essentially the
+      // same unit vector for every region centre, eliminating per-region
+      // sign-flips when the camera passes a region centre.
+      const sceneCenter = { x: geo.x + geo.width / 2, y: geo.y + geo.height / 2 };
+      const cam = _cameraCenter(geo);
+      const dx = sceneCenter.x - cam.x;
+      const dy = sceneCenter.y - cam.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1) return sceneCenter;
+      const projection = Math.max(geo.width, geo.height) * 12;
+      return {
+        x: sceneCenter.x + (dx / len) * projection,
+        y: sceneCenter.y + (dy / len) * projection
+      };
+    }
     case PERSPECTIVE_POINTS.FURTHEST_EDGE:
       return _furthestSceneEdgePoint(geo);
     case PERSPECTIVE_POINTS.NEAREST_EDGE:
@@ -2822,7 +3099,12 @@ function _parallaxEnabled() {
 }
 
 function _perspectiveFollowsCamera() {
-  return [PERSPECTIVE_POINTS.CAMERA_CENTER, PERSPECTIVE_POINTS.FURTHEST_EDGE, PERSPECTIVE_POINTS.NEAREST_EDGE].includes(_setting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT));
+  return [
+    PERSPECTIVE_POINTS.CAMERA_CENTER,
+    PERSPECTIVE_POINTS.FURTHEST_EDGE,
+    PERSPECTIVE_POINTS.NEAREST_EDGE,
+    PERSPECTIVE_POINTS.SCENE_CAMERA_OFFSET
+  ].includes(_setting(SCENE_SETTING_KEYS.PERSPECTIVE_POINT));
 }
 
 function _perspectivePointPastSceneEdge(point, geo) {
