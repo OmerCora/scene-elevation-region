@@ -2,7 +2,7 @@
   "id": "scene-elevation-region",
   "title": "Scene Elevation Region",
   "description": "System-agnostic visual scene elevation using Foundry Regions. Add an Elevation behavior to regions to create raised overlays or negative holes with transition texture, contact/drop or inward shadows, optional parallax modes, and token scaling on top-down maps.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "compatibility": {
     "minimum": "14",
     "verified": "14"
