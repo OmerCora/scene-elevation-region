@@ -1338,7 +1338,7 @@ export class RegionElevationRenderer {
       : _parallaxMotionLift(lift, normalized, parallaxHeightContrast);
     const heightAdjustedParallax = lift > 0 ? parallax * (parallaxLift / lift) : parallax;
     const baseParallaxVector = parallax > 0 ? { x: baseParallaxDirection.x * parallaxLift * sign, y: baseParallaxDirection.y * parallaxLift * sign } : { x: 0, y: 0 };
-    const rawParallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, parallaxLift, sign, heightAdjustedParallax) : { x: 0, y: 0 };
+    const rawParallaxVector = parallax > 0 ? this._parallaxVectorForMode(visual, baseParallaxVector, parallaxMode, parallaxLift, sign, heightAdjustedParallax, perspectivePoint) : { x: 0, y: 0 };
     const parallaxModeStrength = parallaxMode === PARALLAX_MODES.MOUSE ? MOUSE_PARALLAX_INTERNAL_STRENGTH : 1;
     const parallaxVector = {
       x: rawParallaxVector.x * PARALLAX_INTERNAL_STRENGTH * parallaxModeStrength,
@@ -1602,7 +1602,7 @@ export class RegionElevationRenderer {
     }
   }
 
-  _parallaxVectorForMode(visual, baseVector, parallaxMode, lift, sign, parallax) {
+  _parallaxVectorForMode(visual, baseVector, parallaxMode, lift, sign, parallax, perspectivePoint = null) {
     switch (parallaxMode) {
       case PARALLAX_MODES.ANCHORED_CARD:
         return this._combineParallaxVectors(baseVector, this._anchoredParallaxVector(visual, lift, sign, parallax), lift);
@@ -1623,25 +1623,29 @@ export class RegionElevationRenderer {
       case PARALLAX_MODES.MOUSE:
         return this._mouseParallaxVector(visual, lift, sign, parallax);
       case PARALLAX_MODES.TOP_DOWN_HEIGHT:
-        return this._topDownHeightParallaxVector(visual, baseVector, lift, sign, parallax);
+        return this._topDownHeightParallaxVector(visual, baseVector, lift, sign, parallax, perspectivePoint);
       default:
         return baseVector;
     }
   }
 
-  _topDownHeightParallaxVector(visual, baseVector, lift, sign, parallax) {
+  _topDownHeightParallaxVector(visual, baseVector, lift, sign, parallax, perspectivePoint = null) {
     // Persistent top-down orthographic parallax. Each axis is solved
     // independently from camera position: horizontal camera movement can only
     // change X displacement, and vertical camera movement can only change Y.
     // There is no radial normalization/clamp here; those rotate diagonal
     // vectors and make one axis "borrow" movement from the other.
     //
-    // The pivot and reference are SCENE-WIDE, not per-region. This is what
-    // makes a real 2.5D look read correctly when several plateaus share an
-    // elevation: a 10ft roof on building A and a 10ft roof on building B
-    // shift by the exact same vector at the exact same time, instead of
-    // each one tracking its own (region-center - camera) offset and ending
-    // up at different points along the tanh response curve.
+    // The pivot is the configured Perspective Point. It is the place that
+    // stays visually anchored when the camera is centered on it: zero
+    // displacement there, and the plateau slides away as the camera moves
+    // off it. Using the same scene-wide pivot for every same-elevation
+    // region keeps multiple plateaus moving in lockstep (a 10ft roof on
+    // building A and a 10ft roof on building B shift by the exact same
+    // vector at the exact same time). Region-relative perspective points
+    // (REGION_CENTER, REGION_*_CORNER, NEAREST/FURTHEST_EDGE) will instead
+    // give each region its own pivot and therefore its own pace - that is
+    // the correct behaviour for those modes.
     const focus = this._cameraFocus;
     if (!focus || lift <= 0) return { x: 0, y: 0 };
     const gridSize = _finiteNumber(canvas?.grid?.size ?? canvas?.scene?.grid?.size ?? canvas?.dimensions?.size, 100);
@@ -1649,14 +1653,19 @@ export class RegionElevationRenderer {
     const movementLift = lift * strengthScale;
     if (movementLift <= 0) return { x: 0, y: 0 };
     const geo = sceneGeometry(this._scene);
-    const pivotX = (geo?.x ?? 0) + (geo?.width ?? gridSize) * 0.5;
-    const pivotY = (geo?.y ?? 0) + (geo?.height ?? gridSize) * 0.5;
-    // Scene-wide reference: half the scene span plus a grid-sized preview
-    // band. Shared across every region so all same-elevation plateaus reach
+    const sceneCenterX = (geo?.x ?? 0) + (geo?.width ?? gridSize) * 0.5;
+    const sceneCenterY = (geo?.y ?? 0) + (geo?.height ?? gridSize) * 0.5;
+    const pivotX = _finiteNumber(perspectivePoint?.x, sceneCenterX);
+    const pivotY = _finiteNumber(perspectivePoint?.y, sceneCenterY);
+    // Reference span: the half-distance from the pivot to the farthest scene
+    // corner, plus the preview band. Sharing this across regions keeps every
+    // plateau on the same point of the tanh response curve, so they reach
     // the soft cap at the same camera position.
     const edgePreview = gridSize * TOP_DOWN_HEIGHT_EDGE_PREVIEW_GRID_RATIO;
-    const referenceX = Math.max((geo?.width ?? gridSize * 4) * 0.5 + edgePreview, gridSize * 4);
-    const referenceY = Math.max((geo?.height ?? gridSize * 4) * 0.5 + edgePreview, gridSize * 4);
+    const farthestDx = Math.max(Math.abs(pivotX - (geo?.x ?? 0)), Math.abs(pivotX - ((geo?.x ?? 0) + (geo?.width ?? gridSize))));
+    const farthestDy = Math.max(Math.abs(pivotY - (geo?.y ?? 0)), Math.abs(pivotY - ((geo?.y ?? 0) + (geo?.height ?? gridSize))));
+    const referenceX = Math.max(farthestDx + edgePreview, gridSize * 4);
+    const referenceY = Math.max(farthestDy + edgePreview, gridSize * 4);
     // Pure tanh response: monotonic, soft-capped at
     // ±TOP_DOWN_HEIGHT_SOFT_CAP_MULTIPLIER, with derivative
     // TOP_DOWN_HEIGHT_RESPONSE_GAIN at the origin. No flat spot at zero, so
