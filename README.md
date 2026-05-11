@@ -1,5 +1,5 @@
 
-# Scene Elevation
+# Scene Elevation Region
 
 [![Downloads](https://img.shields.io/github/downloads/OmerCora/scene-elevation-region/total?label=Downloads&color=4aa94a)](https://github.com/OmerCora/scene-elevation-region/releases)
 [![Latest Version Downloads](https://img.shields.io/github/downloads/OmerCora/scene-elevation-region/latest/total?label=Latest%20Version&color=4aa94a)](https://github.com/OmerCora/scene-elevation-region/releases/latest)
