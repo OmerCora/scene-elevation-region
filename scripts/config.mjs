@@ -105,6 +105,11 @@ export const PERSPECTIVE_POINTS = Object.freeze({
   CAMERA_CENTER: "cameraCenter",
   FURTHEST_EDGE: "furthestEdge",
   NEAREST_EDGE: "nearestEdge",
+  // Per-region nearest scene edge: each region computes its own pivot as the
+  // closest point on the scene boundary to its own center. Useful for
+  // top-down/plateau parallax when each plateau should appear to slide
+  // toward its own nearest scene edge instead of sharing a global pivot.
+  NEAREST_EDGE_PER_REGION: "nearestEdgePerRegion",
   // Smooth global camera-relative anchor: returns a point projected far away
   // from the camera through the scene center, so every elevated region sees an
   // (almost) identical perspective direction. Avoids the per-region direction
@@ -216,6 +221,7 @@ export const ELEVATION_PRESETS = Object.freeze({
   MULTI_LAYER_DRIFT_SHADOW: "multiLayerDriftShadow",
   MULTI_LAYER_DRIFT_SHADOWLESS: "multiLayerDriftShadowless",
   MOUSE_DRIFT_SHADOW: "mouseDriftShadow",
+  TWO_POINT_FIVE_D_PARALLAX: "twoPointFiveDParallax",
   RESPONSIVE_SHADOW_ONLY: "responsiveShadowOnly",
   CAMERA_LIFT_TEXTURE_MELD: "cameraLiftTextureMeld"
 });
@@ -282,6 +288,19 @@ const MOUSE_DRIFT_SHADOW_PRESET = Object.freeze({
   [SCENE_SETTING_KEYS.OVERLAY_SCALE]: "subtle",
   [SCENE_SETTING_KEYS.SHADOW_MODE]: SHADOW_MODES.TOP_DOWN,
   [SCENE_SETTING_KEYS.SHADOW_LENGTH]: "short",
+  [SCENE_SETTING_KEYS.DEPTH_SCALE]: DEPTH_SCALES.LINEAR
+});
+
+const TWO_POINT_FIVE_D_PARALLAX_PRESET = Object.freeze({
+  [SCENE_SETTING_KEYS.PARALLAX]: "medium",
+  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "reduced",
+  [SCENE_SETTING_KEYS.PARALLAX_MODE]: PARALLAX_MODES.TOP_DOWN_HEIGHT,
+  [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: PERSPECTIVE_POINTS.REGION_CENTER,
+  [SCENE_SETTING_KEYS.BLEND_MODE]: BLEND_MODES.EDGE_STRETCH,
+  [SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT]: 10,
+  [SCENE_SETTING_KEYS.OVERLAY_SCALE]: "strong",
+  [SCENE_SETTING_KEYS.SHADOW_MODE]: SHADOW_MODES.OFF,
+  [SCENE_SETTING_KEYS.SHADOW_LENGTH]: "off",
   [SCENE_SETTING_KEYS.DEPTH_SCALE]: DEPTH_SCALES.LINEAR
 });
 
@@ -424,6 +443,7 @@ export function elevationPresetValues(value, scene = canvas?.scene) {
   if (preset === ELEVATION_PRESETS.MULTI_LAYER_DRIFT_SHADOW) return { ...MULTI_LAYER_DRIFT_SHADOW_PRESET };
   if (preset === ELEVATION_PRESETS.MULTI_LAYER_DRIFT_SHADOWLESS) return { ...MULTI_LAYER_DRIFT_SHADOWLESS_PRESET };
   if (preset === ELEVATION_PRESETS.MOUSE_DRIFT_SHADOW) return { ...MOUSE_DRIFT_SHADOW_PRESET };
+  if (preset === ELEVATION_PRESETS.TWO_POINT_FIVE_D_PARALLAX) return { ...TWO_POINT_FIVE_D_PARALLAX_PRESET };
   if (preset === ELEVATION_PRESETS.RESPONSIVE_SHADOW_ONLY) return { ...RESPONSIVE_SHADOW_ONLY_PRESET };
   if (preset === ELEVATION_PRESETS.CAMERA_LIFT_TEXTURE_MELD) return { ...CAMERA_LIFT_TEXTURE_MELD_PRESET };
   return null;

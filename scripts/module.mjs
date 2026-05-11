@@ -1462,6 +1462,62 @@ async function _refreshAllTokenElevations() {
   await Promise.all(canvas.tokens.placeables.map(token => _syncTokenElevation(token.document)));
 }
 
+// While a token is animating into a higher-elevation region, document.elevation
+// stays at its old value until movement settles. That means the token's mesh
+// would normally render UNDER the lifted plateau overlay during the move. We
+// promote the mesh's visual elevation immediately based on the token's live
+// (animated) position so it renders on top as soon as it crosses into the
+// region. The document elevation itself is still updated by the existing
+// settle pipeline; this only affects PrimaryCanvasGroup sort order.
+function _applyLiveTokenElevationOverride(token) {
+  const mesh = token?.mesh;
+  const document = token?.document;
+  if (!mesh || !document || !canvas?.scene || document.parent !== canvas.scene) return;
+  const liveX = _finitePositionValue(token.x ?? token.position?.x, document.x ?? 0);
+  const liveY = _finitePositionValue(token.y ?? token.position?.y, document.y ?? 0);
+  const documentElevation = Number(document.elevation ?? 0);
+  const state = _highestTokenElevationState(document, { x: liveX, y: liveY });
+  if (state.skip) {
+    _clearLiveTokenElevationOverride(token);
+    return;
+  }
+  const liveRegionElevation = state.found ? Number(state.elevation ?? 0) : 0;
+  const target = Math.max(
+    Number.isFinite(documentElevation) ? documentElevation : 0,
+    Number.isFinite(liveRegionElevation) ? liveRegionElevation : 0
+  );
+  // Only override when our target is strictly higher than what Foundry would
+  // sort the mesh at (document elevation). Lower or equal targets keep
+  // Foundry's own value so a flying token (high doc elevation) still renders
+  // above same-region geometry naturally.
+  if (target <= documentElevation + 0.001) {
+    _clearLiveTokenElevationOverride(token);
+    return;
+  }
+  if (mesh._seElevationOverride === undefined || Math.abs((mesh._seElevationOverride ?? 0) - target) > 0.001) {
+    mesh._seElevationOverride = target;
+    mesh.elevation = target;
+    if (canvas.primary) canvas.primary.sortDirty = true;
+  }
+}
+
+function _clearLiveTokenElevationOverride(token) {
+  const mesh = token?.mesh;
+  if (!mesh || mesh._seElevationOverride === undefined) return;
+  mesh.elevation = _tokenCurrentSortElevation(token);
+  delete mesh._seElevationOverride;
+  if (canvas.primary) canvas.primary.sortDirty = true;
+}
+
+function _tokenCurrentSortElevation(token) {
+  const documentElevation = Number(token?.document?.elevation);
+  const tokenElevation = Number(token?.elevation);
+  if (Number.isFinite(documentElevation) && Number.isFinite(tokenElevation)) return Math.max(documentElevation, tokenElevation);
+  if (Number.isFinite(documentElevation)) return documentElevation;
+  if (Number.isFinite(tokenElevation)) return tokenElevation;
+  return 0;
+}
+
 Hooks.on("drawToken", (token) => {
   // Clear stale mesh cache so the upcoming refreshToken re-caches from Foundry's finalized scale
   const m = token?.mesh;
@@ -1476,6 +1532,7 @@ Hooks.on("drawToken", (token) => {
 });
 Hooks.on("refreshToken", (token) => {
   _applyTokenScale(token);
+  _applyLiveTokenElevationOverride(token);
   _queueOverheadRefreshForToken(token);
 });
 Hooks.on("targetToken", (_user, token) => {

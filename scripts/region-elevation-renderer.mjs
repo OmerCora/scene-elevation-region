@@ -1108,15 +1108,18 @@ export class RegionElevationRenderer {
         const overlay = this._createOverlay(visual.paths, texture, geo, params);
         if (params.isHole && overlay) this._addRegionDisplayObject(overlay, params);
         const slope = this._createSlopeLayer(visual.paths, texture, geo, params);
-        // Extruded walls are part of the lifted plateau silhouette: they must
-        // occlude lower-elevation tokens/tiles for the 2.5D effect to read.
+        // Transition edges/walls are part of the lifted region silhouette:
+        // they must occlude lower-elevation tokens/tiles for the height read.
         if (slope) {
-          if (params.extrudedWalls) slope._sceneElevationOcclude = true;
+          slope._sceneElevationOcclude = true;
           this._addRegionDisplayObject(slope, params);
         }
         if (!params.isHole) {
           const edgeGlue = this._createEdgeGlue(visual.paths, params);
-          if (edgeGlue) this._addRegionDisplayObject(edgeGlue, params);
+          if (edgeGlue) {
+            edgeGlue._sceneElevationOcclude = true;
+            this._addRegionDisplayObject(edgeGlue, params);
+          }
         }
         // The displaced overlay top is the actual "roof" for plateau rendering;
         // route it through the elevation-sortable parent so any token or tile
@@ -3004,6 +3007,8 @@ function _perspectivePoint(geo, bounds = null, point = _perspectivePointMode()) 
       return _furthestSceneEdgePoint(geo);
     case PERSPECTIVE_POINTS.NEAREST_EDGE:
       return _nearestSceneEdgePoint(geo);
+    case PERSPECTIVE_POINTS.NEAREST_EDGE_PER_REGION:
+      return _nearestSceneEdgePointToBounds(geo, bounds);
     case PERSPECTIVE_POINTS.REGION_CENTER:
       return bounds?.center ?? { x: geo.x + geo.width / 2, y: geo.y + geo.height / 2 };
     case PERSPECTIVE_POINTS.REGION_TOP_LEFT:
@@ -3178,6 +3183,17 @@ function _furthestSceneEdgePoint(geo) {
 function _nearestSceneEdgePoint(geo) {
   const center = _cameraCenter(geo);
   const edges = _sceneEdgePointsFromCenter(geo, center).sort((left, right) => left.distance - right.distance);
+  return edges[0].point;
+}
+
+// Per-region variant of NEAREST_EDGE: each region picks the scene-boundary
+// point closest to its own centre (instead of the camera). Falls back to the
+// camera-relative nearest edge when no bounds are provided.
+function _nearestSceneEdgePointToBounds(geo, bounds) {
+  if (!bounds) return _nearestSceneEdgePoint(geo);
+  const cx = bounds.center?.x ?? ((bounds.minX + bounds.maxX) / 2);
+  const cy = bounds.center?.y ?? ((bounds.minY + bounds.maxY) / 2);
+  const edges = _sceneEdgePointsFromCenter(geo, { x: cx, y: cy }).sort((left, right) => left.distance - right.distance);
   return edges[0].point;
 }
 
