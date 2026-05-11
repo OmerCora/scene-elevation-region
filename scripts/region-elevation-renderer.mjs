@@ -794,6 +794,7 @@ export class RegionElevationRenderer {
     if (this._panRaf) cancelAnimationFrame(this._panRaf);
     this._panRaf = null;
     try { this._pointerEventTarget?.removeEventListener?.("pointermove", this._pointerMoveHandler); } catch (err) {}
+    try { this.clearNegativeParallaxClips(); } catch (err) {}
     try { this.resetTileParallax(); } catch (err) {}
     try { this.container?.parent?.removeChild(this.container); } catch (err) {}
     try { this.overheadContainer?.parent?.removeChild(this.overheadContainer); } catch (err) {}
@@ -885,6 +886,22 @@ export class RegionElevationRenderer {
     return params.overlayOffset ? { x: params.overlayOffset.x, y: params.overlayOffset.y } : { x: 0, y: 0 };
   }
 
+  applyNegativeParallaxClipForToken(token) {
+    const mesh = token?.mesh;
+    if (!mesh || !token?.document) return;
+    const clipState = this._negativeParallaxClipStateForToken(token.document);
+    this._applyNegativeParallaxClip(mesh, clipState);
+  }
+
+  clearNegativeParallaxClipForToken(token) {
+    this._clearNegativeParallaxClip(token?.mesh);
+  }
+
+  clearNegativeParallaxClips() {
+    for (const token of canvas?.tokens?.placeables ?? []) this.clearNegativeParallaxClipForToken(token);
+    for (const tile of canvas?.tiles?.placeables ?? []) this._clearNegativeParallaxClip(tile?.mesh);
+  }
+
   /**
    * Compute the parallax offset for a Tile based on its elevation and footprint.
    * Tiles inherit the overlay offset of the elevation region under their center
@@ -930,6 +947,7 @@ export class RegionElevationRenderer {
       mesh.position.y += dy;
     }
     mesh._sceneElevationParallaxOffset = offset;
+    this._applyNegativeParallaxClip(mesh, this._negativeParallaxClipStateForTile(tile.document));
   }
 
   /** Remove any tile parallax offset we previously applied. */
@@ -943,7 +961,79 @@ export class RegionElevationRenderer {
       mesh.position.x -= prev.x;
       mesh.position.y -= prev.y;
       mesh._sceneElevationParallaxOffset = null;
+      this._clearNegativeParallaxClip(mesh);
     }
+  }
+
+  _negativeParallaxClipStateForToken(tokenDocument, position = {}) {
+    if (!this.container || !this._scene || tokenDocument?.parent !== this._scene) return null;
+    const gridSize = canvas.grid.size ?? 100;
+    const x = Number(position.x ?? tokenDocument.x ?? 0);
+    const y = Number(position.y ?? tokenDocument.y ?? 0);
+    const width = Number(position.width ?? tokenDocument.width ?? 1);
+    const height = Number(position.height ?? tokenDocument.height ?? 1);
+    return this._negativeParallaxClipStateAtPoint({
+      x: x + (width * gridSize) / 2,
+      y: y + (height * gridSize) / 2,
+      elevation: Number(tokenDocument.elevation ?? 0)
+    }, { requireTokenScaling: true, allowOverheadSupport: true });
+  }
+
+  _negativeParallaxClipStateForTile(tileDocument) {
+    if (!this.container || !this._scene || tileDocument?.parent !== this._scene) return null;
+    const elevation = Number(tileDocument.elevation ?? 0);
+    if (!Number.isFinite(elevation) || Math.abs(elevation) < MIN_ELEVATION_DELTA) return null;
+    const x = Number(tileDocument.x ?? 0);
+    const y = Number(tileDocument.y ?? 0);
+    const width = Number(tileDocument.width ?? 0);
+    const height = Number(tileDocument.height ?? 0);
+    return this._negativeParallaxClipStateAtPoint({ x: x + width / 2, y: y + height / 2, elevation }, { allowOverheadSupport: true });
+  }
+
+  _negativeParallaxClipStateAtPoint(point, options = {}) {
+    const entries = this._entries.map(visual => visual.entry);
+    const state = getRegionElevationStateAtPoint(point, this._scene, entries, options);
+    if (!state.found) return null;
+    const visual = this._entries.find(candidate => candidate.entry === state.entry);
+    if (!visual) return null;
+    const params = this._visualParams.get(this._parallaxStateKey(visual));
+    if (!params?.isHole) return null;
+    return {
+      key: `${this._parallaxStateKey(visual)}|${_pathsSignature(visual.paths)}`,
+      paths: visual.paths
+    };
+  }
+
+  _applyNegativeParallaxClip(displayObject, clipState) {
+    if (!displayObject) return;
+    const parent = displayObject.parent;
+    if (!clipState?.paths?.length || !parent) {
+      this._clearNegativeParallaxClip(displayObject);
+      return;
+    }
+    const existing = displayObject._sceneElevationNegativeClip;
+    if (existing?.key === clipState.key && existing.mask?.parent === parent) {
+      if (displayObject.mask !== existing.mask) displayObject.mask = existing.mask;
+      return;
+    }
+    this._clearNegativeParallaxClip(displayObject);
+    const mask = this._createMask(clipState.paths);
+    parent.addChild(mask);
+    displayObject._sceneElevationNegativeClip = {
+      key: clipState.key,
+      mask,
+      previousMask: displayObject.mask ?? null
+    };
+    displayObject.mask = mask;
+  }
+
+  _clearNegativeParallaxClip(displayObject) {
+    const clip = displayObject?._sceneElevationNegativeClip;
+    if (!displayObject || !clip) return;
+    if (displayObject.mask === clip.mask) displayObject.mask = clip.previousMask ?? null;
+    try { clip.mask?.parent?.removeChild(clip.mask); } catch (err) {}
+    clip.mask?.destroy?.({ children: true });
+    delete displayObject._sceneElevationNegativeClip;
   }
 
   _updateCameraFocus(force) {

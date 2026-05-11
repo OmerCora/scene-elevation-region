@@ -741,6 +741,7 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
     }
     _applyNegativeRegionTokenVisibilityFloor(token);
     _applyTokenParallaxOffset(token);
+    RegionElevationRenderer.instance.applyNegativeParallaxClipForToken(token);
   } catch (err) {
     // Silent — drawToken can fire before our module/canvas is fully initialised.
   }
@@ -896,6 +897,7 @@ function _applyDisplayObjectParallaxOffset(displayObject, offset) {
 function _clearTokenParallaxCaches(token) {
   for (const target of _tokenParallaxTargets(token)) _clearDisplayObjectParallaxCache(target);
   _clearTokenParallaxHitArea(token);
+  RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
 }
 
 function _clearDisplayObjectParallaxCache(displayObject) {
@@ -1491,21 +1493,50 @@ function _applyLiveTokenElevationOverride(token) {
   // Foundry's own value so a flying token (high doc elevation) still renders
   // above same-region geometry naturally.
   if (target <= documentElevation + 0.001) {
+    if (mesh._seElevationOverride !== undefined) {
+      const now = performance.now();
+      const holdUntil = mesh._seElevationOverrideHoldUntil
+        ?? now + Math.max(_tokenElevationAnimationDuration(), 0) + 80;
+      mesh._seElevationOverrideHoldUntil = holdUntil;
+      if (now < holdUntil) {
+        _setLiveTokenElevationOverride(token, _tokenCurrentSortElevation(token), { preserveHold: true });
+        _scheduleLiveTokenElevationOverrideHold(token);
+        return;
+      }
+    }
     _clearLiveTokenElevationOverride(token);
     return;
   }
-  if (mesh._seElevationOverride === undefined || Math.abs((mesh._seElevationOverride ?? 0) - target) > 0.001) {
-    mesh._seElevationOverride = target;
-    mesh.elevation = target;
-    if (canvas.primary) canvas.primary.sortDirty = true;
-  }
+  _setLiveTokenElevationOverride(token, target);
+}
+
+function _setLiveTokenElevationOverride(token, target, { preserveHold = false } = {}) {
+  const mesh = token?.mesh;
+  if (!mesh) return;
+  if (!preserveHold && mesh._seElevationOverrideHoldUntil !== undefined) delete mesh._seElevationOverrideHoldUntil;
+  if (mesh._seElevationOverride !== undefined && Math.abs((mesh._seElevationOverride ?? 0) - target) <= 0.001 && Math.abs(Number(mesh.elevation ?? 0) - target) <= 0.001) return;
+  mesh._seElevationOverride = target;
+  mesh.elevation = target;
+  if (canvas.primary) canvas.primary.sortDirty = true;
+}
+
+function _scheduleLiveTokenElevationOverrideHold(token) {
+  const mesh = token?.mesh;
+  if (!mesh || mesh._seElevationOverrideFrame) return;
+  mesh._seElevationOverrideFrame = requestAnimationFrame(() => {
+    mesh._seElevationOverrideFrame = null;
+    _applyLiveTokenElevationOverride(token);
+  });
 }
 
 function _clearLiveTokenElevationOverride(token) {
   const mesh = token?.mesh;
   if (!mesh || mesh._seElevationOverride === undefined) return;
+  if (mesh._seElevationOverrideFrame) cancelAnimationFrame(mesh._seElevationOverrideFrame);
   mesh.elevation = _tokenCurrentSortElevation(token);
   delete mesh._seElevationOverride;
+  delete mesh._seElevationOverrideHoldUntil;
+  delete mesh._seElevationOverrideFrame;
   if (canvas.primary) canvas.primary.sortDirty = true;
 }
 
