@@ -1202,12 +1202,14 @@ export class RegionElevationRenderer {
         // they must occlude lower-elevation tokens/tiles for the height read.
         if (slope) {
           slope._sceneElevationOcclude = true;
+          slope._sceneElevationSortElevation = this._transitionFaceSortElevation(params);
           this._addRegionDisplayObject(slope, params);
         }
         if (!params.isHole) {
           const edgeGlue = this._createEdgeGlue(visual.paths, params);
           if (edgeGlue) {
             edgeGlue._sceneElevationOcclude = true;
+            edgeGlue._sceneElevationSortElevation = this._transitionFaceSortElevation(params);
             this._addRegionDisplayObject(edgeGlue, params);
           }
         }
@@ -1257,12 +1259,12 @@ export class RegionElevationRenderer {
       && Number(params?.visualElevation ?? params?.entry?.elevation ?? 0) > 0;
     const useOverheadLayer = params.entry?.overhead === true || occludeLowerElevations;
     if (useOverheadLayer) {
-      const sortElevation = this._overheadSortElevation(params);
+      const sortElevation = this._overheadSortElevation(params, displayObject);
       displayObject.zIndex = sortElevation;
       displayObject.elevation = sortElevation;
       displayObject.sort = sortElevation;
     }
-    const target = useOverheadLayer ? (this._ensureOverheadContainerParent(params) ?? this.container) : this.container;
+    const target = useOverheadLayer ? (this._ensureOverheadContainerParent(params, displayObject) ?? this.container) : this.container;
     target.addChild(displayObject);
     if (useOverheadLayer) {
       target.sortableChildren = true;
@@ -1271,10 +1273,10 @@ export class RegionElevationRenderer {
     }
   }
 
-  _ensureOverheadContainerParent(params) {
+  _ensureOverheadContainerParent(params, displayObject = null) {
     const parent = this._overheadRenderParent();
     if (!parent) return null;
-    const sortElevation = this._overheadSortElevation(params);
+    const sortElevation = this._overheadSortElevation(params, displayObject);
     const key = String(Math.round(sortElevation * 1000) / 1000);
     let container = this._overheadContainers.get(key);
     if (!container) {
@@ -1296,9 +1298,19 @@ export class RegionElevationRenderer {
     return container;
   }
 
-  _overheadSortElevation(params) {
+  _overheadSortElevation(params, displayObject = null) {
+    const override = Number(displayObject?._sceneElevationSortElevation);
+    if (Number.isFinite(override)) return override;
     const elevation = Number(params?.visualElevation ?? params?.entry?.elevation ?? 0);
     return (Number.isFinite(elevation) ? elevation : 0) - OVERHEAD_SORT_EPSILON;
+  }
+
+  _transitionFaceSortElevation(params) {
+    const top = Number(params?.visualElevation ?? params?.entry?.elevation ?? 0);
+    const support = Number(params?.supportElevation ?? 0);
+    const topSort = (Number.isFinite(top) ? top : 0) - OVERHEAD_SORT_EPSILON;
+    const supportSort = (Number.isFinite(support) ? support : 0) + OVERHEAD_SORT_EPSILON;
+    return Math.min(topSort - OVERHEAD_SORT_EPSILON, supportSort);
   }
 
   _overheadRenderParent() {
