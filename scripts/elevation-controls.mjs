@@ -10,12 +10,17 @@ import {
   sceneGeometry,
   getSceneElevationSetting,
   getSceneElevationSettings,
+  getSceneElevationClientEnabled,
   setSceneElevationSettings,
   setTransientSceneElevationSetting,
   clearTransientSceneElevationSettings
 } from "./config.mjs";
 import { RegionElevationRenderer, getActiveElevationRegions, getRegionElevationStateAtPoint } from "./region-elevation-renderer.mjs";
 import { openSceneElevationSettingsDialog } from "./scene-settings.mjs";
+
+function _sceneElevationClientEnabled() {
+  return getSceneElevationClientEnabled();
+}
 
 const MIN_POLYGON_POINTS = 3;
 const MIN_SHAPE_SIZE = 8;
@@ -96,24 +101,37 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
     const parent = canvas.primary ?? this;
     parent.sortableChildren = true;
 
+    // PrimaryCanvasGroup sorts children by `elevation` first, then `sort`,
+    // then `zIndex`. Region overhead overlays now attach to the token parent
+    // with high elevation values, so the authoring outlines/handles must use
+    // an elevation above any plausible region elevation to remain on top.
+    const AUTHORING_ELEVATION = 1_000_000;
     this.outlines = parent.addChild(new PIXI.Graphics());
     this.outlines.eventMode = "none";
     this.outlines.zIndex = 20_001;
+    this.outlines.elevation = AUTHORING_ELEVATION;
+    this.outlines.sort = 20_001;
     this.outlines.visible = false;
 
     this.preview = parent.addChild(new PIXI.Graphics());
     this.preview.eventMode = "none";
     this.preview.zIndex = 20_002;
+    this.preview.elevation = AUTHORING_ELEVATION;
+    this.preview.sort = 20_002;
     this.preview.visible = false;
 
     this.perspectiveHandle = parent.addChild(new PIXI.Graphics());
     this.perspectiveHandle.eventMode = "none";
     this.perspectiveHandle.zIndex = 20_003;
+    this.perspectiveHandle.elevation = AUTHORING_ELEVATION;
+    this.perspectiveHandle.sort = 20_003;
     this.perspectiveHandle.visible = false;
 
     this.sunHandle = parent.addChild(new PIXI.Graphics());
     this.sunHandle.eventMode = "none";
     this.sunHandle.zIndex = 20_004;
+    this.sunHandle.elevation = AUTHORING_ELEVATION;
+    this.sunHandle.sort = 20_004;
     this.sunHandle.visible = false;
 
     this.refreshElevationRegionVisibility();
@@ -191,6 +209,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   }
 
   refreshElevationRegionVisibility(forceVisible = null) {
+    if (!_sceneElevationClientEnabled()) forceVisible = false;
     const visible = forceVisible ?? (this._activeTool !== null && (game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS) || this._hoveredRegionId || this._editedRegionId || this._selectedRegionId || this._regionDrag));
     if (this.outlines) this.outlines.visible = visible;
     if (!visible) this._hideElevationHoverLabel();
@@ -212,6 +231,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   }
 
   queueOverheadRegionIconRefresh() {
+    if (!this.outlines?.visible && !this._overheadIconLayer) return;
     this._cancelQueuedOverheadIconRefresh();
     this._overheadIconRefreshFrame = requestAnimationFrame(() => {
       this._overheadIconRefreshFrame = null;
@@ -746,16 +766,20 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
   _domEventPosition(event) {
     const canvasElement = this._canvasElement();
     const rect = canvasElement.getBoundingClientRect();
-    const elementWidth = Number(canvasElement.width ?? rect.width) || rect.width || 1;
-    const elementHeight = Number(canvasElement.height ?? rect.height) || rect.height || 1;
-    const scaleX = elementWidth / (rect.width || 1);
-    const scaleY = elementHeight / (rect.height || 1);
-    const pixelX = (event.clientX - rect.left) * scaleX;
-    const pixelY = (event.clientY - rect.top) * scaleY;
+    // Cursor in CSS pixels relative to the canvas element. canvas.stage's
+    // worldTransform is also in CSS pixels (Foundry sets stage.position/scale
+    // in CSS units; the renderer's resolution / devicePixelRatio is applied
+    // separately at draw time). Do NOT pre-multiply by canvas.width/rect.width
+    // — that double-applies DPR and produces a cursor offset that grows with
+    // distance from the canvas origin.
+    const cssX = event.clientX - rect.left;
+    const cssY = event.clientY - rect.top;
     const transform = canvas.stage.worldTransform;
+    const a = transform.a || 1;
+    const d = transform.d || 1;
     return {
-      x: (pixelX - transform.tx) / transform.a,
-      y: (pixelY - transform.ty) / transform.d
+      x: (cssX - transform.tx) / a,
+      y: (cssY - transform.ty) / d
     };
   }
 
@@ -1251,6 +1275,7 @@ export class ElevationAuthoringLayer extends foundry.canvas.layers.InteractionLa
 export function registerElevationControls() {
   Hooks.on("getSceneControlButtons", controls => {
     if (!game.user.isGM) return;
+    if (!_sceneElevationClientEnabled()) return;
     controls.elevation = {
       name: "elevation",
       title: "SCENE_ELEVATION.Control.Group",
@@ -1335,6 +1360,12 @@ export function registerElevationControls() {
 
   Hooks.on("renderSceneControls", controls => {
     const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+    if (!_sceneElevationClientEnabled()) {
+      layer?.activateTool(null);
+      layer?.refreshElevationRegionVisibility(false);
+      _removeDrawElevationControl();
+      return;
+    }
     if (!layer) return;
     const activeControl = controls.control?.name === "elevation";
     if (activeControl) {
@@ -1357,6 +1388,10 @@ export function registerElevationControls() {
   for (const hook of ["createRegion", "updateRegion", "deleteRegion", "createRegionBehavior", "updateRegionBehavior", "deleteRegionBehavior"]) {
     Hooks.on(hook, (doc) => {
       const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+      if (!_sceneElevationClientEnabled()) {
+        layer?.refreshElevationRegionVisibility(false);
+        return;
+      }
       if (hook === "updateRegion") layer?._noteRegionChanged("update", doc);
       else if (hook === "deleteRegion") layer?._noteRegionChanged("delete", doc);
       layer?.refreshElevationRegionVisibility();
@@ -1372,6 +1407,10 @@ export function registerElevationControls() {
   for (const hook of ["refreshRegion", "drawRegion"]) {
     Hooks.on(hook, () => {
       const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+      if (!_sceneElevationClientEnabled()) {
+        layer?.refreshElevationRegionVisibility(false);
+        return;
+      }
       if (!layer || layer._activeTool === null) return;
       layer.refreshElevationRegionVisibility();
     });
@@ -1380,12 +1419,19 @@ export function registerElevationControls() {
   Hooks.on("updateScene", scene => {
     if (scene !== canvas?.scene) return;
     const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+    if (!_sceneElevationClientEnabled()) {
+      layer?.refreshElevationRegionVisibility(false);
+      return;
+    }
     layer?.refreshElevationRegionVisibility();
     layer?._drawPerspectiveHandle?.();
   });
 
   Hooks.on("canvasPan", () => {
-    canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.queueOverheadRegionIconRefresh();
+    if (!_sceneElevationClientEnabled()) return;
+    const layer = canvas?.[ElevationAuthoringLayer.LAYER_NAME];
+    if (!layer?.outlines?.visible && !layer?._overheadIconLayer) return;
+    layer.queueOverheadRegionIconRefresh();
   });
 }
 
@@ -1402,7 +1448,7 @@ function _queueDrawElevationControlRender(toolName) {
 }
 
 function _renderDrawElevationControl(toolName) {
-  if (!game.user?.isGM || !DRAW_TOOLS.has(toolName)) {
+  if (!game.user?.isGM || !_sceneElevationClientEnabled() || !DRAW_TOOLS.has(toolName)) {
     _removeDrawElevationControl();
     return;
   }

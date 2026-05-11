@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, EDGE_STRETCH_LIMITS, REGION_BEHAVIOR_TYPE, edgeStretchPercentValue, elevationPresetValues, getSceneElevationSetting, parallaxHeightContrastKey, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, EDGE_STRETCH_LIMITS, REGION_BEHAVIOR_TYPE, edgeStretchPercentValue, elevationPresetValues, getSceneElevationClientEnabled, getSceneElevationSetting, parallaxHeightContrastKey, setSceneElevationClientEnabled, shadowLengthKey } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -60,6 +60,33 @@ function _dsLog(tag, ...args) {
   console.log(`[scene-elevation-region:${tag}]`, label, ...args);
 }
 
+function _sceneElevationClientEnabled() {
+  return getSceneElevationClientEnabled();
+}
+
+function _refreshSceneElevationClientState(enabled = _sceneElevationClientEnabled()) {
+  setSceneElevationClientEnabled(enabled);
+  _clearPendingTokenVisualRefresh();
+  _clearPendingRegionOverheadRefresh();
+  try { globalThis.ui?.controls?.render?.({ force: true }); }
+  catch (err) { globalThis.ui?.controls?.render?.(true); }
+  if (!enabled) {
+    _clearPendingTokenElevationUpdates();
+    RegionElevationRenderer.instance.detach();
+    _resetAllTokenVisuals();
+    canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.activateTool(null);
+    canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.refreshElevationRegionVisibility(false);
+    return;
+  }
+  if (canvas?.scene) {
+    RegionElevationRenderer.instance.attach(canvas.scene);
+    void _refreshAllTokenElevations();
+    _refreshAllTokenScales();
+    requestAnimationFrame(_refreshAllTokenScales);
+  }
+  canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.refreshElevationRegionVisibility();
+}
+
 class ResetElevationDefaultsDialog extends foundry.applications.api.DialogV2 {
   constructor() {
     super({
@@ -103,6 +130,18 @@ Hooks.once("init", () => {
   game.settings.register(MODULE_ID, SETTINGS.WORLD_DEFAULTS_VERSION, {
     scope: "world", config: false, type: String, default: ""
   });
+
+  game.settings.register(MODULE_ID, SETTINGS.CLIENT_ENABLED, {
+    name: "SCENE_ELEVATION.Settings.ClientEnabled",
+    hint: "SCENE_ELEVATION.Settings.ClientEnabledHint",
+    scope: "client",
+    config: true,
+    type: Boolean,
+    default: true,
+    onChange: enabled => _refreshSceneElevationClientState(enabled)
+  });
+  try { setSceneElevationClientEnabled(game.settings.get(MODULE_ID, SETTINGS.CLIENT_ENABLED)); }
+  catch (err) { setSceneElevationClientEnabled(true); }
 
   game.settings.registerMenu(MODULE_ID, "resetDefaults", {
     name: "SCENE_ELEVATION.Settings.ResetDefaults",
@@ -349,7 +388,7 @@ Hooks.once("init", () => {
   CONFIG.RegionBehavior.typeIcons[REGION_BEHAVIOR_TYPE] = "fa-solid fa-arrows-up-to-line";
 
   const invalidate = () => {
-    if (!canvas?.scene) return;
+    if (!canvas?.scene || !_sceneElevationClientEnabled()) return;
     RegionElevationRenderer.instance.update();
     void _refreshAllTokenElevations();
     _refreshAllTokenScales();
@@ -365,6 +404,7 @@ Hooks.once("init", () => {
     getRegionElevationAtPoint,
     getRegionElevationStateAtPoint,
     getActiveElevationRegions,
+    isEnabled: _sceneElevationClientEnabled,
     setDebug: (on = true) => { _DEBUG = !!on; console.log(`[${MODULE_ID}] debug logging ${_DEBUG ? "enabled" : "disabled"}`); }
   };
   else console.error(`[${MODULE_ID}] Module not registered — manifest id likely doesn't match install folder.`);
@@ -383,6 +423,11 @@ Hooks.once("ready", async () => {
 /* -------------------------------------------- */
 
 Hooks.on("canvasReady", async () => {
+  if (!_sceneElevationClientEnabled()) {
+    RegionElevationRenderer.instance.detach();
+    _resetAllTokenVisuals();
+    return;
+  }
   RegionElevationRenderer.instance.attach(canvas.scene);
   void _refreshAllTokenElevations();
   _refreshAllTokenScales();
@@ -398,6 +443,7 @@ Hooks.on("canvasTearDown", () => {
 });
 
 Hooks.on("canvasPan", () => {
+  if (!_sceneElevationClientEnabled()) return;
   RegionElevationRenderer.instance.onPan();
 });
 
@@ -412,12 +458,14 @@ Hooks.on("refreshTile", (tile) => {
 });
 
 Hooks.on(`${MODULE_ID}.visualRefresh`, () => _queueTokenVisualRefresh());
+Hooks.on(`${MODULE_ID}.parallaxRefresh`, () => _queueTokenParallaxRefresh());
 
 Hooks.on("updateScene", (scene, change) => {
   if (scene !== canvas.scene) return;
   const geometryChanged = foundry.utils.hasProperty(change, "dimensions") || foundry.utils.hasProperty(change, "grid");
   const sceneSettingsChanged = foundry.utils.hasProperty(change, `flags.${MODULE_ID}.${SCENE_SETTINGS_FLAG}`);
   if (!geometryChanged && !sceneSettingsChanged) return;
+  if (!_sceneElevationClientEnabled()) return;
   RegionElevationRenderer.instance.update();
   if (geometryChanged || sceneSettingsChanged) void _refreshAllTokenElevations();
   _refreshAllTokenScales();
@@ -603,6 +651,7 @@ function _regionBehaviorFieldName(name) {
 
 function _tokenScaleFactor(token) {
   if (!game.modules.get(MODULE_ID)?.active) return 1;
+  if (!_sceneElevationClientEnabled()) return 1;
   if (!getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED)) return 1;
   if (!canvas?.scene || !token?.document) return 1;
   const entries = getActiveElevationRegions(canvas.scene);
@@ -647,10 +696,11 @@ function _tokenScalingElevationRange(sceneOrEntries = canvas?.scene) {
 
 function _tokenElevationState(tokenDocument, options = {}, position = {}, entries = null) {
   const points = _tokenElevationSamplePoints(tokenDocument, position);
-  let best = getRegionElevationStateAtPoint(points[0], canvas.scene, entries, options);
+  const activeEntries = entries ?? getActiveElevationRegions(canvas.scene);
+  let best = getRegionElevationStateAtPoint(points[0], canvas.scene, activeEntries, options);
   if (best.found && !options.preferHighest) return best;
   for (const point of points.slice(1)) {
-    const state = getRegionElevationStateAtPoint(point, canvas.scene, entries, options);
+    const state = getRegionElevationStateAtPoint(point, canvas.scene, activeEntries, options);
     if (!state.found) continue;
     if (!best.found || _tokenElevationStatePreferred(state, best, options)) best = state;
   }
@@ -693,7 +743,40 @@ function _finitePositionValue(value, fallback) {
   return Number.isFinite(number) ? number : Number(fallback) || 0;
 }
 
+// Safe live-position read for a Token. The PIXI DisplayObject `x`/`y` getters
+// dereference `this.position`, which is null on destroyed objects. Foundry can
+// fire refreshToken-style work just after a token is destroyed (animation
+// teardown, scene swap, libwrapper races), so we must guard every live read.
+function _safeTokenLivePoint(token, doc) {
+  if (!token || token.destroyed) {
+    return { x: Number(doc?.x ?? 0), y: Number(doc?.y ?? 0) };
+  }
+  let lx;
+  let ly;
+  try {
+    if (token.position) {
+      lx = token.position.x;
+      ly = token.position.y;
+    }
+  } catch (_err) { /* destroyed mid-read */ }
+  if (!Number.isFinite(lx)) lx = Number(doc?.x ?? 0);
+  if (!Number.isFinite(ly)) ly = Number(doc?.y ?? 0);
+  return { x: lx, y: ly };
+}
+
+// Quantize a live coordinate so per-frame parallax recomputes coalesce. The
+// region point-in-polygon test only changes outcome when the token crosses
+// region edges (typically tens of pixels apart). Quantizing to a quarter of
+// the grid is invisible to the eye but cuts the heavy scan from per-pixel to
+// per-grid-quarter during drag/animation.
+function _quantizeLivePosition(value, gridSize) {
+  if (!Number.isFinite(value)) return 0;
+  const step = Math.max(8, Math.floor((gridSize || 100) / 4));
+  return Math.round(value / step) * step;
+}
+
 function _highestTokenElevationState(tokenDocument, position = {}) {
+  if (!_sceneElevationClientEnabled()) return { skip: true, found: false, elevation: 0, entry: null };
   const mode = getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE) ?? TOKEN_ELEVATION_MODES.PER_REGION;
   switch (mode) {
     case TOKEN_ELEVATION_MODES.NEVER:
@@ -708,6 +791,41 @@ function _highestTokenElevationState(tokenDocument, position = {}) {
 
 function _applyTokenScale(token, { forceScale = false } = {}) {
   if (!token?.mesh) return;
+  if (!_sceneElevationClientEnabled()) {
+    _resetTokenVisuals(token);
+    return;
+  }
+  // Fast bail: scenes with no active elevation regions can't change scale,
+  // visibility floor, parallax offsets, or negative-parallax clips.
+  if (!getActiveElevationRegions(canvas?.scene).length) {
+    const m = token.mesh;
+    if (m._seBaseScaleX !== undefined && m._seLastFactor && m._seLastFactor !== 1) {
+      const sgnX = Math.sign(m._seBaseScaleX) || 1;
+      const sgnY = Math.sign(m._seBaseScaleY) || 1;
+      m.scale.set(Math.abs(m._seBaseScaleX) * sgnX, Math.abs(m._seBaseScaleY) * sgnY);
+      m._seLastFactor = 1;
+    }
+    return;
+  }
+  // Per-token cache: when the *inputs* to the heavy elevation/scaling/clip
+  // computation are unchanged we skip the recompute and only re-apply the
+  // already-known parallax offset to the mesh position. Foundry resets
+  // mesh.position to the live preview position every refreshToken, so we MUST
+  // always re-apply the offset (cheap), even on cache hit. Cache key covers
+  // doc state + visualParams version (which bumps when parallax/perspective
+  // change) + per-mesh visual flags.
+  const m = token.mesh;
+  const doc = token.document;
+  const renderer = RegionElevationRenderer.instance;
+  const cacheKey = forceScale
+    ? null
+    : `${doc?.x ?? 0}|${doc?.y ?? 0}|${doc?.elevation ?? 0}|${doc?.width ?? 1}|${doc?.height ?? 1}|${renderer?._visualParamsVersion ?? 0}|${getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED) ? 1 : 0}|${(doc?.uuid ?? doc?.id) && _tokensWithPendingMovement.has(doc.uuid ?? doc.id) ? 1 : 0}`;
+  if (cacheKey && m._seScaleCacheKey === cacheKey) {
+    // Cheap path: re-apply cached parallax offset only. Mesh position is
+    // overwritten by Foundry's drag/move animation between refreshes.
+    _reapplyCachedTokenParallaxOffset(token);
+    return;
+  }
   const uuid = token.document?.uuid ?? token.document?.id;
   try {
     const m = token.mesh;
@@ -742,6 +860,7 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
     _applyNegativeRegionTokenVisibilityFloor(token);
     _applyTokenParallaxOffset(token);
     RegionElevationRenderer.instance.applyNegativeParallaxClipForToken(token);
+    if (cacheKey) m._seScaleCacheKey = cacheKey;
   } catch (err) {
     // Silent — drawToken can fire before our module/canvas is fully initialised.
   }
@@ -829,19 +948,95 @@ function _setWritableObjectProperty(object, key, value) {
 }
 
 function _applyTokenParallaxOffset(token) {
-  if (!token?.document) return;
-  const offset = RegionElevationRenderer.instance.tokenParallaxOffset(token.document);
-  for (const target of _tokenParallaxTargets(token)) _applyDisplayObjectParallaxOffset(target, offset);
+  if (!token || token.destroyed || !token.document) return;
+  const doc = token.document;
+  const mesh = token.mesh;
+  if (mesh?.destroyed) return;
+  // Use the live (preview) position when the token is being dragged or
+  // animated. Foundry updates `token.position.x/y` every frame during drag
+  // preview but only updates `doc.x/y` on commit. We read it safely (the
+  // PIXI getter dereferences `position`, which is null on destroyed objects)
+  // and quantize so we don't re-run the heavy region scan every pixel.
+  const live = _safeTokenLivePoint(token, doc);
+  const gridSize = _canvasGridSize();
+  const liveX = _quantizeLivePosition(live.x, gridSize);
+  const liveY = _quantizeLivePosition(live.y, gridSize);
+  const elev = Number(doc.elevation ?? 0);
+  const renderer = RegionElevationRenderer.instance;
+  const version = renderer?._visualParamsVersion ?? 0;
+  // Per-mesh dedupe: refreshToken fires for many reasons unrelated to position
+  // (vision, targeting, animation ticks, neighbor updates). When neither the
+  // live position nor the parallax-params version has changed since the last
+  // call, the offset is identical and the targets are already positioned
+  // correctly — skip the polygon test, the target walk, the hit-area refit
+  // and the HUD reposition entirely. We still re-apply the cached offset to
+  // each frame's fresh mesh.position below so the image tracks the cursor.
+  if (mesh
+    && mesh._seParallaxAppliedX === liveX
+    && mesh._seParallaxAppliedY === liveY
+    && mesh._seParallaxAppliedElev === elev
+    && mesh._seParallaxAppliedVersion === version
+    && mesh._seParallaxAppliedW === doc.width
+    && mesh._seParallaxAppliedH === doc.height
+  ) {
+    const cached = mesh._seCachedParallaxOffset;
+    if (cached) {
+      const targets = token._seParallaxTargets ?? _tokenParallaxTargets(token);
+      for (const target of targets) _applyDisplayObjectParallaxOffset(target, cached);
+    }
+    return;
+  }
+  const offset = renderer.tokenParallaxOffset(doc, {
+    x: liveX, y: liveY, width: doc.width, height: doc.height
+  });
+  if (mesh) {
+    mesh._seCachedParallaxOffset = offset;
+    mesh._seParallaxAppliedX = liveX;
+    mesh._seParallaxAppliedY = liveY;
+    mesh._seParallaxAppliedElev = elev;
+    mesh._seParallaxAppliedVersion = version;
+    mesh._seParallaxAppliedW = doc.width;
+    mesh._seParallaxAppliedH = doc.height;
+  }
+  const targets = token._seParallaxTargets ?? _tokenParallaxTargets(token);
+  for (const target of targets) _applyDisplayObjectParallaxOffset(target, offset);
   _applyTokenParallaxHitArea(token, offset);
   _refreshTokenHudOffset(token);
 }
 
+// Cheap path used when the token's heavy state (scale / visibility floor /
+// negative-parallax clip) is unchanged since the last full refresh. Parallax
+// itself must always be recomputed against the live token position so the
+// image tracks the cursor during drag preview without latency.
+function _reapplyCachedTokenParallaxOffset(token) {
+  _applyTokenParallaxOffset(token);
+}
+
 function _tokenParallaxTargets(token) {
+  const signature = _tokenParallaxTargetSignature(token);
+  const cached = token?._seParallaxTargets;
+  if (cached && token._seParallaxTargetsSignature === signature && cached.every(target => target?.position && !target.destroyed)) return cached;
   const targets = [];
   _addTokenParallaxTarget(targets, token?.mesh);
   for (const key of TOKEN_PARALLAX_UI_KEYS) _addTokenParallaxTarget(targets, token?.[key]);
   _addNamedTokenParallaxTargets(targets, token);
-  return _dedupeNestedTokenTargets(targets);
+  const deduped = _dedupeNestedTokenTargets(targets);
+  if (token) {
+    token._seParallaxTargets = deduped;
+    token._seParallaxTargetsSignature = signature;
+  }
+  return deduped;
+}
+
+function _tokenParallaxTargetSignature(token) {
+  if (!token) return "";
+  const parts = [token.children?.length ?? 0, token.mesh?.children?.length ?? 0];
+  for (const key of TOKEN_PARALLAX_UI_KEYS) {
+    const target = token[key];
+    if (!target) continue;
+    parts.push(key, target.children?.length ?? 0, target.visible === false ? 0 : 1);
+  }
+  return parts.join("|");
 }
 
 function _addTokenParallaxTarget(targets, target) {
@@ -895,9 +1090,17 @@ function _applyDisplayObjectParallaxOffset(displayObject, offset) {
 }
 
 function _clearTokenParallaxCaches(token) {
-  for (const target of _tokenParallaxTargets(token)) _clearDisplayObjectParallaxCache(target);
+  const targets = token?._seParallaxTargets ?? _tokenParallaxTargets(token);
+  for (const target of targets) _clearDisplayObjectParallaxCache(target);
+  _clearTokenParallaxTargetCache(token);
   _clearTokenParallaxHitArea(token);
   RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
+}
+
+function _clearTokenParallaxTargetCache(token) {
+  if (!token) return;
+  delete token._seParallaxTargets;
+  delete token._seParallaxTargetsSignature;
 }
 
 function _clearDisplayObjectParallaxCache(displayObject) {
@@ -1122,10 +1325,39 @@ function _viewportOffsetToOffsetParent(element, offset) {
 
 function _refreshAllTokenScales() {
   if (!canvas?.tokens) return;
+  if (!_sceneElevationClientEnabled()) {
+    _resetAllTokenVisuals();
+    return;
+  }
   for (const t of canvas.tokens.placeables) _applyTokenScale(t);
 }
 
+function _refreshAllTokenParallax() {
+  if (!canvas?.tokens) return;
+  if (!_sceneElevationClientEnabled()) return;
+  if (!getActiveElevationRegions(canvas?.scene).length) return;
+  for (const t of canvas.tokens.placeables) {
+    if (!t?.mesh) continue;
+    _applyTokenParallaxOffset(t);
+    RegionElevationRenderer.instance.applyNegativeParallaxClipForToken(t);
+  }
+}
+
+let _tokenParallaxRefreshFrame = null;
+function _queueTokenParallaxRefresh() {
+  if (!_sceneElevationClientEnabled()) return;
+  if (_tokenParallaxRefreshFrame) return;
+  _tokenParallaxRefreshFrame = requestAnimationFrame(() => {
+    _tokenParallaxRefreshFrame = null;
+    _refreshAllTokenParallax();
+  });
+}
+
 function _queueTokenVisualRefresh() {
+  if (!_sceneElevationClientEnabled()) {
+    _resetAllTokenVisuals();
+    return;
+  }
   if (_tokenVisualRefreshFrame) return;
   _tokenVisualRefreshFrame = requestAnimationFrame(() => {
     _tokenVisualRefreshFrame = null;
@@ -1139,6 +1371,7 @@ function _clearPendingTokenVisualRefresh() {
 }
 
 function _queueRegionOverheadRefresh() {
+  if (!_sceneElevationClientEnabled()) return;
   if (_regionOverheadRefreshFrame) return;
   if (!RegionElevationRenderer.instance.hasOverheadRegions()) return;
   _regionOverheadRefreshFrame = requestAnimationFrame(() => {
@@ -1153,6 +1386,7 @@ function _clearPendingRegionOverheadRefresh() {
 }
 
 function _queueOverheadRefreshForToken(token) {
+  if (!_sceneElevationClientEnabled()) return;
   if (!token || !RegionElevationRenderer.instance.hasOverheadRegions()) return;
   const state = _tokenOverheadRefreshState(token);
   if (_tokenOverheadRefreshStates.get(token) === state) return;
@@ -1162,8 +1396,9 @@ function _queueOverheadRefreshForToken(token) {
 
 function _tokenOverheadRefreshState(token) {
   const document = token.document;
-  const x = _finitePositionValue(token.x ?? token.position?.x ?? document?.x, 0);
-  const y = _finitePositionValue(token.y ?? token.position?.y ?? document?.y, 0);
+  const live = _safeTokenLivePoint(token, document);
+  const x = _finitePositionValue(live.x, 0);
+  const y = _finitePositionValue(live.y, 0);
   const width = _finitePositionValue(document?.width, 1);
   const height = _finitePositionValue(document?.height, 1);
   const documentElevation = Number(document?.elevation);
@@ -1190,6 +1425,7 @@ function _canUserModifyToken(tokenDocument) {
 }
 
 async function _syncTokenElevation(tokenDocument, position = {}, options = {}) {
+  if (!_sceneElevationClientEnabled()) return;
   if (!canvas?.scene || tokenDocument?.parent !== canvas.scene) return;
   // Only the user(s) who can actually modify this token should write the
   // elevation update. Other clients (e.g. players watching the GM move a
@@ -1227,6 +1463,7 @@ async function _syncTokenElevation(tokenDocument, position = {}, options = {}) {
 }
 
 function _queueTokenElevationAfterMovement(tokenDocument, change = {}, options = {}) {
+  if (!_sceneElevationClientEnabled()) return;
   if (!canvas?.scene || tokenDocument?.parent !== canvas.scene) return;
   const uuid = tokenDocument.uuid ?? tokenDocument.id;
   const pending = _pendingTokenElevationUpdates.get(uuid);
@@ -1260,7 +1497,6 @@ function _queueTokenElevationAfterMovement(tokenDocument, change = {}, options =
     const waitingForAnimation = elapsed < animationDuration;
     const waitingForPosition = !_tokenMovementSettled(tokenDocument) && elapsed < TOKEN_ELEVATION_SETTLE_TIMEOUT_MS;
     if (waitingForAnimation || waitingForPosition) {
-      _queueOverheadRefreshForToken(tokenDocument.object);
       const frame = requestAnimationFrame(waitForMovement);
       _pendingTokenElevationUpdates.set(uuid, { frame });
       return;
@@ -1299,6 +1535,7 @@ function _tokenStillWithinMovementStartRegion(tokenDocument, position, startStat
 }
 
 async function _promoteNegativeTokenElevationForVisibleMovement(tokenDocument, position = {}) {
+  if (!_sceneElevationClientEnabled()) return;
   const uuid = tokenDocument?.uuid ?? tokenDocument?.id;
   if (!uuid || _syncingTokenElevation.has(uuid)) return;
   if (!_canUserModifyToken(tokenDocument)) return;
@@ -1318,6 +1555,7 @@ async function _promoteNegativeTokenElevationForVisibleMovement(tokenDocument, p
 }
 
 function _stripMovementElevationChange(tokenDocument, change = {}) {
+  if (!_sceneElevationClientEnabled()) return null;
   if (!canvas?.scene || tokenDocument?.parent !== canvas.scene) return null;
   if (!_hasTokenMovementDelta(tokenDocument, change) || !foundry.utils.hasProperty(change, "elevation")) return null;
   const uuid = tokenDocument.uuid ?? tokenDocument.id;
@@ -1335,6 +1573,7 @@ function _stripMovementElevationChange(tokenDocument, change = {}) {
 }
 
 function _correctMovementElevationChange(tokenDocument, change = {}) {
+  if (!_sceneElevationClientEnabled()) return null;
   if (!canvas?.scene || tokenDocument?.parent !== canvas.scene) return null;
   if (!foundry.utils.hasProperty(change, "elevation")) return null;
   const uuid = tokenDocument.uuid ?? tokenDocument.id;
@@ -1370,6 +1609,7 @@ function _correctMovementElevationChange(tokenDocument, change = {}) {
 }
 
 function _markTokenMovementStarting(tokenDocument) {
+  if (!_sceneElevationClientEnabled()) return;
   if (!canvas?.scene || tokenDocument?.parent !== canvas.scene) return;
   const uuid = tokenDocument.uuid ?? tokenDocument.id;
   if (!uuid) return;
@@ -1436,9 +1676,9 @@ function _tokenMovementSettled(tokenDocument) {
 function _tokenObjectOutOfSyncWithDocument(token) {
   const tokenDocument = token?.document;
   if (!tokenDocument) return false;
-  const x = Number(token.x ?? token.position?.x ?? tokenDocument.x ?? 0);
-  const y = Number(token.y ?? token.position?.y ?? tokenDocument.y ?? 0);
-  return Math.abs(x - Number(tokenDocument.x ?? 0)) >= 0.5 || Math.abs(y - Number(tokenDocument.y ?? 0)) >= 0.5;
+  if (token.destroyed) return false;
+  const live = _safeTokenLivePoint(token, tokenDocument);
+  return Math.abs(live.x - Number(tokenDocument.x ?? 0)) >= 0.5 || Math.abs(live.y - Number(tokenDocument.y ?? 0)) >= 0.5;
 }
 
 function _clearPendingTokenElevationUpdates() {
@@ -1460,8 +1700,29 @@ function _cancelPendingTokenElevationUpdate(tokenDocument) {
 }
 
 async function _refreshAllTokenElevations() {
+  if (!_sceneElevationClientEnabled()) return;
   if (!canvas?.tokens) return;
   await Promise.all(canvas.tokens.placeables.map(token => _syncTokenElevation(token.document)));
+}
+
+function _resetAllTokenVisuals() {
+  if (!canvas?.tokens) return;
+  for (const token of canvas.tokens.placeables) _resetTokenVisuals(token);
+}
+
+function _resetTokenVisuals(token) {
+  const mesh = token?.mesh;
+  if (mesh?._seBaseScaleX !== undefined && mesh?._seBaseScaleY !== undefined) mesh.scale?.set?.(mesh._seBaseScaleX, mesh._seBaseScaleY);
+  if (mesh) {
+    delete mesh._seBaseScaleX;
+    delete mesh._seBaseScaleY;
+    delete mesh._seLastFactor;
+    delete mesh._seScaleCacheKey;
+    delete mesh._seCachedParallaxOffset;
+  }
+  _clearNegativeRegionTokenVisibilityFloor(token);
+  _clearLiveTokenElevationOverride(token);
+  _clearTokenParallaxCaches(token);
 }
 
 // While a token is animating into a higher-elevation region, document.elevation
@@ -1472,12 +1733,43 @@ async function _refreshAllTokenElevations() {
 // region. The document elevation itself is still updated by the existing
 // settle pipeline; this only affects PrimaryCanvasGroup sort order.
 function _applyLiveTokenElevationOverride(token) {
+  if (!_sceneElevationClientEnabled()) {
+    _clearLiveTokenElevationOverride(token);
+    return;
+  }
   const mesh = token?.mesh;
   const document = token?.document;
-  if (!mesh || !document || !canvas?.scene || document.parent !== canvas.scene) return;
-  const liveX = _finitePositionValue(token.x ?? token.position?.x, document.x ?? 0);
-  const liveY = _finitePositionValue(token.y ?? token.position?.y, document.y ?? 0);
+  if (!mesh || mesh.destroyed || !document || !canvas?.scene || document.parent !== canvas.scene) return;
+  if (token.destroyed) return;
+  const live = _safeTokenLivePoint(token, document);
+  const gridSize = _canvasGridSize();
+  // Quantize so we only re-evaluate the region point-state when the token
+  // crosses a grid-quarter boundary (region edges live at tens of pixels).
+  const liveX = _quantizeLivePosition(live.x, gridSize);
+  const liveY = _quantizeLivePosition(live.y, gridSize);
   const documentElevation = Number(document.elevation ?? 0);
+  // Fast bail: no active elevation regions in scene → nothing to override.
+  const activeEntries = getActiveElevationRegions(canvas.scene);
+  if (!activeEntries.length) {
+    if (mesh._seElevationOverride !== undefined) _clearLiveTokenElevationOverride(token);
+    mesh._seLiveOverrideX = liveX;
+    mesh._seLiveOverrideY = liveY;
+    mesh._seLiveOverrideDocElev = documentElevation;
+    mesh._seLiveOverrideEntriesRef = activeEntries;
+    return;
+  }
+  // Skip when nothing relevant has changed since last evaluation.
+  if (
+    mesh._seLiveOverrideEntriesRef === activeEntries
+    && mesh._seLiveOverrideX === liveX
+    && mesh._seLiveOverrideY === liveY
+    && mesh._seLiveOverrideDocElev === documentElevation
+    && mesh._seElevationOverrideHoldUntil === undefined
+  ) return;
+  mesh._seLiveOverrideX = liveX;
+  mesh._seLiveOverrideY = liveY;
+  mesh._seLiveOverrideDocElev = documentElevation;
+  mesh._seLiveOverrideEntriesRef = activeEntries;
   const state = _highestTokenElevationState(document, { x: liveX, y: liveY });
   if (state.skip) {
     _clearLiveTokenElevationOverride(token);
@@ -1550,18 +1842,35 @@ function _tokenCurrentSortElevation(token) {
 }
 
 Hooks.on("drawToken", (token) => {
+  if (!_sceneElevationClientEnabled()) {
+    _resetTokenVisuals(token);
+    return;
+  }
   // Clear stale mesh cache so the upcoming refreshToken re-caches from Foundry's finalized scale
   const m = token?.mesh;
   if (m) {
     delete m._seBaseScaleX;
     delete m._seBaseScaleY;
     delete m._seLastFactor;
+    delete m._seScaleCacheKey;
+    delete m._seCachedParallaxOffset;
   }
   _clearTokenParallaxCaches(token);
   _applyTokenScale(token);
   _queueOverheadRefreshForToken(token);
 });
 Hooks.on("refreshToken", (token) => {
+  if (!token || token.destroyed) return;
+  const uuid = token?.document?.uuid ?? token?.document?.id;
+  if (uuid && _tokensWithPendingMovement.has(uuid)) {
+    _applyLiveTokenElevationOverride(token);
+    // Foundry overwrites mesh.position to the live preview position every
+    // refresh during animation/drag. Re-apply parallax against the live
+    // position so the token image stays locked to the cursor instead of
+    // snapping to the un-offset doc position for one frame.
+    _applyTokenParallaxOffset(token);
+    return;
+  }
   _applyTokenScale(token);
   _applyLiveTokenElevationOverride(token);
   _queueOverheadRefreshForToken(token);
@@ -1574,6 +1883,7 @@ Hooks.on("targetToken", (_user, token) => {
   });
 });
 Hooks.on("createToken", (document) => {
+  if (!_sceneElevationClientEnabled()) return;
   if (document.parent !== canvas?.scene) return;
   void _syncTokenElevation(document);
   _queueRegionOverheadRefresh();
@@ -1584,6 +1894,7 @@ Hooks.on("deleteToken", (document) => {
 });
 Hooks.on("controlToken", () => _queueRegionOverheadRefresh());
 Hooks.on("preUpdateToken", (document, change, options, userId) => {
+  if (!_sceneElevationClientEnabled()) return;
   const hasMove = _hasTokenMovementDelta(document, change);
   if (options) options[TOKEN_MOVEMENT_DELTA_OPTION] = hasMove;
   const uuid = document.uuid ?? document.id;
@@ -1604,6 +1915,10 @@ Hooks.on("preUpdateToken", (document, change, options, userId) => {
   _markTokenMovementStarting(document);
 });
 Hooks.on("updateToken", (document, change, options) => {
+  if (!_sceneElevationClientEnabled()) {
+    _resetTokenVisuals(document.object);
+    return;
+  }
   const json = (() => { try { return JSON.stringify(change); } catch { return "<unstringifiable>"; } })();
   const uuid = document.uuid ?? document.id;
   const hasTrackedMovementDelta = uuid && _tokenUpdateMovementDeltas.has(uuid);

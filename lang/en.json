@@ -31,6 +31,8 @@
       "Saved": "Scene elevation settings saved."
     },
     "Settings": {
+      "ClientEnabled": "Enable Scene Elevation",
+      "ClientEnabledHint": "Client-only. Disable all Scene Elevation visuals and automation on this browser for performance or motion sensitivity. World settings and other users are unchanged.",
       "ResetDefaults": "Reset Elevation Defaults",
       "ResetDefaultsLabel": "Reset Defaults",
       "ResetDefaultsHint": "Set the module elevation defaults to the recommended visual profile.",

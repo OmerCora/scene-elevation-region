@@ -275,9 +275,28 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
   })
 });
 
+let _activeElevationRegionsCacheScene = null;
+let _activeElevationRegionsCacheValue = null;
+
+export function invalidateActiveElevationRegionsCache(scene = null) {
+  if (scene && scene !== _activeElevationRegionsCacheScene) return;
+  _activeElevationRegionsCacheScene = null;
+  _activeElevationRegionsCacheValue = null;
+}
+
 export function getActiveElevationRegions(scene = canvas?.scene, pathCache = null) {
+  if (!pathCache && scene && scene === _activeElevationRegionsCacheScene && _activeElevationRegionsCacheValue) {
+    return _activeElevationRegionsCacheValue;
+  }
   const regions = scene?.regions;
-  if (!regions?.size) return [];
+  if (!regions?.size) {
+    if (!pathCache && scene) {
+      _activeElevationRegionsCacheScene = scene;
+      _activeElevationRegionsCacheValue = [];
+      return _activeElevationRegionsCacheValue;
+    }
+    return [];
+  }
   const entries = [];
   for (const region of regions) {
     const behavior = region.behaviors?.find(b => b.type === REGION_BEHAVIOR_TYPE && !b.disabled);
@@ -337,6 +356,10 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
       modifyTokenElevation: !overhead && behavior.system?.modifyTokenElevation !== false,
       modifyTokenScaling: !overhead && behavior.system?.modifyTokenScaling !== false
     });
+  }
+  if (!pathCache && scene) {
+    _activeElevationRegionsCacheScene = scene;
+    _activeElevationRegionsCacheValue = entries;
   }
   return entries;
 }
@@ -750,6 +773,9 @@ export class RegionElevationRenderer {
     this._panRaf = null;
     this._parallaxState = new Map();
     this._visualParams = new Map();
+    this._visualParamsVersion = 0;
+    this._entriesArr = [];
+    this._visualByEntry = new Map();
     this._generatedTextureCache = new Map();
     this._cliffWarpPathCache = new WeakMap();
     this._needsParallaxFrame = false;
@@ -793,6 +819,7 @@ export class RegionElevationRenderer {
   detach() {
     if (this._panRaf) cancelAnimationFrame(this._panRaf);
     this._panRaf = null;
+    invalidateActiveElevationRegionsCache();
     try { this._pointerEventTarget?.removeEventListener?.("pointermove", this._pointerMoveHandler); } catch (err) {}
     try { this.clearNegativeParallaxClips(); } catch (err) {}
     try { this.resetTileParallax(); } catch (err) {}
@@ -823,6 +850,7 @@ export class RegionElevationRenderer {
 
   update() {
     if (!this.container || !this._scene) return;
+    invalidateActiveElevationRegionsCache(this._scene);
     this._parallaxState.clear();
     this._clearRegionChildren();
     this._clearGeneratedTextureCache();
@@ -854,7 +882,15 @@ export class RegionElevationRenderer {
     if (this._panRaf) return;
     this._panRaf = requestAnimationFrame(() => {
       this._panRaf = null;
-      if (this._updateCameraFocus(false)) this._drawRegions();
+      // Camera pan only affects parallax offsets / perspective, not token
+      // elevation/scaling. Suppress the heavy visualRefresh hook (which
+      // re-runs _applyTokenScale for every token) and emit a lighter
+      // parallaxRefresh so token parallax offsets stay in sync with the
+      // camera without per-token elevation re-sampling.
+      if (this._updateCameraFocus(false)) {
+        this._drawRegions({ emitVisualRefresh: false });
+        Hooks.callAll(`${MODULE_ID}.parallaxRefresh`);
+      }
     });
   }
 
@@ -876,9 +912,9 @@ export class RegionElevationRenderer {
       y: y + (height * gridSize) / 2,
       elevation: Number(tokenDocument.elevation ?? 0)
     };
-    const state = getRegionElevationStateAtPoint(point, this._scene, this._entries.map(visual => visual.entry), { requireTokenScaling: true, allowOverheadSupport: true });
+    const state = getRegionElevationStateAtPoint(point, this._scene, this._entriesArr ?? this._entries.map(visual => visual.entry), { requireTokenScaling: true, allowOverheadSupport: true });
     if (!state.found) return { x: 0, y: 0 };
-    const visual = this._entries.find(candidate => candidate.entry === state.entry);
+    const visual = this._visualByEntry?.get(state.entry) ?? this._entries.find(candidate => candidate.entry === state.entry);
     if (!visual) return { x: 0, y: 0 };
     const params = this._visualParams.get(this._parallaxStateKey(visual));
     if (!params) return { x: 0, y: 0 };
@@ -917,9 +953,9 @@ export class RegionElevationRenderer {
     const width = Number(tileDocument.width ?? 0);
     const height = Number(tileDocument.height ?? 0);
     const point = { x: x + width / 2, y: y + height / 2, elevation };
-    const state = getRegionElevationStateAtPoint(point, this._scene, this._entries.map(visual => visual.entry), { allowOverheadSupport: true });
+    const state = getRegionElevationStateAtPoint(point, this._scene, this._entriesArr ?? this._entries.map(visual => visual.entry), { allowOverheadSupport: true });
     if (!state.found) return { x: 0, y: 0 };
-    const visual = this._entries.find(candidate => candidate.entry === state.entry);
+    const visual = this._visualByEntry?.get(state.entry) ?? this._entries.find(candidate => candidate.entry === state.entry);
     if (!visual) return { x: 0, y: 0 };
     const params = this._visualParams.get(this._parallaxStateKey(visual));
     if (!params) return { x: 0, y: 0 };
@@ -991,10 +1027,10 @@ export class RegionElevationRenderer {
   }
 
   _negativeParallaxClipStateAtPoint(point, options = {}) {
-    const entries = this._entries.map(visual => visual.entry);
+    const entries = this._entriesArr ?? this._entries.map(visual => visual.entry);
     const state = getRegionElevationStateAtPoint(point, this._scene, entries, options);
     if (!state.found) return null;
-    const visual = this._entries.find(candidate => candidate.entry === state.entry);
+    const visual = this._visualByEntry?.get(state.entry) ?? this._entries.find(candidate => candidate.entry === state.entry);
     if (!visual) return null;
     const params = this._visualParams.get(this._parallaxStateKey(visual));
     if (!params?.isHole) return null;
@@ -1147,6 +1183,12 @@ export class RegionElevationRenderer {
   _drawRegions({ clear = true, emitVisualRefresh = clear } = {}) {
     if (clear) this._clearRegionChildren();
     this._visualParams.clear();
+    this._visualParamsVersion = (this._visualParamsVersion + 1) | 0;
+    // Per-frame cache: entries-array and entry→visual map. Avoids
+    // `entries.map()` and `.find()` allocations on every per-token call to
+    // tokenParallaxOffset / clip-state during drag/animation.
+    this._entriesArr = this._entries.map(visual => visual.entry);
+    this._visualByEntry = new Map(this._entries.map(visual => [visual.entry, visual]));
     this._needsParallaxFrame = false;
     if (!this.container || !this._entries.length) return;
 
@@ -1239,7 +1281,8 @@ export class RegionElevationRenderer {
     this._panRaf = requestAnimationFrame(() => {
       this._panRaf = null;
       this._updateCameraFocus(false);
-      this._drawRegions();
+      this._drawRegions({ emitVisualRefresh: false });
+      Hooks.callAll(`${MODULE_ID}.parallaxRefresh`);
     });
   }
 
@@ -1277,7 +1320,9 @@ export class RegionElevationRenderer {
     const parent = this._overheadRenderParent();
     if (!parent) return null;
     const sortElevation = this._overheadSortElevation(params, displayObject);
-    const key = String(Math.round(sortElevation * 1000) / 1000);
+    // 6-decimal precision so transition-face tie-breakers (which differ from
+    // each other by ~1e-5 per unit of extruded height) get distinct buckets.
+    const key = String(Math.round(sortElevation * 1_000_000) / 1_000_000);
     let container = this._overheadContainers.get(key);
     if (!container) {
       container = new PIXI.Container();
@@ -1308,9 +1353,19 @@ export class RegionElevationRenderer {
   _transitionFaceSortElevation(params) {
     const top = Number(params?.visualElevation ?? params?.entry?.elevation ?? 0);
     const support = Number(params?.supportElevation ?? 0);
-    const topSort = (Number.isFinite(top) ? top : 0) - OVERHEAD_SORT_EPSILON;
-    const supportSort = (Number.isFinite(support) ? support : 0) + OVERHEAD_SORT_EPSILON;
-    return Math.min(topSort - OVERHEAD_SORT_EPSILON, supportSort);
+    const safeTop = Number.isFinite(top) ? top : 0;
+    const safeSupport = Number.isFinite(support) ? support : 0;
+    const heightAboveSupport = Math.max(0.001, safeTop - safeSupport);
+    // Place every transition face just above its support layer so it occludes
+    // anything resting on that support, but well below any overhead overlay
+    // (which sorts at top - epsilon, i.e. at least ~1 unit above for typical
+    // elevations). Within the (support, support+epsilon) band, taller walls
+    // sort LOWER so geometrically shorter walls render IN FRONT — a short
+    // shed wall (height=1) ranks above a tall building wall (height=10) when
+    // both stand on the same ground, matching the "closer to camera" rule
+    // we already use for overlays.
+    const tieBreak = OVERHEAD_SORT_EPSILON / (1 + heightAboveSupport);
+    return safeSupport + tieBreak;
   }
 
   _overheadRenderParent() {

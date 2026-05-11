@@ -3,6 +3,7 @@
 export const MODULE_ID = "scene-elevation-region";
 
 export const SETTINGS = {
+  CLIENT_ENABLED: "clientEnabled",
   PRESET: "preset",
   PARALLAX: "parallaxStrength",
   PARALLAX_HEIGHT_CONTRAST: "parallaxHeightContrast",
@@ -22,6 +23,21 @@ export const SETTINGS = {
   ELEVATION_SCALE: "elevationScale",
   WORLD_DEFAULTS_VERSION: "worldDefaultsVersion"
 };
+
+let _sceneElevationClientEnabled = true;
+let _sceneElevationClientEnabledInitialized = false;
+
+export function setSceneElevationClientEnabled(enabled) {
+  _sceneElevationClientEnabled = enabled !== false;
+  _sceneElevationClientEnabledInitialized = true;
+  return _sceneElevationClientEnabled;
+}
+
+export function getSceneElevationClientEnabled() {
+  if (_sceneElevationClientEnabledInitialized) return _sceneElevationClientEnabled;
+  try { return setSceneElevationClientEnabled(game.settings.get(MODULE_ID, SETTINGS.CLIENT_ENABLED)); }
+  catch (err) { return _sceneElevationClientEnabled; }
+}
 
 export const SCENE_SETTINGS_FLAG = "sceneSettings";
 
