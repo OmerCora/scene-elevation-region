@@ -6,7 +6,7 @@
 
 System-agnostic visual scene elevation for Foundry VTT v14 using native Foundry Regions.
 
-Add the custom **Elevation** behavior to a Region, set its elevation and shadow strength, and choose whether it modifies token elevation and token scaling. The module duplicates the map art inside each elevated Region as a clipped overlay, draws shadows around and adds optional transition texture at Region edges. Adds parallax with various settings. Module settings act as scene defaults; each scene can override the preset-managed visual and token settings from the Elevation controls. I added some presets to play around
+Add the custom **Elevation** behavior to a Region, set its elevation and shadow strength, and choose whether it modifies token elevation and token scaling. The module duplicates the map art inside each elevated Region as a clipped overlay, "elevates" the overlay and adds optional transition texture at Region edges. Adds parallax with various settings. Module settings act as scene defaults; each scene can override the preset-managed visual and token settings from the Elevation controls. I added some presets to play around. You can give depth to your maps and create 2.5D scenes with parallax.
 
 ## 2.5D Parallax
 
