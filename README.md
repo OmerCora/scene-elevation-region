@@ -48,6 +48,7 @@ https://github.com/user-attachments/assets/fe959e6b-8faf-43e7-a4df-e03669b6c7f8
 https://github.com/user-attachments/assets/1c185628-d4bb-4640-be47-d705561d146a
 
 
+<img width="1572" height="1012" alt="Screenshot 2026-05-11 153559" src="https://github.com/user-attachments/assets/5b7bb7a5-919c-4d30-82ab-ed9837398c95" />
 
 
 ## Support
