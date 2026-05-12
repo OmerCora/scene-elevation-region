@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, EDGE_STRETCH_LIMITS, REGION_BEHAVIOR_TYPE, edgeStretchPercentValue, elevationPresetValues, getSceneElevationClientEnabled, getSceneElevationSetting, parallaxHeightContrastKey, setSceneElevationClientEnabled, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, EDGE_STRETCH_LIMITS, REGION_BEHAVIOR_TYPE, ELEVATED_GRID_MODES, edgeStretchPercentValue, elevatedGridModeValue, elevationPresetValues, getSceneElevationClientEnabled, getSceneElevationSetting, parallaxHeightContrastKey, setSceneElevationClientEnabled, shadowLengthKey } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -6,7 +6,9 @@ import {
   getRegionElevationAtPoint,
   getRegionElevationStateAtPoint,
   getActiveElevationRegions,
-  regionContainsPoint
+  isTemporaryParallaxDisabled,
+  regionContainsPoint,
+  setTemporaryParallaxDisabled
 } from "./region-elevation-renderer.mjs";
 
 const TOKEN_ELEVATION_MIN_MOVEMENT_DELAY_MS = 250;
@@ -25,6 +27,7 @@ const TOKEN_PARALLAX_TARGET_SCAN_LIMIT = 80;
 const TOKEN_PARALLAX_HIT_AREA_EPSILON = 0.5;
 const ZERO_PARALLAX_OFFSET = Object.freeze({ x: 0, y: 0 });
 const TOKEN_HUD_POSITION_PATCHED = "_sceneElevationRegionHudPositionPatched";
+const TOKEN_RULER_GUIDE_PATCHED = "_sceneElevationRegionRulerGuidePatched";
 const MOUSE_DRIFT_WORLD_DEFAULTS_VERSION = "mouse-drift-defaults-v2";
 const REGION_PRESET_FIELD_MAP = Object.freeze({
   [SCENE_SETTING_KEYS.PARALLAX]: "parallaxStrengthOverride",
@@ -48,6 +51,11 @@ const _tokenOverheadRefreshStates = new WeakMap();
 const _tokenUpdateMovementDeltas = new Map();
 let _tokenVisualRefreshFrame = null;
 let _regionOverheadRefreshFrame = null;
+let _elevatedGridRefreshFrame = null;
+let _hoveredElevatedGridToken = null;
+let _dragElevatedGridToken = null;
+let _rulerElevatedGridContext = null;
+let _rulerElevatedGridClearFrame = null;
 
 // Diagnostic logging for token-elevation issues. Enable via:
 //   game.modules.get("scene-elevation-region").api.setDebug(true)
@@ -73,6 +81,7 @@ function _refreshSceneElevationClientState(enabled = _sceneElevationClientEnable
   catch (err) { globalThis.ui?.controls?.render?.(true); }
   if (!enabled) {
     _clearPendingTokenElevationUpdates();
+    _clearPendingElevatedGridRefresh();
     RegionElevationRenderer.instance.detach();
     _resetAllTokenVisuals();
     canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.activateTool(null);
@@ -123,11 +132,37 @@ async function _resetWorldElevationDefaults() {
   _refreshAllTokenScales();
 }
 
+function _registerKeybindings() {
+  game.keybindings.register(MODULE_ID, "toggleParallaxOverlay", {
+    name: "SCENE_ELEVATION.Keybindings.ToggleParallaxOverlay",
+    hint: "SCENE_ELEVATION.Keybindings.ToggleParallaxOverlayHint",
+    editable: [{ key: "KeyO" }],
+    restricted: false,
+    onDown: () => _toggleTemporaryParallaxOverlay()
+  });
+}
+
+function _toggleTemporaryParallaxOverlay() {
+  const disabled = !isTemporaryParallaxDisabled();
+  setTemporaryParallaxDisabled(disabled);
+  RegionElevationRenderer.instance.update();
+  _refreshAllTokenScales();
+  _refreshAllTokenParallax();
+  _queueElevatedGridRefresh();
+  const message = disabled
+    ? "SCENE_ELEVATION.Notify.ParallaxTemporarilyOff"
+    : "SCENE_ELEVATION.Notify.ParallaxRestored";
+  ui.notifications.info(game.i18n.localize(message));
+  return true;
+}
+
 /* -------------------------------------------- */
 /*  Init                                         */
 /* -------------------------------------------- */
 
 Hooks.once("init", () => {
+  _registerKeybindings();
+
   game.settings.register(MODULE_ID, SETTINGS.WORLD_DEFAULTS_VERSION, {
     scope: "world", config: false, type: String, default: ""
   });
@@ -143,6 +178,21 @@ Hooks.once("init", () => {
   });
   try { setSceneElevationClientEnabled(game.settings.get(MODULE_ID, SETTINGS.CLIENT_ENABLED)); }
   catch (err) { setSceneElevationClientEnabled(true); }
+
+  game.settings.register(MODULE_ID, SETTINGS.SHOW_ELEVATED_GRID, {
+    name: "SCENE_ELEVATION.Settings.ShowElevatedGrid",
+    hint: "SCENE_ELEVATION.Settings.ShowElevatedGridHint",
+    scope: "client",
+    config: true,
+    type: String,
+    default: ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID,
+    choices: {
+      [ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID]: "SCENE_ELEVATION.Settings.ShowElevatedGridOverrideSceneGrid",
+      [ELEVATED_GRID_MODES.INTERACTION]: "SCENE_ELEVATION.Settings.ShowElevatedGridInteraction",
+      [ELEVATED_GRID_MODES.OFF]: "SCENE_ELEVATION.Settings.ShowElevatedGridOff"
+    },
+    onChange: () => _queueElevatedGridRefresh()
+  });
 
   game.settings.registerMenu(MODULE_ID, "resetDefaults", {
     name: "SCENE_ELEVATION.Settings.ResetDefaults",
@@ -411,9 +461,13 @@ Hooks.once("init", () => {
   else console.error(`[${MODULE_ID}] Module not registered — manifest id likely doesn't match install folder.`);
 });
 
-Hooks.once("setup", _patchTokenHudPositioning);
+Hooks.once("setup", () => {
+  _patchTokenHudPositioning();
+  _patchTokenRulerParallaxGuide();
+});
 Hooks.once("ready", async () => {
   _patchTokenHudPositioning();
+  _patchTokenRulerParallaxGuide();
   await _migrateParallaxHeightContrastSetting();
   await _migrateShadowLengthSetting();
   await _migrateMouseDriftWorldDefaults();
@@ -434,18 +488,21 @@ Hooks.on("canvasReady", async () => {
   _refreshAllTokenScales();
   // Defer a second pass to catch any post-ready Foundry canvas refresh that resets mesh scales
   requestAnimationFrame(_refreshAllTokenScales);
+  _queueElevatedGridRefresh();
 });
 
 Hooks.on("canvasTearDown", () => {
   _clearPendingTokenElevationUpdates();
   _clearPendingTokenVisualRefresh();
   _clearPendingRegionOverheadRefresh();
+  _clearPendingElevatedGridRefresh();
   RegionElevationRenderer.instance.detach();
 });
 
 Hooks.on("canvasPan", () => {
   if (!_sceneElevationClientEnabled()) return;
   RegionElevationRenderer.instance.onPan();
+  _queueElevatedGridRefresh();
 });
 
 Hooks.on("refreshTile", (tile) => {
@@ -470,6 +527,7 @@ Hooks.on("updateScene", (scene, change) => {
   RegionElevationRenderer.instance.update();
   if (geometryChanged || sceneSettingsChanged) void _refreshAllTokenElevations();
   _refreshAllTokenScales();
+  _queueElevatedGridRefresh();
 });
 
 Hooks.on("renderRegionConfig", _insertRegionBehaviorDivider);
@@ -822,6 +880,110 @@ function _offsetsNearlyEqual(left, right) {
     && Math.abs(Number(left?.y ?? 0) - Number(right?.y ?? 0)) <= TOKEN_PARALLAX_HIT_AREA_EPSILON;
 }
 
+function _showElevatedGridEnabled() {
+  if (!_sceneElevationClientEnabled()) return false;
+  try { return elevatedGridModeValue(game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATED_GRID)) !== ELEVATED_GRID_MODES.OFF; }
+  catch (err) { return true; }
+}
+
+function _elevatedGridOverrideSceneGridEnabled() {
+  if (!_sceneElevationClientEnabled()) return false;
+  try { return elevatedGridModeValue(game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATED_GRID)) === ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID; }
+  catch (err) { return false; }
+}
+
+function _validElevatedGridToken(token) {
+  return !!token && !token.destroyed && !!token.document && token.document.parent === canvas?.scene;
+}
+
+function _liveTokenGridPosition(token) {
+  const document = token?.document;
+  if (!document) return null;
+  const live = _safeTokenLivePoint(token, document);
+  return {
+    x: _finitePositionValue(live.x, document.x ?? 0),
+    y: _finitePositionValue(live.y, document.y ?? 0),
+    width: _finitePositionValue(document.width, 1),
+    height: _finitePositionValue(document.height, 1)
+  };
+}
+
+function _queueElevatedGridRefresh() {
+  if (_elevatedGridRefreshFrame) return;
+  _elevatedGridRefreshFrame = requestAnimationFrame(() => {
+    _elevatedGridRefreshFrame = null;
+    _refreshElevatedGridContext();
+  });
+}
+
+function _clearPendingElevatedGridRefresh() {
+  if (_elevatedGridRefreshFrame) cancelAnimationFrame(_elevatedGridRefreshFrame);
+  _elevatedGridRefreshFrame = null;
+  if (_rulerElevatedGridClearFrame) cancelAnimationFrame(_rulerElevatedGridClearFrame);
+  _rulerElevatedGridClearFrame = null;
+  _hoveredElevatedGridToken = null;
+  _dragElevatedGridToken = null;
+  _rulerElevatedGridContext = null;
+  RegionElevationRenderer.instance.clearElevatedGrid();
+}
+
+function _refreshElevatedGridContext() {
+  if (!canvas?.scene) {
+    RegionElevationRenderer.instance.clearElevatedGrid();
+    return;
+  }
+  if (!_showElevatedGridEnabled()) {
+    RegionElevationRenderer.instance.refreshElevatedGrid();
+    return;
+  }
+  const context = _currentElevatedGridContext();
+  if (!context) {
+    if (_elevatedGridOverrideSceneGridEnabled()) {
+      RegionElevationRenderer.instance.clearElevatedGrid();
+      RegionElevationRenderer.instance.refreshElevatedGrid();
+      return;
+    }
+    RegionElevationRenderer.instance.clearElevatedGrid();
+    return;
+  }
+  RegionElevationRenderer.instance.showElevatedGridForToken(context.token, context);
+}
+
+function _currentElevatedGridContext() {
+  if (_validElevatedGridToken(_dragElevatedGridToken)) {
+    const position = _liveTokenGridPosition(_dragElevatedGridToken);
+    if (position) return { token: _dragElevatedGridToken, position, guide: true, source: "drag" };
+  }
+  _dragElevatedGridToken = null;
+
+  if (_rulerElevatedGridContext && _validElevatedGridToken(_rulerElevatedGridContext.token)) return _rulerElevatedGridContext;
+  _rulerElevatedGridContext = null;
+
+  if (_validElevatedGridToken(_hoveredElevatedGridToken)) return { token: _hoveredElevatedGridToken, guide: false, source: "hover" };
+  _hoveredElevatedGridToken = null;
+
+  const controlled = canvas?.tokens?.controlled?.find(token => _validElevatedGridToken(token));
+  return controlled ? { token: controlled, guide: false, source: "control" } : null;
+}
+
+function _setRulerElevatedGridContext(token, position) {
+  if (!_showElevatedGridEnabled() || !_validElevatedGridToken(token) || !position) return;
+  _rulerElevatedGridContext = { token, position, guide: true, source: "ruler" };
+  _queueElevatedGridRefresh();
+  _scheduleRulerElevatedGridClear();
+}
+
+function _scheduleRulerElevatedGridClear() {
+  if (_rulerElevatedGridClearFrame) cancelAnimationFrame(_rulerElevatedGridClearFrame);
+  _rulerElevatedGridClearFrame = requestAnimationFrame(() => {
+    _rulerElevatedGridClearFrame = requestAnimationFrame(() => {
+      _rulerElevatedGridClearFrame = null;
+      _rulerElevatedGridContext = null;
+      _queueElevatedGridRefresh();
+    });
+  });
+}
+
 function _tokenNeedsParallaxCleanup(token) {
   const mesh = token?.mesh;
   return !!mesh && (!_offsetIsEffectivelyZero(mesh._seCachedParallaxOffset) || !!mesh._sceneElevationNegativeClip);
@@ -873,7 +1035,7 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
     }
     _clearNegativeRegionTokenVisibilityFloor(token);
     if (_tokenNeedsParallaxCleanup(token)) _applyTokenParallaxOffset(token);
-    else RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
+    RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
     return;
   }
   if (!forceScale && doc && !_tokenBoundsIntersectEntries(doc, {}, activeEntries)) {
@@ -885,7 +1047,7 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
     }
     _clearNegativeRegionTokenVisibilityFloor(token);
     if (_tokenNeedsParallaxCleanup(token)) _applyTokenParallaxOffset(token);
-    else RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
+    RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
     return;
   }
   // Per-token cache: when the *inputs* to the heavy elevation/scaling/clip
@@ -1274,6 +1436,131 @@ function _patchTokenHudPositioning() {
   for (const hudClass of new Set(hudClasses)) _patchTokenHudClass(hudClass);
 }
 
+function _patchTokenRulerParallaxGuide() {
+  const globalTokenRuler = Object.getOwnPropertyDescriptor(globalThis, "TokenRuler")?.value;
+  const rulerClasses = [CONFIG.Token?.rulerClass, foundry.canvas?.placeables?.tokens?.TokenRuler, globalTokenRuler].filter(Boolean);
+  for (const rulerClass of new Set(rulerClasses)) _patchTokenRulerClass(rulerClass);
+}
+
+function _patchTokenRulerClass(rulerClass) {
+  const prototype = rulerClass?.prototype;
+  if (!prototype || prototype[TOKEN_RULER_GUIDE_PATCHED]) return;
+  const originalWaypointLabelContext = prototype._getWaypointLabelContext;
+  const originalSegmentStyle = prototype._getSegmentStyle;
+  const originalGridHighlightStyle = prototype._getGridHighlightStyle;
+  if (typeof originalWaypointLabelContext !== "function" && typeof originalSegmentStyle !== "function" && typeof originalGridHighlightStyle !== "function") return;
+  if (typeof originalWaypointLabelContext === "function") {
+    prototype._getWaypointLabelContext = function(waypoint, state, ...args) {
+      return originalWaypointLabelContext.call(this, _sceneElevationAdjustedRulerWaypoint(this, waypoint), state, ...args);
+    };
+  }
+  if (typeof originalSegmentStyle === "function") {
+    prototype._getSegmentStyle = function(waypoint, ...args) {
+      const adjustedWaypoint = _sceneElevationAdjustedRulerWaypoint(this, waypoint);
+      const result = originalSegmentStyle.call(this, adjustedWaypoint, ...args);
+      _queueRulerElevatedGridGuide(this, adjustedWaypoint);
+      return result;
+    };
+  }
+  if (typeof originalGridHighlightStyle === "function") {
+    prototype._getGridHighlightStyle = function(waypoint, offset, ...args) {
+      const adjustedWaypoint = _sceneElevationAdjustedRulerWaypoint(this, waypoint, offset);
+      const result = originalGridHighlightStyle.call(this, adjustedWaypoint, offset, ...args);
+      _queueRulerElevatedGridGuide(this, adjustedWaypoint, offset);
+      return result;
+    };
+  }
+  Object.defineProperty(prototype, TOKEN_RULER_GUIDE_PATCHED, { value: true });
+}
+
+function _sceneElevationAdjustedRulerWaypoint(ruler, waypoint, offset = null) {
+  if (!_sceneElevationClientEnabled()) return waypoint;
+  const token = _rulerToken(ruler);
+  if (!_validElevatedGridToken(token) || !waypoint || typeof waypoint !== "object") return waypoint;
+  return _adjustRulerWaypointChain(token, waypoint, new WeakMap(), offset);
+}
+
+function _adjustRulerWaypointChain(token, waypoint, seen, fallbackOffset = null) {
+  if (!waypoint || typeof waypoint !== "object") return waypoint;
+  if (seen.has(waypoint)) return seen.get(waypoint);
+  const clone = { ...waypoint };
+  seen.set(waypoint, clone);
+  if (waypoint.previous) clone.previous = _adjustRulerWaypointChain(token, waypoint.previous, seen);
+  const center = _rulerPointCenter(waypoint) ?? _rulerOffsetCenter(fallbackOffset);
+  const targetElevation = center ? _targetTokenElevationForRulerPoint(token.document, _tokenPositionFromCenter(token, center)) : null;
+  if (targetElevation !== null) _assignRulerWaypointElevation(clone, targetElevation);
+  return clone;
+}
+
+function _targetTokenElevationForRulerPoint(tokenDocument, position) {
+  if (!tokenDocument || !position) return null;
+  const rawState = _highestTokenElevationState(tokenDocument, position);
+  if (rawState.skip) return null;
+  const state = _stabilizeMovementElevationState(rawState, _tokenMovementStartStates.get(tokenDocument.uuid ?? tokenDocument.id), tokenDocument, position);
+  return state.found ? state.elevation : 0;
+}
+
+function _assignRulerWaypointElevation(waypoint, elevation) {
+  const value = _finitePositionValue(elevation, 0);
+  waypoint.elevation = value;
+  waypoint.targetElevation = value;
+  if (waypoint.center) waypoint.center = _pointWithElevation(waypoint.center, value);
+  if (waypoint.point) waypoint.point = _pointWithElevation(waypoint.point, value);
+  if (waypoint.destination) waypoint.destination = _pointWithElevation(waypoint.destination, value);
+  if (waypoint.ray) {
+    waypoint.ray = { ...waypoint.ray };
+    if (waypoint.ray.B) waypoint.ray.B = _pointWithElevation(waypoint.ray.B, value);
+  }
+  if (waypoint.measurement) waypoint.measurement = { ...waypoint.measurement, elevation: value, targetElevation: value };
+}
+
+function _pointWithElevation(point, elevation) {
+  if (!point || typeof point !== "object") return point;
+  return { ...point, elevation };
+}
+
+function _queueRulerElevatedGridGuide(ruler, waypoint, offset = null) {
+  const token = _rulerToken(ruler);
+  const center = _rulerPointCenter(waypoint) ?? _rulerOffsetCenter(offset);
+  if (!_validElevatedGridToken(token) || !center) return;
+  _setRulerElevatedGridContext(token, _tokenPositionFromCenter(token, center));
+}
+
+function _rulerToken(ruler) {
+  return ruler?.token ?? ruler?.object ?? ruler?._token ?? ruler?.document?.object ?? null;
+}
+
+function _rulerPointCenter(waypoint) {
+  const candidates = [waypoint?.center, waypoint?.point, waypoint?.destination, waypoint?.ray?.B, waypoint];
+  for (const candidate of candidates) {
+    const x = Number(candidate?.x ?? candidate?.X);
+    const y = Number(candidate?.y ?? candidate?.Y);
+    if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+  }
+  return null;
+}
+
+function _rulerOffsetCenter(offset) {
+  const row = Number(offset?.i ?? offset?.row);
+  const column = Number(offset?.j ?? offset?.column);
+  if (!Number.isFinite(row) || !Number.isFinite(column)) return null;
+  const gridSize = _canvasGridSize();
+  return { x: column * gridSize + gridSize / 2, y: row * gridSize + gridSize / 2 };
+}
+
+function _tokenPositionFromCenter(token, center) {
+  const document = token?.document;
+  const gridSize = _canvasGridSize();
+  const width = _finitePositionValue(document?.width, 1);
+  const height = _finitePositionValue(document?.height, 1);
+  return {
+    x: _finitePositionValue(center.x, 0) - (width * gridSize) / 2,
+    y: _finitePositionValue(center.y, 0) - (height * gridSize) / 2,
+    width,
+    height
+  };
+}
+
 async function _migrateParallaxHeightContrastSetting() {
   if (!game.user?.isGM) return;
   const current = game.settings.get(MODULE_ID, SETTINGS.PARALLAX_HEIGHT_CONTRAST);
@@ -1606,6 +1893,10 @@ function _queueTokenElevationAfterMovement(tokenDocument, change = {}, options =
       _pendingTokenElevationUpdates.delete(uuid);
       _tokensWithPendingMovement.delete(uuid);
       _tokenMovementStartStates.delete(uuid);
+      if (_dragElevatedGridToken?.document === tokenDocument) {
+        _dragElevatedGridToken = null;
+        _queueElevatedGridRefresh();
+      }
       return;
     }
     const elapsed = performance.now() - started;
@@ -1618,6 +1909,10 @@ function _queueTokenElevationAfterMovement(tokenDocument, change = {}, options =
     }
     _pendingTokenElevationUpdates.delete(uuid);
     _tokensWithPendingMovement.delete(uuid);
+    if (_dragElevatedGridToken?.document === tokenDocument) {
+      _dragElevatedGridToken = null;
+      _queueElevatedGridRefresh();
+    }
     _queueOverheadRefreshForToken(tokenDocument.object);
     const movementStart = _tokenMovementStartStates.get(uuid);
     void _syncTokenElevation(tokenDocument, finalPosition, { movementStart }).finally(() => {
@@ -1738,6 +2033,10 @@ function _markTokenMovementStarting(tokenDocument) {
       if (_pendingTokenElevationUpdates.has(uuid)) return;
       _tokensWithPendingMovement.delete(uuid);
       _tokenMovementStartStates.delete(uuid);
+      if (_dragElevatedGridToken?.document === tokenDocument) {
+        _dragElevatedGridToken = null;
+        _queueElevatedGridRefresh();
+      }
     });
   });
 }
@@ -1802,6 +2101,8 @@ function _clearPendingTokenElevationUpdates() {
   _tokensWithPendingMovement.clear();
   _tokenMovementStartStates.clear();
   _tokenUpdateMovementDeltas.clear();
+  _dragElevatedGridToken = null;
+  _queueElevatedGridRefresh();
 }
 
 function _cancelPendingTokenElevationUpdate(tokenDocument) {
@@ -1812,6 +2113,10 @@ function _cancelPendingTokenElevationUpdate(tokenDocument) {
   _pendingTokenElevationUpdates.delete(uuid);
   _tokensWithPendingMovement.delete(uuid);
   _tokenMovementStartStates.delete(uuid);
+  if (_dragElevatedGridToken?.document === tokenDocument) {
+    _dragElevatedGridToken = null;
+    _queueElevatedGridRefresh();
+  }
 }
 
 async function _refreshAllTokenElevations() {
@@ -1976,6 +2281,11 @@ Hooks.on("drawToken", (token) => {
 });
 Hooks.on("refreshToken", (token) => {
   if (!token || token.destroyed) return;
+  const isPreviewClone = !_isCanonicalSceneToken(token);
+  if (isPreviewClone) {
+    _dragElevatedGridToken = token;
+    _queueElevatedGridRefresh();
+  }
   const uuid = token?.document?.uuid ?? token?.document?.id;
   if (uuid && _tokensWithPendingMovement.has(uuid)) {
     _applyLiveTokenElevationOverride(token);
@@ -1985,6 +2295,10 @@ Hooks.on("refreshToken", (token) => {
     // snapping to the un-offset doc position for one frame.
     _applyTokenParallaxOffset(token);
     return;
+  }
+  if (!isPreviewClone && _dragElevatedGridToken === token) {
+    _dragElevatedGridToken = null;
+    _queueElevatedGridRefresh();
   }
   _applyTokenScale(token);
   _applyLiveTokenElevationOverride(token);
@@ -2003,12 +2317,25 @@ Hooks.on("createToken", (document) => {
   if (document.parent !== canvas?.scene) return;
   void _syncTokenElevation(document);
   _queueRegionOverheadRefresh();
+  _queueElevatedGridRefresh();
 });
 Hooks.on("deleteToken", (document) => {
   if (document.parent && document.parent !== canvas?.scene) return;
+  if (_hoveredElevatedGridToken?.document === document) _hoveredElevatedGridToken = null;
+  if (_dragElevatedGridToken?.document === document) _dragElevatedGridToken = null;
+  if (_rulerElevatedGridContext?.token?.document === document) _rulerElevatedGridContext = null;
   _queueRegionOverheadRefresh();
+  _queueElevatedGridRefresh();
 });
-Hooks.on("controlToken", () => _queueRegionOverheadRefresh());
+Hooks.on("hoverToken", (token, hovered) => {
+  if (hovered) _hoveredElevatedGridToken = token;
+  else if (_hoveredElevatedGridToken === token) _hoveredElevatedGridToken = null;
+  _queueElevatedGridRefresh();
+});
+Hooks.on("controlToken", () => {
+  _queueRegionOverheadRefresh();
+  _queueElevatedGridRefresh();
+});
 Hooks.on("preUpdateToken", (document, change, options, userId) => {
   if (!_sceneElevationClientEnabled()) return;
   const hasMove = _hasTokenMovementDelta(document, change);
@@ -2043,6 +2370,10 @@ Hooks.on("updateToken", (document, change, options) => {
   _dsLog("hook:updateToken", document, { changeKeys: Object.keys(change ?? {}), changeJson: json, hasMove, optionsKeys: Object.keys(options ?? {}) });
   if (document.parent !== canvas?.scene) return;
   if (hasMove) {
+    if (_dragElevatedGridToken?.document === document) {
+      _dragElevatedGridToken = null;
+      _queueElevatedGridRefresh();
+    }
     _queueRegionOverheadRefresh();
     _queueTokenElevationAfterMovement(document, change, options);
     return;

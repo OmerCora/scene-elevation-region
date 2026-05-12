@@ -4,6 +4,7 @@ export const MODULE_ID = "scene-elevation-region";
 
 export const SETTINGS = {
   CLIENT_ENABLED: "clientEnabled",
+  SHOW_ELEVATED_GRID: "showElevatedGrid",
   PRESET: "preset",
   PARALLAX: "parallaxStrength",
   PARALLAX_HEIGHT_CONTRAST: "parallaxHeightContrast",
@@ -23,6 +24,19 @@ export const SETTINGS = {
   ELEVATION_SCALE: "elevationScale",
   WORLD_DEFAULTS_VERSION: "worldDefaultsVersion"
 };
+
+export const ELEVATED_GRID_MODES = Object.freeze({
+  INTERACTION: "interaction",
+  OVERRIDE_SCENE_GRID: "overrideSceneGrid",
+  OFF: "off"
+});
+
+export function elevatedGridModeValue(value) {
+  if (value === true) return ELEVATED_GRID_MODES.INTERACTION;
+  if (value === false) return ELEVATED_GRID_MODES.OFF;
+  const key = String(value ?? "");
+  return Object.values(ELEVATED_GRID_MODES).includes(key) ? key : ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID;
+}
 
 let _sceneElevationClientEnabled = true;
 let _sceneElevationClientEnabledInitialized = false;

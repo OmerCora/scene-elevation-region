@@ -21,7 +21,13 @@
     "Notify": {
       "PolygonNeedsPoints": "Add at least three polygon points before creating an elevation region.",
       "ShapeTooSmall": "Draw a larger shape before creating an elevation region.",
-      "RegionCreated": "Elevation region created."
+      "RegionCreated": "Elevation region created.",
+      "ParallaxTemporarilyOff": "Scene Elevation parallax temporarily off.",
+      "ParallaxRestored": "Scene Elevation parallax restored."
+    },
+    "Keybindings": {
+      "ToggleParallaxOverlay": "Toggle Parallax Overlay",
+      "ToggleParallaxOverlayHint": "Temporarily force parallax strength to Off on this client. Press again to restore the configured setting."
     },
     "SceneSettings": {
       "Title": "Scene Elevation Settings",
@@ -33,6 +39,11 @@
     "Settings": {
       "ClientEnabled": "Enable Scene Elevation",
       "ClientEnabledHint": "Client-only. Disable all Scene Elevation visuals and automation on this browser for performance or motion sensitivity. World settings and other users are unchanged.",
+      "ShowElevatedGrid": "Elevated grid mode",
+      "ShowElevatedGridHint": "Client-only. Override System Grid replaces Foundry's grid with elevation-aware grids. Interaction overlay only shows shifted grids while interacting. Use System Grid leaves Foundry's native grid unchanged.",
+      "ShowElevatedGridInteraction": "Interaction overlay",
+      "ShowElevatedGridOverrideSceneGrid": "Override System Grid",
+      "ShowElevatedGridOff": "Use System Grid",
       "ResetDefaults": "Reset Elevation Defaults",
       "ResetDefaultsLabel": "Reset Defaults",
       "ResetDefaultsHint": "Set the module elevation defaults to the recommended visual profile.",

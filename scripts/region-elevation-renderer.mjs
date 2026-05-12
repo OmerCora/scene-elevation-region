@@ -1,4 +1,4 @@
-import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey, elevationScaleValue, edgeStretchPercentValue } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, ELEVATED_GRID_MODES, elevatedGridModeValue, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey, elevationScaleValue, edgeStretchPercentValue } from "./config.mjs";
 
 /**
  * Per-draw settings cache. `getSceneElevationSettings()` rebuilds via two deep clones
@@ -138,6 +138,12 @@ const FULL_TEXTURE_MELD_SOFT_ALPHA = 0.62;
 const FULL_TEXTURE_MELD_CONTACT_ALPHA = 0.5;
 const OVERHEAD_FADE_ALPHA = 0.5;
 const REGION_CONTAINER_Z_INDEX = 10_000;
+const ELEVATED_GRID_Z_INDEX = REGION_CONTAINER_Z_INDEX + 2;
+const ELEVATED_GRID_SORT = 1_000_000;
+const ELEVATED_GRID_COLOR = 0x000000;
+const ELEVATED_GUIDE_COLOR = 0x00a2ff;
+const ELEVATED_GRID_MIN_ALPHA = 0.28;
+const ELEVATED_GRID_MAX_ALPHA = 0.7;
 const OVERHEAD_SORT_EPSILON = 0.001;
 const OVERHEAD_SUPPORT_EPSILON = 0.001;
 // Compensation factor applied to the Elevation Scale setting at render time.
@@ -277,6 +283,18 @@ const BLEND_PROFILE_CONFIGS = Object.freeze({
 
 let _activeElevationRegionsCacheScene = null;
 let _activeElevationRegionsCacheValue = null;
+let _temporaryParallaxDisabled = false;
+
+export function setTemporaryParallaxDisabled(disabled = false) {
+  const next = disabled === true;
+  if (_temporaryParallaxDisabled === next) return false;
+  _temporaryParallaxDisabled = next;
+  return true;
+}
+
+export function isTemporaryParallaxDisabled() {
+  return _temporaryParallaxDisabled;
+}
 
 export function invalidateActiveElevationRegionsCache(scene = null) {
   if (scene && scene !== _activeElevationRegionsCacheScene) return;
@@ -439,7 +457,17 @@ function _tokenRegionSamplePoints(tokenState) {
   ];
 }
 
+function _sceneContainsPoint(scene, point, padding = 0.5) {
+  const geo = sceneGeometry(scene);
+  const x = Number(point?.x);
+  const y = Number(point?.y);
+  return Number.isFinite(x) && Number.isFinite(y)
+    && x >= geo.x - padding && x <= geo.x + geo.width + padding
+    && y >= geo.y - padding && y <= geo.y + geo.height + padding;
+}
+
 export function getRegionElevationStateAtPoint(point, scene = canvas?.scene, entries = null, options = {}) {
+  if (!_sceneContainsPoint(scene, point)) return { found: false, elevation: 0, entry: null };
   const candidates = entries ?? getActiveElevationRegions(scene);
   let elevation = 0;
   let entry = null;
@@ -674,6 +702,62 @@ function _pathCentroid(path) {
   return { x: x / path.length, y: y / path.length };
 }
 
+function _triangulateSimplePath(path) {
+  if (!Array.isArray(path) || path.length < 3) return [];
+  if (path.length === 3) return [0, 1, 2];
+  const winding = Math.sign(_pathSignedArea(path)) || 1;
+  const remaining = path.map((point, index) => index);
+  const triangles = [];
+  let guard = path.length * path.length;
+  while (remaining.length > 3 && guard-- > 0) {
+    let clipped = false;
+    for (let cursor = 0; cursor < remaining.length; cursor++) {
+      const previousIndex = remaining[(cursor - 1 + remaining.length) % remaining.length];
+      const currentIndex = remaining[cursor];
+      const nextIndex = remaining[(cursor + 1) % remaining.length];
+      const previous = path[previousIndex];
+      const current = path[currentIndex];
+      const next = path[nextIndex];
+      if (!_isConvexPathCorner(previous, current, next, winding)) continue;
+      let containsPoint = false;
+      for (const candidateIndex of remaining) {
+        if (candidateIndex === previousIndex || candidateIndex === currentIndex || candidateIndex === nextIndex) continue;
+        if (_pointInTriangle(path[candidateIndex], previous, current, next)) {
+          containsPoint = true;
+          break;
+        }
+      }
+      if (containsPoint) continue;
+      triangles.push(previousIndex, currentIndex, nextIndex);
+      remaining.splice(cursor, 1);
+      clipped = true;
+      break;
+    }
+    if (!clipped) return [];
+  }
+  if (remaining.length === 3) triangles.push(remaining[0], remaining[1], remaining[2]);
+  return triangles;
+}
+
+function _isConvexPathCorner(previous, current, next, winding) {
+  const cross = (current.x - previous.x) * (next.y - current.y) - (current.y - previous.y) * (next.x - current.x);
+  return cross * winding > 1e-6;
+}
+
+function _pointInTriangle(point, a, b, c) {
+  const d1 = _triangleSign(point, a, b);
+  const d2 = _triangleSign(point, b, c);
+  const d3 = _triangleSign(point, c, a);
+  if (Math.abs(d1) <= 1e-6 || Math.abs(d2) <= 1e-6 || Math.abs(d3) <= 1e-6) return false;
+  const hasNegative = d1 < -1e-6 || d2 < -1e-6 || d3 < -1e-6;
+  const hasPositive = d1 > 1e-6 || d2 > 1e-6 || d3 > 1e-6;
+  return !(hasNegative && hasPositive);
+}
+
+function _triangleSign(point, a, b) {
+  return (point.x - b.x) * (a.y - b.y) - (a.x - b.x) * (point.y - b.y);
+}
+
 function _regionArea(region, paths = null) {
   paths ??= _regionPaths(region);
   if (!paths.length) return Infinity;
@@ -714,6 +798,14 @@ function _cachedPathsBounds(paths) {
   bounds = _pathsBounds(paths);
   _pathsBoundsCache.set(paths, bounds);
   return bounds;
+}
+
+function _boundsOverlap(left, right, padding = 0.5) {
+  if (!left || !right) return false;
+  return left.minX <= right.maxX + padding
+    && left.maxX >= right.minX - padding
+    && left.minY <= right.maxY + padding
+    && left.maxY >= right.minY - padding;
 }
 
 function _pathsContain(paths, point) {
@@ -772,6 +864,139 @@ function _makeBlurFilter(strength) {
   return filter;
 }
 
+function _elevatedGridMode() {
+  try { return elevatedGridModeValue(game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATED_GRID)); }
+  catch (err) { return ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID; }
+}
+
+function _showElevatedGridEnabled(mode = _elevatedGridMode()) {
+  return mode !== ELEVATED_GRID_MODES.OFF;
+}
+
+function _canvasDisplayLineWidth(pixels = 1) {
+  const scale = Number(canvas.stage?.scale?.x ?? 1) || 1;
+  return Math.max(0.35, pixels / Math.abs(scale));
+}
+
+function _sceneGridSize() {
+  const size = Number(canvas.grid?.size ?? canvas.scene?.grid?.size ?? 100);
+  return Number.isFinite(size) && size > 0 ? size : 100;
+}
+
+function _sceneGridAlpha({ clamp = true } = {}) {
+  const raw = Number(canvas.scene?.grid?.alpha ?? canvas.scene?.gridAlpha ?? canvas.grid?.alpha ?? 0.45);
+  const alpha = Number.isFinite(raw) ? raw : 0.45;
+  return clamp ? Math.clamp(alpha, ELEVATED_GRID_MIN_ALPHA, ELEVATED_GRID_MAX_ALPHA) : Math.clamp(alpha, 0, 1);
+}
+
+function _sceneGridColor() {
+  return _parseColor(canvas.scene?.grid?.color ?? canvas.scene?.gridColor ?? ELEVATED_GRID_COLOR, ELEVATED_GRID_COLOR);
+}
+
+function _sceneGridThickness() {
+  const raw = Number(canvas.scene?.grid?.thickness ?? canvas.scene?.gridWidth ?? 1);
+  return Number.isFinite(raw) && raw > 0 ? raw : 1;
+}
+
+function _sceneGridOffset(gridSize = _sceneGridSize()) {
+  const grid = canvas.scene?.grid ?? {};
+  const x = Number(grid.offsetX ?? grid.offset?.x ?? canvas.scene?.gridOffsetX ?? 0);
+  const y = Number(grid.offsetY ?? grid.offset?.y ?? canvas.scene?.gridOffsetY ?? 0);
+  return {
+    x: Number.isFinite(x) ? x % gridSize : 0,
+    y: Number.isFinite(y) ? y % gridSize : 0
+  };
+}
+
+function _sceneGridLineMode() {
+  const sceneGrid = canvas.scene?.grid ?? {};
+  const canvasGrid = canvas.grid ?? {};
+  const candidates = [
+    sceneGrid.style,
+    sceneGrid.lineStyle,
+    sceneGrid.gridStyle,
+    canvas.scene?.gridStyle,
+    canvas.scene?.gridLineStyle,
+    canvasGrid.style,
+    canvasGrid.lineStyle,
+    canvasGrid.gridStyle,
+    canvasGrid.options?.style,
+    canvasGrid.options?.lineStyle,
+    canvasGrid.options?.gridStyle
+  ];
+  for (const candidate of candidates) {
+    const mode = _gridLineModeFromValue(candidate);
+    if (mode) return mode;
+  }
+  return "solid";
+}
+
+function _gridLineModeFromValue(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const constants = CONST.GRID_STYLES ?? {};
+  for (const [name, constantValue] of Object.entries(constants)) {
+    if (value === constantValue) return _gridLineModeFromText(name);
+  }
+  if (typeof value === "object") return _gridLineModeFromValue(value.type ?? value.name ?? value.id ?? value.value);
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    if (numeric === 0) return "solid";
+    if (numeric === 1) return "dashed";
+    if (numeric === 2 || numeric === 3) return "dotted";
+  }
+  return _gridLineModeFromText(value);
+}
+
+function _gridLineModeFromText(value) {
+  const text = String(value ?? "").toLowerCase().replace(/[\s_-]/g, "");
+  if (!text) return null;
+  if (text.includes("none") || text.includes("hidden")) return "none";
+  if (text.includes("dash")) return "dashed";
+  if (text.includes("dot") || text.includes("point")) return "dotted";
+  if (text.includes("solid") || text.includes("line")) return "solid";
+  return null;
+}
+
+function _sceneGridType() {
+  return canvas.scene?.grid?.type ?? canvas.scene?.gridType ?? CONST.GRID_TYPES?.SQUARE ?? 1;
+}
+
+function _sceneGridIsSquareLike() {
+  const type = _sceneGridType();
+  const square = CONST.GRID_TYPES?.SQUARE ?? 1;
+  if (type === square || type === undefined || type === null || type === "") return true;
+  return String(type).toLowerCase().includes("square");
+}
+
+function _parseColor(value, fallback) {
+  if (Number.isFinite(Number(value))) return Number(value);
+  const text = String(value ?? "").trim();
+  const match = text.match(/^#?([0-9a-f]{6})$/i);
+  return match ? Number.parseInt(match[1], 16) : fallback;
+}
+
+function _sceneGridStyle({ elevated = false } = {}) {
+  return {
+    gridSize: _sceneGridSize(),
+    offset: _sceneGridOffset(),
+    color: elevated ? ELEVATED_GRID_COLOR : _sceneGridColor(),
+    alpha: elevated ? _sceneGridAlpha() : _sceneGridAlpha({ clamp: false }),
+    lineWidth: _canvasDisplayLineWidth(_sceneGridThickness()),
+    lineMode: _sceneGridLineMode()
+  };
+}
+
+function _applyGridLineStyle(graphics, style) {
+  const cap = style?.lineMode === "dotted"
+    ? PIXI.LINE_CAP?.ROUND ?? undefined
+    : PIXI.LINE_CAP?.BUTT ?? undefined;
+  graphics.lineStyle(style.lineWidth, style.color, style.alpha, 0.5, false, PIXI.LINE_JOIN?.MITER ?? undefined, cap);
+}
+
+function _offsetEffectivelyZero(offset) {
+  return Math.hypot(Number(offset?.x ?? 0), Number(offset?.y ?? 0)) <= SMOOTH_PARALLAX_EPSILON;
+}
+
 export class RegionElevationRenderer {
   static _instance = null;
 
@@ -782,6 +1007,7 @@ export class RegionElevationRenderer {
 
   constructor() {
     this.container = null;
+    this.elevatedGridContainer = null;
     this.overheadContainer = null;
     this._overheadContainers = new Map();
     this.mask = null;
@@ -801,6 +1027,9 @@ export class RegionElevationRenderer {
     this._pointerEventTarget = null;
     this._pointerMoveHandler = null;
     this._pointerFocus = null;
+    this._elevatedGridContext = null;
+    this._elevatedGridSignature = "";
+    this._nativeGridStates = new Map();
   }
 
   attach(scene) {
@@ -820,6 +1049,11 @@ export class RegionElevationRenderer {
     container.eventMode = "none";
     container.zIndex = REGION_CONTAINER_Z_INDEX;
     container.mask = mask;
+    const elevatedGridContainer = new PIXI.Container();
+    elevatedGridContainer.eventMode = "none";
+    elevatedGridContainer.zIndex = ELEVATED_GRID_Z_INDEX;
+    elevatedGridContainer.elevation = ELEVATED_GRID_SORT;
+    elevatedGridContainer.sort = ELEVATED_GRID_SORT;
     canvas.primary.addChild(mask);
     canvas.primary.addChild(container);
 
@@ -829,9 +1063,11 @@ export class RegionElevationRenderer {
 
     this._scene = scene;
     this.container = container;
+    this.elevatedGridContainer = elevatedGridContainer;
     this.overheadContainer = null;
     this.mask = mask;
     this._cameraFocus = null;
+    this._ensureElevatedGridParent();
     this.update();
   }
 
@@ -842,15 +1078,19 @@ export class RegionElevationRenderer {
     try { this._pointerEventTarget?.removeEventListener?.("pointermove", this._pointerMoveHandler); } catch (err) {}
     try { this.clearNegativeParallaxClips(); } catch (err) {}
     try { this.resetTileParallax(); } catch (err) {}
+    try { this._restoreNativeSceneGrid(); } catch (err) {}
     try { this.container?.parent?.removeChild(this.container); } catch (err) {}
+    try { this.elevatedGridContainer?.parent?.removeChild(this.elevatedGridContainer); } catch (err) {}
     try { this.overheadContainer?.parent?.removeChild(this.overheadContainer); } catch (err) {}
     try { this.mask?.parent?.removeChild(this.mask); } catch (err) {}
     this.container?.destroy({ children: true });
+    this.elevatedGridContainer?.destroy({ children: true });
     this.overheadContainer?.destroy({ children: true });
     this._clearOverheadContainers({ destroy: true });
     this.mask?.destroy();
     this._clearGeneratedTextureCache();
     this.container = null;
+    this.elevatedGridContainer = null;
     this.overheadContainer = null;
     this.mask = null;
     this._scene = null;
@@ -865,6 +1105,9 @@ export class RegionElevationRenderer {
     this._pointerEventTarget = null;
     this._pointerMoveHandler = null;
     this._pointerFocus = null;
+    this._elevatedGridContext = null;
+    this._elevatedGridSignature = "";
+    this._nativeGridStates = new Map();
   }
 
   update() {
@@ -879,6 +1122,7 @@ export class RegionElevationRenderer {
     this.container.visible = this._entries.length > 0;
     this._updateCameraFocus(true);
     this._drawRegions({ clear: false });
+    this.refreshElevatedGrid();
   }
 
   hasOverheadRegions() {
@@ -908,6 +1152,7 @@ export class RegionElevationRenderer {
       // camera without per-token elevation re-sampling.
       if (this._updateCameraFocus(false)) {
         this._drawRegions({ emitVisualRefresh: false });
+        this.refreshElevatedGrid();
         Hooks.callAll(`${MODULE_ID}.parallaxRefresh`);
       }
     });
@@ -917,6 +1162,488 @@ export class RegionElevationRenderer {
     this._parallaxState.clear();
     this._updateCameraFocus(true);
     this._drawRegions();
+    this.refreshElevatedGrid();
+  }
+
+  showElevatedGridForToken(token, { position = null, guide = false, source = "token" } = {}) {
+    this._elevatedGridContext = {
+      token,
+      tokenDocument: token?.document,
+      position: position ? { ...position } : null,
+      guide: guide === true,
+      source
+    };
+    this.refreshElevatedGrid();
+  }
+
+  clearElevatedGrid() {
+    this._elevatedGridContext = null;
+    this._elevatedGridSignature = "";
+    this._clearElevatedGridChildren();
+  }
+
+  refreshElevatedGrid() {
+    const mode = _elevatedGridMode();
+    this._syncNativeSceneGridVisibility(mode);
+    if (!this.elevatedGridContainer || !this._scene || !_showElevatedGridEnabled(mode)) {
+      this._clearElevatedGridChildren();
+      return;
+    }
+    this._ensureElevatedGridParent();
+    const state = this._elevatedGridStateForContext();
+    if (!state && mode !== ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID) {
+      this._clearElevatedGridChildren();
+      return;
+    }
+    const signature = this._elevatedGridSignatureForState(state, mode);
+    if (signature === this._elevatedGridSignature && this.elevatedGridContainer.children.length) return;
+    this._elevatedGridSignature = signature;
+    this._clearElevatedGridChildren();
+    if (mode === ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID) {
+      const overrideLayer = this._createOverrideSceneGridLayer();
+      if (overrideLayer) this.elevatedGridContainer.addChild(overrideLayer);
+    } else if (state) {
+      const clipPaths = this._gridClipPathsForVisual(state.visual, state.params);
+      const gridLayer = this._createElevatedGridLayer(state.visual.paths, state.params, state, null, clipPaths);
+      if (gridLayer) this.elevatedGridContainer.addChild(gridLayer);
+    }
+    const guideLayer = state?.guide ? this._createElevatedGridGuideLayer(state) : null;
+    if (guideLayer) this.elevatedGridContainer.addChild(guideLayer);
+  }
+
+  _ensureElevatedGridParent() {
+    const container = this.elevatedGridContainer;
+    if (!container) return null;
+    const parent = this._overheadRenderParent() ?? canvas?.primary;
+    if (!parent) return null;
+    if (container.parent !== parent) {
+      try { container.parent?.removeChild(container); } catch (err) {}
+      parent.addChild(container);
+    }
+    container.zIndex = ELEVATED_GRID_Z_INDEX;
+    container.elevation = ELEVATED_GRID_SORT;
+    container.sort = ELEVATED_GRID_SORT;
+    parent.sortableChildren = true;
+    parent.sortDirty = true;
+    return parent;
+  }
+
+  _syncNativeSceneGridVisibility(mode = _elevatedGridMode()) {
+    const shouldHide = mode === ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID && _sceneGridIsSquareLike();
+    if (!shouldHide) {
+      this._restoreNativeSceneGrid();
+      return;
+    }
+    for (const layer of this._nativeSceneGridLayers()) {
+      if (!this._nativeGridStates.has(layer)) {
+        this._nativeGridStates.set(layer, {
+          visible: layer.visible,
+          renderable: layer.renderable,
+          alpha: layer.alpha
+        });
+      }
+      if ("visible" in layer) layer.visible = false;
+      if ("renderable" in layer) layer.renderable = false;
+      if ("alpha" in layer) layer.alpha = 0;
+    }
+  }
+
+  _restoreNativeSceneGrid() {
+    for (const [layer, state] of this._nativeGridStates) {
+      try {
+        if ("visible" in layer) layer.visible = state.visible;
+        if ("renderable" in layer) layer.renderable = state.renderable;
+        if ("alpha" in layer) layer.alpha = state.alpha;
+      } catch (err) {}
+    }
+    this._nativeGridStates = new Map();
+  }
+
+  _nativeSceneGridLayers() {
+    const interfaceChildren = Array.from(canvas?.interface?.children ?? []);
+    const candidates = [
+      canvas?.interface?.grid,
+      canvas?.gridLayer,
+      canvas?.grid?.layer,
+      canvas?.controls?.grid,
+      canvas?.interface?.getChildByName?.("grid"),
+      ...interfaceChildren.filter(child => this._looksLikeNativeGridLayer(child))
+    ];
+    return candidates.filter((layer, index, layers) => this._isNativeGridLayer(layer) && layers.indexOf(layer) === index);
+  }
+
+  _looksLikeNativeGridLayer(layer) {
+    const name = String(layer?.name ?? layer?.id ?? layer?.label ?? "").toLowerCase();
+    const className = String(layer?.constructor?.name ?? "").toLowerCase();
+    return className.includes("grid") || name === "grid" || name.includes("gridlayer") || name.includes("grid-layer");
+  }
+
+  _isNativeGridLayer(layer) {
+    if (!layer || layer === this.elevatedGridContainer || layer === this.container) return false;
+    if (!("visible" in layer || "renderable" in layer || "alpha" in layer)) return false;
+    return !!(layer.parent || layer.children || typeof layer.addChild === "function");
+  }
+
+  _createOverrideSceneGridLayer() {
+    if (!_sceneGridIsSquareLike()) return null;
+    const geo = sceneGeometry(this._scene);
+    const style = _sceneGridStyle();
+    if (style.alpha <= 0 || style.gridSize <= 0) return null;
+    const root = new PIXI.Container();
+    root.eventMode = "none";
+    const regionPaths = this._entries.flatMap(visual => this._visualGridOcclusionPaths(visual));
+    const baseGrid = this._createSceneGridLayer(geo, style, regionPaths);
+    if (baseGrid) root.addChild(baseGrid);
+
+    const elevatedStyle = _sceneGridStyle();
+    for (const visual of this._entries) {
+      const params = this._visualParams.get(this._parallaxStateKey(visual));
+      if (!params || !visual.paths?.length) continue;
+      const gridLayer = this._createElevatedGridLayer(visual.paths, params, { gridSize: elevatedStyle.gridSize }, elevatedStyle, this._gridClipPathsForVisual(visual, params));
+      if (gridLayer) root.addChild(gridLayer);
+    }
+
+    if (!root.children.length) {
+      root.destroy({ children: true });
+      return null;
+    }
+    return root;
+  }
+
+  _createSceneGridLayer(geo, style, clipPaths = []) {
+    if (style.lineMode === "none") return null;
+    const graphics = new PIXI.Graphics();
+    graphics.eventMode = "none";
+    _applyGridLineStyle(graphics, style);
+    this._drawSquareGrid(graphics, geo, style, clipPaths);
+    return graphics;
+  }
+
+  _drawSquareGrid(graphics, geo, style, clipPaths = []) {
+    const { gridSize, offset } = style;
+    const minX = this._gridLineStart(geo.x, offset.x, gridSize);
+    const minY = this._gridLineStart(geo.y, offset.y, gridSize);
+    const maxX = geo.x + geo.width;
+    const maxY = geo.y + geo.height;
+    const pad = Math.max(1, style.lineWidth);
+    for (let x = minX; x <= maxX + pad; x += gridSize) {
+      const intervals = this._verticalClipIntervals(x, geo.y, maxY, clipPaths, pad);
+      this._drawLineOutsideIntervals(graphics, x, geo.y, x, maxY, intervals, "y", style);
+    }
+    for (let y = minY; y <= maxY + pad; y += gridSize) {
+      const intervals = this._horizontalClipIntervals(y, geo.x, maxX, clipPaths, pad);
+      this._drawLineOutsideIntervals(graphics, geo.x, y, maxX, y, intervals, "x", style);
+    }
+  }
+
+  _drawLineOutsideIntervals(graphics, x1, y1, x2, y2, intervals, axis, style = null) {
+    if (!intervals.length) {
+      this._drawGridSegment(graphics, x1, y1, x2, y2, axis, style);
+      return;
+    }
+    const min = axis === "x" ? Math.min(x1, x2) : Math.min(y1, y2);
+    const max = axis === "x" ? Math.max(x1, x2) : Math.max(y1, y2);
+    let cursor = min;
+    for (const interval of intervals) {
+      if (interval.min > cursor) {
+        if (axis === "x") {
+          this._drawGridSegment(graphics, cursor, y1, interval.min, y1, axis, style);
+        } else {
+          this._drawGridSegment(graphics, x1, cursor, x1, interval.min, axis, style);
+        }
+      }
+      cursor = Math.max(cursor, interval.max);
+    }
+    if (cursor < max) {
+      if (axis === "x") {
+        this._drawGridSegment(graphics, cursor, y1, max, y1, axis, style);
+      } else {
+        this._drawGridSegment(graphics, x1, cursor, x1, max, axis, style);
+      }
+    }
+  }
+
+  _drawLineInsideIntervals(graphics, x1, y1, x2, y2, intervals, axis, style = null) {
+    if (!intervals.length) return;
+    const min = axis === "x" ? Math.min(x1, x2) : Math.min(y1, y2);
+    const max = axis === "x" ? Math.max(x1, x2) : Math.max(y1, y2);
+    for (const interval of intervals) {
+      const start = Math.max(min, interval.min);
+      const end = Math.min(max, interval.max);
+      if (end <= start) continue;
+      if (axis === "x") {
+        this._drawGridSegment(graphics, start, y1, end, y1, axis, style);
+      } else {
+        this._drawGridSegment(graphics, x1, start, x1, end, axis, style);
+      }
+    }
+  }
+
+  _drawGridSegment(graphics, x1, y1, x2, y2, axis, style = null) {
+    const mode = style?.lineMode ?? "solid";
+    if (mode === "none") return;
+    if (mode === "solid") {
+      this._drawGridMark(graphics, x1, y1, x2, y2, style);
+      return;
+    }
+    const min = axis === "x" ? Math.min(x1, x2) : Math.min(y1, y2);
+    const max = axis === "x" ? Math.max(x1, x2) : Math.max(y1, y2);
+    if (max <= min) return;
+    const pattern = this._gridLinePattern(style);
+    for (let cursor = min; cursor < max; cursor += pattern.mark + pattern.gap) {
+      const end = Math.min(max, cursor + pattern.mark);
+      if (end <= cursor) continue;
+      if (axis === "x") {
+        this._drawGridMark(graphics, cursor, y1, end, y1, style);
+      } else {
+        this._drawGridMark(graphics, x1, cursor, x1, end, style);
+      }
+    }
+  }
+
+  _drawGridMark(graphics, x1, y1, x2, y2, style = null) {
+    if (typeof style?.projectPoint === "function") {
+      const start = style.projectPoint({ x: x1, y: y1 });
+      const end = style.projectPoint({ x: x2, y: y2 });
+      if (!start || !end) return;
+      graphics.moveTo(start.x, start.y);
+      graphics.lineTo(end.x, end.y);
+      return;
+    }
+    graphics.moveTo(x1, y1);
+    graphics.lineTo(x2, y2);
+  }
+
+  _gridLinePattern(style) {
+    const gridSize = Math.max(1, Number(style?.gridSize ?? _sceneGridSize()));
+    const lineWidth = Math.max(0.5, Number(style?.lineWidth ?? 1));
+    if (style?.lineMode === "dotted") {
+      return {
+        mark: Math.max(lineWidth, Math.min(gridSize * 0.04, 3)),
+        gap: Math.max(lineWidth * 3, Math.min(gridSize * 0.12, 10))
+      };
+    }
+    return {
+      mark: Math.max(lineWidth * 4, Math.min(gridSize * 0.45, 32)),
+      gap: Math.max(lineWidth * 3, Math.min(gridSize * 0.22, 16))
+    };
+  }
+
+  _verticalClipIntervals(x, minY, maxY, paths, pad = 0) {
+    return this._mergedClipIntervals(paths.flatMap(path => this._linePolygonIntersections(path, x, "vertical")), minY, maxY, pad);
+  }
+
+  _horizontalClipIntervals(y, minX, maxX, paths, pad = 0) {
+    return this._mergedClipIntervals(paths.flatMap(path => this._linePolygonIntersections(path, y, "horizontal")), minX, maxX, pad);
+  }
+
+  _linePolygonIntersections(path, coordinate, orientation) {
+    if (!Array.isArray(path) || path.length < 3) return [];
+    const intersections = [];
+    for (let index = 0; index < path.length; index++) {
+      const a = path[index];
+      const b = path[(index + 1) % path.length];
+      const aCoord = orientation === "vertical" ? a.x : a.y;
+      const bCoord = orientation === "vertical" ? b.x : b.y;
+      if ((aCoord > coordinate) === (bCoord > coordinate)) continue;
+      const t = (coordinate - aCoord) / ((bCoord - aCoord) || 1e-9);
+      const cross = orientation === "vertical"
+        ? a.y + (b.y - a.y) * t
+        : a.x + (b.x - a.x) * t;
+      if (Number.isFinite(cross)) intersections.push(cross);
+    }
+    intersections.sort((left, right) => left - right);
+    const intervals = [];
+    for (let index = 0; index < intersections.length - 1; index += 2) {
+      intervals.push({ min: intersections[index], max: intersections[index + 1] });
+    }
+    return intervals;
+  }
+
+  _mergedClipIntervals(intervals, min, max, pad = 0) {
+    const clipped = intervals
+      .map(interval => ({ min: Math.max(min, interval.min - pad), max: Math.min(max, interval.max + pad) }))
+      .filter(interval => interval.max > interval.min)
+      .sort((left, right) => left.min - right.min);
+    const merged = [];
+    for (const interval of clipped) {
+      const previous = merged[merged.length - 1];
+      if (previous && interval.min <= previous.max) previous.max = Math.max(previous.max, interval.max);
+      else merged.push({ ...interval });
+    }
+    return merged;
+  }
+
+  _subtractClipIntervals(intervals, blockers) {
+    if (!blockers.length) return intervals;
+    const result = [];
+    for (const interval of intervals) {
+      let cursor = interval.min;
+      for (const blocker of blockers) {
+        if (blocker.max <= cursor) continue;
+        if (blocker.min >= interval.max) break;
+        if (blocker.min > cursor) result.push({ min: cursor, max: Math.min(blocker.min, interval.max) });
+        cursor = Math.max(cursor, blocker.max);
+        if (cursor >= interval.max) break;
+      }
+      if (cursor < interval.max) result.push({ min: cursor, max: interval.max });
+    }
+    return result;
+  }
+
+  _gridLineStart(origin, offset, gridSize) {
+    let start = origin + (((offset % gridSize) + gridSize) % gridSize);
+    while (start > origin) start -= gridSize;
+    return start;
+  }
+
+  _elevatedGridStateForContext() {
+    const context = this._elevatedGridContext;
+    const tokenDocument = context?.tokenDocument ?? context?.token?.document;
+    if (!context || !tokenDocument || tokenDocument.parent !== this._scene || !this._entries.length) return null;
+    const gridSize = _sceneGridSize();
+    const x = Number(context.position?.x ?? tokenDocument.x ?? 0);
+    const y = Number(context.position?.y ?? tokenDocument.y ?? 0);
+    const width = Number(context.position?.width ?? tokenDocument.width ?? 1);
+    const height = Number(context.position?.height ?? tokenDocument.height ?? 1);
+    if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+    const center = {
+      x: x + (width * gridSize) / 2,
+      y: y + (height * gridSize) / 2,
+      elevation: Number(tokenDocument.elevation ?? 0)
+    };
+    const state = getRegionElevationStateAtPoint(center, this._scene, this._entriesArr ?? this._entries.map(visual => visual.entry), { allowOverheadSupport: true });
+    if (!state.found) return null;
+    const visual = this._visualByEntry?.get(state.entry) ?? this._entries.find(candidate => candidate.entry === state.entry);
+    if (!visual?.paths?.length) return null;
+    const params = this._visualParams.get(this._parallaxStateKey(visual));
+    if (!params) return null;
+    const offset = params.slope
+      ? this._slopeOverlayOffsetAtPoint(center, params)
+      : params.overlayOffset ? { x: params.overlayOffset.x, y: params.overlayOffset.y } : { x: 0, y: 0 };
+    const hasVisibleShift = !_offsetEffectivelyZero(offset) || Math.abs(Number(params.overlayScale ?? 1) - 1) > 0.001;
+    if (!hasVisibleShift && Math.abs(Number(params.visualElevation ?? 0)) < MIN_ELEVATION_DELTA) return null;
+    return {
+      visual,
+      params,
+      tokenDocument,
+      position: { x, y, width, height },
+      center,
+      offset,
+      guide: context.guide === true,
+      source: context.source ?? "token",
+      gridSize
+    };
+  }
+
+  _elevatedGridSignatureForState(state, mode = _elevatedGridMode()) {
+    const pos = state?.position ?? {};
+    const offset = state?.offset ?? { x: 0, y: 0 };
+    const style = _sceneGridStyle({ elevated: mode !== ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID });
+    const geo = sceneGeometry(this._scene);
+    return [
+      mode,
+      state?.source ?? "none",
+      state?.guide ? 1 : 0,
+      this._visualParamsVersion,
+      state?.visual ? this._parallaxStateKey(state.visual) : "none",
+      Math.round(Number(pos.x ?? 0) * 2) / 2,
+      Math.round(Number(pos.y ?? 0) * 2) / 2,
+      pos.width ?? 0,
+      pos.height ?? 0,
+      Math.round(offset.x * 10) / 10,
+      Math.round(offset.y * 10) / 10,
+      geo.x,
+      geo.y,
+      geo.width,
+      geo.height,
+      style.gridSize,
+      style.offset.x,
+      style.offset.y,
+      style.color,
+      style.alpha,
+      style.lineWidth,
+      style.lineMode,
+      Math.round((canvas.stage?.scale?.x ?? 1) * 100) / 100
+    ].join("|");
+  }
+
+  _clearElevatedGridChildren() {
+    if (!this.elevatedGridContainer) return;
+    for (const child of [...this.elevatedGridContainer.children]) child.destroy({ children: true });
+    this.elevatedGridContainer.removeChildren();
+  }
+
+  _createElevatedGridLayer(paths, params, state, style = null, clipPaths = []) {
+    const bounds = _cachedPathsBounds(paths);
+    if (!bounds) return null;
+    const gridSize = style?.gridSize || state.gridSize || _sceneGridSize();
+    const lineWidth = style?.lineWidth ?? _canvasDisplayLineWidth(1);
+    const alpha = style?.alpha ?? _sceneGridAlpha();
+    const color = style?.color ?? ELEVATED_GRID_COLOR;
+    const lineMode = style?.lineMode ?? _sceneGridLineMode();
+    if (lineMode === "none") return null;
+    const projectedGrid = this._usesProjectedFlatSurface(params) && !params.slope;
+    const gridStyle = {
+      gridSize,
+      lineWidth,
+      alpha,
+      color,
+      lineMode,
+      projectPoint: projectedGrid ? point => this._flatOverlaySurfacePoint(point, params) : null
+    };
+    const graphics = new PIXI.Graphics();
+    graphics.eventMode = "none";
+    _applyGridLineStyle(graphics, gridStyle);
+
+    const minX = Math.floor(bounds.minX / gridSize) * gridSize;
+    const maxX = Math.ceil(bounds.maxX / gridSize) * gridSize;
+    const minY = Math.floor(bounds.minY / gridSize) * gridSize;
+    const maxY = Math.ceil(bounds.maxY / gridSize) * gridSize;
+    for (let x = minX; x <= maxX; x += gridSize) {
+      const inside = this._verticalClipIntervals(x, bounds.minY - lineWidth, bounds.maxY + lineWidth, paths);
+      const blockers = this._verticalClipIntervals(x, bounds.minY - lineWidth, bounds.maxY + lineWidth, clipPaths, lineWidth);
+      this._drawLineInsideIntervals(graphics, x, bounds.minY - lineWidth, x, bounds.maxY + lineWidth, this._subtractClipIntervals(inside, blockers), "y", gridStyle);
+    }
+    for (let y = minY; y <= maxY; y += gridSize) {
+      const inside = this._horizontalClipIntervals(y, bounds.minX - lineWidth, bounds.maxX + lineWidth, paths);
+      const blockers = this._horizontalClipIntervals(y, bounds.minX - lineWidth, bounds.maxX + lineWidth, clipPaths, lineWidth);
+      this._drawLineInsideIntervals(graphics, bounds.minX - lineWidth, y, bounds.maxX + lineWidth, y, this._subtractClipIntervals(inside, blockers), "x", gridStyle);
+    }
+
+    const container = new PIXI.Container();
+    container.eventMode = "none";
+    container.addChild(graphics);
+    if (!projectedGrid) this._applyRegionTransform(container, params);
+    if (params.isHole) return this._clipDisplayObjectToRegion(container, paths);
+    return container;
+  }
+
+  _createElevatedGridGuideLayer(state) {
+    if (_offsetEffectivelyZero(state.offset)) return null;
+    const gridSize = state.gridSize || _sceneGridSize();
+    const x = state.position.x;
+    const y = state.position.y;
+    const width = state.position.width * gridSize;
+    const height = state.position.height * gridSize;
+    const start = { x: state.center.x, y: state.center.y };
+    const end = { x: start.x + state.offset.x, y: start.y + state.offset.y };
+    const lineWidth = _canvasDisplayLineWidth(2);
+    const thinLine = _canvasDisplayLineWidth(1);
+    const graphics = new PIXI.Graphics();
+    graphics.eventMode = "none";
+    graphics.beginFill(ELEVATED_GUIDE_COLOR, 0.14);
+    graphics.drawRect(x, y, width, height);
+    graphics.endFill();
+    graphics.lineStyle(thinLine, ELEVATED_GUIDE_COLOR, 0.9, 0.5, false, PIXI.LINE_JOIN?.ROUND ?? undefined, PIXI.LINE_CAP?.ROUND ?? undefined);
+    graphics.drawRect(x, y, width, height);
+    graphics.lineStyle(lineWidth, ELEVATED_GUIDE_COLOR, 0.95, 0.5, false, PIXI.LINE_JOIN?.ROUND ?? undefined, PIXI.LINE_CAP?.ROUND ?? undefined);
+    graphics.moveTo(start.x, start.y);
+    graphics.lineTo(end.x, end.y);
+    graphics.beginFill(ELEVATED_GUIDE_COLOR, 0.9);
+    graphics.drawCircle(end.x, end.y, Math.max(_canvasDisplayLineWidth(3), 2));
+    graphics.endFill();
+    return graphics;
   }
 
   tokenParallaxOffset(tokenDocument, position = {}) {
@@ -1199,6 +1926,218 @@ export class RegionElevationRenderer {
     };
   }
 
+  _higherVisualPathsFor(visual) {
+    const elevation = Number(visual?.visualElevation ?? visual?.entry?.elevation ?? 0);
+    const bounds = visual?.bounds ?? _cachedPathsBounds(visual?.paths ?? []);
+    if (!Number.isFinite(elevation) || !bounds) return [];
+    return this._entries
+      .filter(candidate => candidate !== visual)
+      .filter(candidate => Number(candidate.visualElevation ?? candidate.entry?.elevation ?? 0) > elevation + 0.001)
+      .filter(candidate => _boundsOverlap(bounds, candidate.bounds ?? _cachedPathsBounds(candidate.paths ?? [])))
+      .flatMap(candidate => this._visualTopPaths(candidate));
+  }
+
+  _higherVisualGridClipPathsFor(visual, params) {
+    return this._sceneGridClipPathsToVisualSpace(this._higherVisualGridOcclusionPathsFor(visual), params);
+  }
+
+  _gridClipPathsForVisual(visual, params) {
+    return this._sceneGridClipPathsToVisualSpace(this._higherVisualGridOcclusionPathsFor(visual), params);
+  }
+
+  _higherVisualGridOcclusionPathsFor(visual) {
+    const elevation = Number(visual?.visualElevation ?? visual?.entry?.elevation ?? 0);
+    const bounds = visual?.bounds ?? _cachedPathsBounds(visual?.paths ?? []);
+    if (!Number.isFinite(elevation) || !bounds) return [];
+    return this._entries
+      .filter(candidate => candidate !== visual)
+      .filter(candidate => Number(candidate.visualElevation ?? candidate.entry?.elevation ?? 0) > elevation + 0.001)
+      .filter(candidate => _boundsOverlap(bounds, candidate.bounds ?? _cachedPathsBounds(candidate.paths ?? [])))
+      .flatMap(candidate => this._visualGridOcclusionPaths(candidate));
+  }
+
+  _sceneGridClipPathsToVisualSpace(sceneClipPaths, params) {
+    if (!sceneClipPaths.length) return [];
+    const inverse = this._regionTransformInverseMatrix(params);
+    return inverse ? this._transformedPaths(sceneClipPaths, inverse) : sceneClipPaths;
+  }
+
+  _visualGridOcclusionPaths(visual) {
+    const topPaths = this._visualTopPaths(visual);
+    const wallPaths = this._visualWallGridClipPaths(visual);
+    return wallPaths.length ? topPaths.concat(wallPaths) : topPaths;
+  }
+
+  _visualWallGridClipPaths(visual) {
+    const params = this._visualParams.get(this._parallaxStateKey(visual));
+    if (!params || params.isHole || params.slope) return [];
+    if (!params.cliffWarp && !params.extrudedWalls && !params.edgeStretch) return [];
+    return this._wallGridOcclusionPaths(visual.paths ?? [], params);
+  }
+
+  _visualTopPaths(visual) {
+    const params = this._visualParams.get(this._parallaxStateKey(visual));
+    if (!params) return visual?.paths ?? [];
+    return this._topSurfacePaths(visual.paths ?? [], params);
+  }
+
+  _wallGridOcclusionPaths(paths, params) {
+    const overlayOffset = params.overlayOffset ?? { x: 0, y: 0 };
+    if (Math.hypot(overlayOffset.x, overlayOffset.y) < 0.5) return [];
+    const rows = params.extrudedWalls
+      ? EXTRUDED_WALLS_SIDE_ROWS
+      : params.edgeStretch ? EDGE_STRETCH_SIDE_ROWS : CLIFF_WARP_SIDE_ROWS;
+    const landingOverhang = this._wallGridLandingOverhang(params);
+    if (!rows?.length || landingOverhang <= 0) return [];
+    const overlayScale = params.overlayScale ?? 1;
+    const center = params.center;
+    const cullOffset = params.extrudedWalls
+      ? (this._parallaxStateFor({ entry: params.entry }).extrudedWallsCullOffset ?? overlayOffset)
+      : null;
+    const cullLength = cullOffset ? Math.hypot(cullOffset.x, cullOffset.y) : 0;
+    const cullEpsilon = Math.max(cullLength * 0.05, 0.25);
+    const occlusionPaths = [];
+
+    for (const path of this._cliffWarpRenderPaths(paths, params)) {
+      if (!path || path.length < 3) continue;
+      const windingSign = _pathSignedArea(path) >= 0 ? 1 : -1;
+      for (let edgeIndex = 0; edgeIndex < path.length; edgeIndex++) {
+        const startPoint = path[edgeIndex];
+        const endPoint = path[(edgeIndex + 1) % path.length];
+        const edgeX = endPoint.x - startPoint.x;
+        const edgeY = endPoint.y - startPoint.y;
+        const edgeLength = Math.hypot(edgeX, edgeY);
+        if (edgeLength < 0.001) continue;
+        let inwardNormalX = (-edgeY / edgeLength) * windingSign;
+        let inwardNormalY = (edgeX / edgeLength) * windingSign;
+        const probeStep = Math.max(1, edgeLength * 0.01);
+        const probeX = (startPoint.x + endPoint.x) / 2 + inwardNormalX * probeStep;
+        const probeY = (startPoint.y + endPoint.y) / 2 + inwardNormalY * probeStep;
+        if (!_pointInPolygon({ x: probeX, y: probeY }, path)) {
+          inwardNormalX = -inwardNormalX;
+          inwardNormalY = -inwardNormalY;
+        }
+        const outwardNormalX = -inwardNormalX;
+        const outwardNormalY = -inwardNormalY;
+        if (cullOffset) {
+          const facing = -(outwardNormalX * cullOffset.x + outwardNormalY * cullOffset.y);
+          if (facing <= cullEpsilon) continue;
+        }
+        const startRows = this._wallGridOcclusionRowPoints(startPoint, params, rows, landingOverhang, overlayScale, overlayOffset, center, outwardNormalX, outwardNormalY);
+        const endRows = this._wallGridOcclusionRowPoints(endPoint, params, rows, landingOverhang, overlayScale, overlayOffset, center, outwardNormalX, outwardNormalY);
+        const occlusionPath = startRows.concat([...endRows].reverse());
+        if (occlusionPath.length >= 3 && Math.abs(_pathSignedArea(occlusionPath)) > 1) occlusionPaths.push(occlusionPath);
+      }
+    }
+    return occlusionPaths;
+  }
+
+  _wallGridLandingOverhang(params) {
+    if (params.extrudedWalls) return Math.min(params.gridSize * 0.16, Math.max(params.gridSize * 0.035, params.slopeWidth * 0.35));
+    if (params.edgeStretch) {
+      const sourceWidth = Math.max(1, Number(params.edgeStretchSourceWidth ?? 1));
+      return Math.min(Math.max(1, params.slopeWidth * 0.18), sourceWidth * 0.45);
+    }
+    const sourceWidth = Math.max(1, params.cliffWarpSourceWidth || CLIFF_WARP_SOURCE_RIM_PIXELS);
+    return Math.min(sourceWidth * CLIFF_WARP_EDGE_OVERHANG_RATIO, Math.max(1, params.slopeWidth * 0.12));
+  }
+
+  _wallGridOcclusionRowPoints(point, params, rows, landingOverhang, overlayScale, overlayOffset, center, outwardNormalX, outwardNormalY) {
+    const top = this._cliffWarpTopPoint(point, params, overlayScale, overlayOffset, center);
+    const base = this._baseOverlayPointAtPoint(point, params);
+    return rows.map(row => {
+      const overhang = landingOverhang * row.overhang;
+      return {
+        x: top.x + (base.x - top.x) * row.t + outwardNormalX * overhang,
+        y: top.y + (base.y - top.y) * row.t + outwardNormalY * overhang
+      };
+    });
+  }
+
+  _topSurfacePaths(paths, params) {
+    if (params.isHole) return paths;
+    if (params.slope) return this._slopedOverlayPaths(paths, params);
+    if (this._usesProjectedFlatSurface(params)) return this._flatOverlaySurfacePaths(paths, params);
+    const matrix = this._regionTransformMatrix(params);
+    return matrix ? this._transformedPaths(paths, matrix) : paths;
+  }
+
+  _usesProjectedFlatSurface(params) {
+    return !params?.isHole && !!(params?.supportVisual || params?.cliffWarp || params?.extrudedWalls || params?.edgeStretch);
+  }
+
+  _flatOverlaySurfacePaths(paths, params) {
+    return paths.map(path => path.map(point => this._flatOverlaySurfacePoint(point, params)));
+  }
+
+  _flatOverlaySurfacePoint(point, params) {
+    if (this._usesProjectedFlatSurface(params)) {
+      return this._cliffWarpTopPoint(point, params, params.overlayScale ?? 1, params.overlayOffset ?? { x: 0, y: 0 }, params.center ?? point);
+    }
+    const matrix = this._regionTransformMatrix(params);
+    return matrix ? this._transformPoint(point, matrix) : point;
+  }
+
+  _regionTransformMatrix(params, { includeOverlayOffset = true, includeSupportOffset = false } = {}) {
+    const center = params?.transformCenter ?? params?.center;
+    if (!center) return null;
+    const offsetX = includeOverlayOffset ? params.overlayOffset.x : (includeSupportOffset ? (params.supportOverlayOffset?.x ?? 0) : 0);
+    const offsetY = includeOverlayOffset ? params.overlayOffset.y : (includeSupportOffset ? (params.supportOverlayOffset?.y ?? 0) : 0);
+    const scaleX = Number(params.overlayScaleX ?? params.overlayScale ?? 1);
+    const scaleY = Number(params.overlayScaleY ?? params.overlayScale ?? 1);
+    const rotation = Number(params.overlayRotation ?? 0);
+    const skewX = Number(params.overlaySkewX ?? 0);
+    const skewY = Number(params.overlaySkewY ?? 0);
+    const cx = Math.cos(rotation + skewY);
+    const sx = Math.sin(rotation + skewY);
+    const cy = -Math.sin(rotation - skewX);
+    const sy = Math.cos(rotation - skewX);
+    const a = cx * scaleX;
+    const b = sx * scaleX;
+    const c = cy * scaleY;
+    const d = sy * scaleY;
+    const x = center.x + offsetX;
+    const y = center.y + offsetY;
+    return {
+      a,
+      b,
+      c,
+      d,
+      tx: x - (center.x * a + center.y * c),
+      ty: y - (center.x * b + center.y * d)
+    };
+  }
+
+  _regionTransformInverseMatrix(params, options = {}) {
+    return this._invertMatrix(this._regionTransformMatrix(params, options));
+  }
+
+  _invertMatrix(matrix) {
+    if (!matrix) return null;
+    const determinant = matrix.a * matrix.d - matrix.b * matrix.c;
+    if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-8) return null;
+    const id = 1 / determinant;
+    return {
+      a: matrix.d * id,
+      b: -matrix.b * id,
+      c: -matrix.c * id,
+      d: matrix.a * id,
+      tx: (matrix.c * matrix.ty - matrix.d * matrix.tx) * id,
+      ty: (matrix.b * matrix.tx - matrix.a * matrix.ty) * id
+    };
+  }
+
+  _transformPoint(point, matrix) {
+    return {
+      x: point.x * matrix.a + point.y * matrix.c + matrix.tx,
+      y: point.x * matrix.b + point.y * matrix.d + matrix.ty
+    };
+  }
+
+  _transformedPaths(paths, matrix) {
+    return paths.map(path => path.map(point => this._transformPoint(point, matrix)));
+  }
+
   _drawRegions({ clear = true, emitVisualRefresh = clear } = {}) {
     if (clear) this._clearRegionChildren();
     this._visualParams.clear();
@@ -1249,14 +2188,17 @@ export class RegionElevationRenderer {
       }
       for (const { visual, params } of visualParams) {
         if ((params.overheadVisibilityAlpha ?? 1) <= 0.001) continue;
+        const higherPaths = this._higherVisualPathsFor(visual);
         if (!params.isHole) {
           const shadow = this._createShadow(visual.paths, texture, geo, params);
           if (shadow) {
             if (!shadow._sceneElevationPreTransformed) this._applyRegionTransform(shadow, params, { includeOverlayOffset: false, includeSupportOffset: true });
+            shadow._sceneElevationShadow = true;
+            shadow._sceneElevationSortElevation = this._shadowSortElevation(params);
             this._addRegionDisplayObject(shadow, params);
           }
         }
-        const overlay = this._createOverlay(visual.paths, texture, geo, params);
+        const overlay = this._createOverlay(visual.paths, texture, geo, params, { clipPaths: higherPaths });
         if (params.isHole && overlay) this._addRegionDisplayObject(overlay, params);
         const slope = this._createSlopeLayer(visual.paths, texture, geo, params);
         // Transition edges/walls are part of the lifted region silhouette:
@@ -1301,6 +2243,7 @@ export class RegionElevationRenderer {
       this._panRaf = null;
       this._updateCameraFocus(false);
       this._drawRegions({ emitVisualRefresh: false });
+      this.refreshElevatedGrid();
       Hooks.callAll(`${MODULE_ID}.parallaxRefresh`);
     });
   }
@@ -1310,16 +2253,25 @@ export class RegionElevationRenderer {
     const alpha = Math.clamp(Number(params.overheadVisibilityAlpha ?? 1), 0, 1);
     if (alpha <= 0.001) return;
     displayObject.alpha *= alpha;
-    // Two paths into the elevation-sortable parent:
+    // Paths into the elevation-sortable parent:
     //  1. The user explicitly enabled "overhead" on the region (legacy path).
     //  2. The display object is tagged for plateau occlusion AND the region
     //     has positive elevation. This lets the displaced overlay top and
     //     extruded walls naturally occlude tokens/tiles at lower elevations
     //     via PrimaryCanvasGroup's elevation sort, without forcing the user
     //     to toggle overhead (which has additional fade-on-hover behaviors).
+    //  3. Cast shadows on elevated support regions sort just above that
+    //     support. Cast shadows on the base scene stay in the module layer so
+    //     they remain visible over the scene background.
+    const supportElevation = Number(params?.supportElevation ?? 0);
+    const shadowOnElevatedSupport = displayObject._sceneElevationShadow === true
+      && Number.isFinite(supportElevation)
+      && supportElevation > OVERHEAD_SUPPORT_EPSILON;
+    const shadowOnBaseSurface = displayObject._sceneElevationShadow === true && !shadowOnElevatedSupport;
     const occludeLowerElevations = displayObject._sceneElevationOcclude === true
       && Number(params?.visualElevation ?? params?.entry?.elevation ?? 0) > 0;
-    const useOverheadLayer = params.entry?.overhead === true || occludeLowerElevations;
+    const useOverheadLayer = !shadowOnBaseSurface
+      && (params.entry?.overhead === true || occludeLowerElevations || shadowOnElevatedSupport);
     if (useOverheadLayer) {
       const sortElevation = this._overheadSortElevation(params, displayObject);
       displayObject.zIndex = sortElevation;
@@ -1385,6 +2337,14 @@ export class RegionElevationRenderer {
     // we already use for overlays.
     const tieBreak = OVERHEAD_SORT_EPSILON / (1 + heightAboveSupport);
     return safeSupport + tieBreak;
+  }
+
+  _shadowSortElevation(params) {
+    const support = Number(params?.supportElevation ?? 0);
+    const safeSupport = Number.isFinite(support) ? support : 0;
+    const transition = this._transitionFaceSortElevation(params);
+    const transitionLift = Math.max(0.000001, transition - safeSupport);
+    return safeSupport - OVERHEAD_SORT_EPSILON + transitionLift * 0.5;
   }
 
   _overheadRenderParent() {
@@ -2842,15 +3802,20 @@ export class RegionElevationRenderer {
     return layer;
   }
 
-  _createOverlay(paths, texture, geo, params) {
+  _createOverlay(paths, texture, geo, params, { clipPaths = [] } = {}) {
     const overlay = params.slope && texture
       ? this._createSlopedOverlay(paths, texture, geo, params)
       : this._createFlatOverlay(paths, texture, geo, params);
-    if (!overlay || !params.isHole) return overlay;
-    return this._clipDisplayObjectToRegion(overlay, paths);
+    if (!overlay || (!params.isHole && !clipPaths.length)) return overlay;
+    const maskPaths = params.isHole ? paths : this._topSurfacePaths(paths, params);
+    return this._clipDisplayObjectToRegion(overlay, maskPaths, params.isHole ? [] : clipPaths);
   }
 
   _createFlatOverlay(paths, texture, geo, params) {
+    if (texture && !params.isHole && this._usesProjectedFlatSurface(params)) {
+      const projectedOverlay = this._createProjectedFlatOverlay(paths, texture, geo, params);
+      if (projectedOverlay) return projectedOverlay;
+    }
     const overlay = new PIXI.Container();
     overlay.eventMode = "none";
     this._applyRegionTransform(overlay, params);
@@ -2872,6 +3837,47 @@ export class RegionElevationRenderer {
       overlay.addChild(fallback);
     }
 
+    return overlay;
+  }
+
+  _createProjectedFlatOverlay(paths, texture, geo, params) {
+    const Mesh = PIXI.Mesh;
+    const MeshGeometry = PIXI.MeshGeometry;
+    const MeshMaterial = PIXI.MeshMaterial;
+    if (!Mesh || !MeshGeometry || !MeshMaterial) return null;
+
+    const overlay = new PIXI.Container();
+    overlay.eventMode = "none";
+    for (const path of paths) {
+      if (!path || path.length < 3) continue;
+      const triangleIndices = _triangulateSimplePath(path);
+      if (!triangleIndices.length) continue;
+      const positions = new Float32Array(path.length * 2);
+      const uvs = new Float32Array(path.length * 2);
+      const indexArray = path.length > 65535 ? Uint32Array : Uint16Array;
+      const indices = new indexArray(triangleIndices);
+
+      for (let index = 0; index < path.length; index++) {
+        const source = path[index];
+        const displaced = this._flatOverlaySurfacePoint(source, params);
+        const offset = index * 2;
+        positions[offset] = displaced.x;
+        positions[offset + 1] = displaced.y;
+        uvs[offset] = Math.clamp((source.x - geo.x) / geo.width, 0, 1);
+        uvs[offset + 1] = Math.clamp((source.y - geo.y) / geo.height, 0, 1);
+      }
+
+      const meshGeo = new MeshGeometry(positions, uvs, indices);
+      const material = new MeshMaterial(texture, { alpha: params.overlayAlpha });
+      const mesh = new Mesh(meshGeo, material);
+      mesh.eventMode = "none";
+      overlay.addChild(mesh);
+    }
+
+    if (!overlay.children.length) {
+      overlay.destroy({ children: true });
+      return null;
+    }
     return overlay;
   }
 
@@ -2935,14 +3941,33 @@ export class RegionElevationRenderer {
     return overlay;
   }
 
-  _clipDisplayObjectToRegion(displayObject, paths) {
+  _clipDisplayObjectToRegion(displayObject, paths, clipPaths = []) {
     const container = new PIXI.Container();
     container.eventMode = "none";
-    const mask = this._createMask(paths);
+    const mask = this._createStackedRegionMask(paths, clipPaths);
     displayObject.mask = mask;
     container.addChild(mask);
     container.addChild(displayObject);
     return container;
+  }
+
+  _createStackedRegionMask(paths, clipPaths = []) {
+    if (!clipPaths?.length) return this._createMask(paths);
+    const MaskGraphics = _graphicsClass();
+    const mask = new MaskGraphics();
+    mask.eventMode = "none";
+    mask.beginFill(0xffffff, 1);
+    _drawPaths(mask, paths);
+    if (typeof mask.beginHole === "function" && typeof mask.endHole === "function") {
+      for (const path of clipPaths) {
+        mask.beginHole();
+        mask.drawPolygon(path.flatMap(point => [point.x, point.y]));
+        mask.endHole();
+      }
+    }
+    mask.endFill();
+    mask.renderable = false;
+    return mask;
   }
 
   _createFeatherMask(paths, feather) {
@@ -3093,6 +4118,7 @@ function _parallaxStrengthForKey(strengthKey) {
 }
 
 function _parallaxStrengthKey() {
+  if (_temporaryParallaxDisabled) return "off";
   const strengthKey = _setting(SCENE_SETTING_KEYS.PARALLAX) ?? "off";
   return Object.prototype.hasOwnProperty.call(PARALLAX_STRENGTHS, strengthKey) ? strengthKey : "off";
 }
