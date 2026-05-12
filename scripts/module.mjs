@@ -1089,6 +1089,20 @@ function _applyTokenParallaxOffset(token) {
   }
 }
 
+function _tokenLiveParallaxOffset(token) {
+  if (!token || token.destroyed || !token.document) return ZERO_PARALLAX_OFFSET;
+  const doc = token.document;
+  const live = _safeTokenLivePoint(token, doc);
+  const gridSize = _canvasGridSize();
+  const liveX = _quantizeLivePosition(live.x, gridSize);
+  const liveY = _quantizeLivePosition(live.y, gridSize);
+  const activeEntries = getActiveElevationRegions(canvas?.scene);
+  const position = { x: liveX, y: liveY, width: doc.width, height: doc.height };
+  return activeEntries.length && _tokenBoundsIntersectEntries(doc, position, activeEntries)
+    ? RegionElevationRenderer.instance.tokenParallaxOffset(doc, position)
+    : ZERO_PARALLAX_OFFSET;
+}
+
 // Cheap path used when the token's heavy state (scale / visibility floor /
 // negative-parallax clip) is unchanged since the last full refresh. Parallax
 // itself must always be recomputed against the live token position so the
@@ -1174,12 +1188,26 @@ function _applyDisplayObjectParallaxOffset(displayObject, offset) {
   displayObject.position.set(displayObject._seBasePositionX + offset.x, displayObject._seBasePositionY + offset.y);
 }
 
-function _clearTokenParallaxCaches(token) {
+function _clearTokenParallaxCaches(token, { restorePositions = true } = {}) {
   const targets = token?._seParallaxTargets ?? _tokenParallaxTargets(token);
-  for (const target of targets) _clearDisplayObjectParallaxCache(target);
+  for (const target of targets) _clearDisplayObjectParallaxCache(target, { restorePosition: restorePositions });
+  _clearTokenParallaxApplicationCache(token);
   _clearTokenParallaxTargetCache(token);
   _clearTokenParallaxHitArea(token);
   RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
+}
+
+function _clearTokenParallaxApplicationCache(token) {
+  const mesh = token?.mesh;
+  if (!mesh) return;
+  delete mesh._seScaleCacheKey;
+  delete mesh._seCachedParallaxOffset;
+  delete mesh._seParallaxAppliedX;
+  delete mesh._seParallaxAppliedY;
+  delete mesh._seParallaxAppliedElev;
+  delete mesh._seParallaxAppliedVersion;
+  delete mesh._seParallaxAppliedW;
+  delete mesh._seParallaxAppliedH;
 }
 
 function _clearTokenParallaxTargetCache(token) {
@@ -1188,9 +1216,9 @@ function _clearTokenParallaxTargetCache(token) {
   delete token._seParallaxTargetsSignature;
 }
 
-function _clearDisplayObjectParallaxCache(displayObject) {
+function _clearDisplayObjectParallaxCache(displayObject, { restorePosition = true } = {}) {
   if (!displayObject) return;
-  if (displayObject?._seBasePositionX !== undefined && displayObject?._seBasePositionY !== undefined) {
+  if (restorePosition && displayObject?._seBasePositionX !== undefined && displayObject?._seBasePositionY !== undefined) {
     displayObject.position?.set?.(displayObject._seBasePositionX, displayObject._seBasePositionY);
   }
   delete displayObject._seBasePositionX;
@@ -1965,8 +1993,9 @@ Hooks.on("refreshToken", (token) => {
 Hooks.on("targetToken", (_user, token) => {
   if (!token) return;
   requestAnimationFrame(() => {
-    _clearTokenParallaxCaches(token);
-    _applyTokenScale(token);
+    const offset = _tokenLiveParallaxOffset(token);
+    _clearTokenParallaxCaches(token, { restorePositions: !_offsetIsEffectivelyZero(offset) });
+    _applyTokenScale(token, { forceScale: true });
   });
 });
 Hooks.on("createToken", (document) => {
