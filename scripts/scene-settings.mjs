@@ -10,9 +10,11 @@ import {
   SHADOW_MODES,
   SHADOW_LENGTHS,
   TOKEN_ELEVATION_MODES,
+  TOKEN_SCALING_MODES,
   DEPTH_SCALES,
   ELEVATION_SCALE_LIMITS,
   EDGE_STRETCH_LIMITS,
+  TOKEN_SCALE_PER_ELEVATION_LIMITS,
   ELEVATION_PRESETS,
   ELEVATION_PRESET_SETTING_KEYS,
   elevationScaleValue,
@@ -23,6 +25,8 @@ import {
   getSceneElevationSettings,
   parallaxHeightContrastKey,
   shadowLengthKey,
+  tokenScalePerElevationValue,
+  tokenScalingModeValue,
   setSceneElevationSettings
 } from "./config.mjs";
 
@@ -130,6 +134,10 @@ const SELECT_GROUPS = Object.freeze({
     [TOKEN_ELEVATION_MODES.NEVER, "SCENE_ELEVATION.Settings.TokenElevationModeNever"],
     [TOKEN_ELEVATION_MODES.PER_REGION, "SCENE_ELEVATION.Settings.TokenElevationModePerRegion"]
   ],
+  [SCENE_SETTING_KEYS.TOKEN_SCALING_MODE]: [
+    [TOKEN_SCALING_MODES.MAX_TOKEN_SCALE, "SCENE_ELEVATION.Settings.TokenScalingModeMaxTokenScale"],
+    [TOKEN_SCALING_MODES.SCALE_PER_ELEVATION, "SCENE_ELEVATION.Settings.TokenScalingModeScalePerElevation"]
+  ],
   [SCENE_SETTING_KEYS.DEPTH_SCALE]: [
     [DEPTH_SCALES.COMPRESSED, "SCENE_ELEVATION.Settings.DepthScaleCompressed"],
     [DEPTH_SCALES.LINEAR, "SCENE_ELEVATION.Settings.DepthScaleLinear"],
@@ -170,6 +178,7 @@ class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
     form.addEventListener("change", event => {
       this._syncPresetFields(form, event.target);
       _syncEdgeStretchVisibility(form);
+      _syncTokenScalingModeVisibility(form);
       void this._applyFormSettings();
     });
     form.addEventListener("input", event => {
@@ -182,6 +191,7 @@ class SceneElevationSettingsDialog extends foundry.applications.api.DialogV2 {
       void this._setToDefault();
     });
     _syncEdgeStretchVisibility(form);
+    _syncTokenScalingModeVisibility(form);
   }
 
   _syncPresetFields(form, target) {
@@ -240,12 +250,29 @@ function _settingsForm(settings) {
       <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenScale")}</label>
       <input type="checkbox" name="${SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED}" ${settings[SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED] ? "checked" : ""}>
     </div>
-    <div class="form-group" style="margin-bottom: 4px;">
+    ${_selectField(SCENE_SETTING_KEYS.TOKEN_SCALING_MODE, "SCENE_ELEVATION.Settings.TokenScalingMode", settings)}
+    ${_tokenScaleMaxField(settings)}
+    ${_tokenScalePerElevationField(settings)}
+  </form>`;
+}
+
+function _tokenScaleMaxField(settings) {
+  const hidden = tokenScalingModeValue(settings[SCENE_SETTING_KEYS.TOKEN_SCALING_MODE]) !== TOKEN_SCALING_MODES.MAX_TOKEN_SCALE ? " hidden" : "";
+  return `<div class="form-group" data-token-scale-max style="margin-bottom: 4px;"${hidden}>
       <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenScaleMax")}</label>
       <input type="number" name="${SCENE_SETTING_KEYS.TOKEN_SCALE_MAX}" min="1" max="3" step="0.05" value="${Number(settings[SCENE_SETTING_KEYS.TOKEN_SCALE_MAX] ?? 1.5)}">
       <p class="hint">${game.i18n.localize("SCENE_ELEVATION.Settings.TokenScaleMaxHint")}</p>
-    </div>
-  </form>`;
+    </div>`;
+}
+
+function _tokenScalePerElevationField(settings) {
+  const hidden = tokenScalingModeValue(settings[SCENE_SETTING_KEYS.TOKEN_SCALING_MODE]) !== TOKEN_SCALING_MODES.SCALE_PER_ELEVATION ? " hidden" : "";
+  const value = tokenScalePerElevationValue(settings[SCENE_SETTING_KEYS.TOKEN_SCALE_PER_ELEVATION] ?? TOKEN_SCALE_PER_ELEVATION_LIMITS.DEFAULT);
+  return `<div class="form-group" data-token-scale-per-elevation style="margin-bottom: 4px;"${hidden}>
+      <label>${game.i18n.localize("SCENE_ELEVATION.Settings.TokenScalePerElevation")}</label>
+      <input type="number" name="${SCENE_SETTING_KEYS.TOKEN_SCALE_PER_ELEVATION}" min="${TOKEN_SCALE_PER_ELEVATION_LIMITS.MIN}" max="${TOKEN_SCALE_PER_ELEVATION_LIMITS.MAX}" step="${TOKEN_SCALE_PER_ELEVATION_LIMITS.STEP}" value="${value}">
+      <p class="hint">${game.i18n.localize("SCENE_ELEVATION.Settings.TokenScalePerElevationHint")}</p>
+    </div>`;
 }
 
 function _selectField(name, labelKey, settings) {
@@ -309,6 +336,7 @@ function _populateSettingsForm(form, settings) {
     if (field instanceof HTMLInputElement && field.type === "range") _syncRangeOutput(form, field);
   }
   _syncEdgeStretchVisibility(form);
+  _syncTokenScalingModeVisibility(form);
 }
 
 function _formSettings(data, current, scene) {
@@ -330,7 +358,9 @@ function _formSettings(data, current, scene) {
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE]: _choice(data, SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE, Object.values(TOKEN_ELEVATION_MODES), current),
     [SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS) ?? current[SCENE_SETTING_KEYS.TOKEN_ELEVATION_ANIMATION_MS] ?? 120), 0, 600),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED]: data.has(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED),
+    [SCENE_SETTING_KEYS.TOKEN_SCALING_MODE]: _choice(data, SCENE_SETTING_KEYS.TOKEN_SCALING_MODE, Object.values(TOKEN_SCALING_MODES), current, TOKEN_SCALING_MODES.MAX_TOKEN_SCALE),
     [SCENE_SETTING_KEYS.TOKEN_SCALE_MAX]: Math.clamp(Number(data.get(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? current[SCENE_SETTING_KEYS.TOKEN_SCALE_MAX] ?? 1.5), 1, 3),
+    [SCENE_SETTING_KEYS.TOKEN_SCALE_PER_ELEVATION]: tokenScalePerElevationValue(data.get(SCENE_SETTING_KEYS.TOKEN_SCALE_PER_ELEVATION) ?? current[SCENE_SETTING_KEYS.TOKEN_SCALE_PER_ELEVATION] ?? TOKEN_SCALE_PER_ELEVATION_LIMITS.DEFAULT),
     [SCENE_SETTING_KEYS.ELEVATION_SCALE]: elevationScaleValue(data.get(SCENE_SETTING_KEYS.ELEVATION_SCALE) ?? current[SCENE_SETTING_KEYS.ELEVATION_SCALE]),
     [SCENE_SETTING_KEYS.DEPTH_SCALE]: presetValues[SCENE_SETTING_KEYS.DEPTH_SCALE] ?? _choice(data, SCENE_SETTING_KEYS.DEPTH_SCALE, Object.values(DEPTH_SCALES), current, DEPTH_SCALES.COMPRESSED)
   };
@@ -349,6 +379,16 @@ function _syncEdgeStretchVisibility(form) {
   const blendField = form.elements.namedItem(SCENE_SETTING_KEYS.BLEND_MODE);
   if (!group || !blendField) return;
   group.hidden = blendField.value !== BLEND_MODES.EDGE_STRETCH;
+}
+
+function _syncTokenScalingModeVisibility(form) {
+  const modeField = form.elements.namedItem(SCENE_SETTING_KEYS.TOKEN_SCALING_MODE);
+  const maxGroup = form.querySelector("[data-token-scale-max]");
+  const perElevationGroup = form.querySelector("[data-token-scale-per-elevation]");
+  if (!modeField) return;
+  const mode = tokenScalingModeValue(modeField.value);
+  if (maxGroup) maxGroup.hidden = mode !== TOKEN_SCALING_MODES.MAX_TOKEN_SCALE;
+  if (perElevationGroup) perElevationGroup.hidden = mode !== TOKEN_SCALING_MODES.SCALE_PER_ELEVATION;
 }
 
 function _choice(data, key, choices, current, fallback = choices[0]) {
@@ -385,6 +425,7 @@ function _applyPresetToSettingsForm(form, presetKey, scene) {
     if (edgeStretchField instanceof HTMLInputElement && edgeStretchField.type === "range") _syncRangeOutput(form, edgeStretchField);
   }
   _syncEdgeStretchVisibility(form);
+  _syncTokenScalingModeVisibility(form);
 }
 
 function _setSettingsFormPreset(form, presetKey) {

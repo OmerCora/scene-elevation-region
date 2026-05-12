@@ -1,4 +1,4 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, EDGE_STRETCH_LIMITS, REGION_BEHAVIOR_TYPE, ELEVATED_GRID_MODES, edgeStretchPercentValue, elevatedGridModeValue, elevationPresetValues, getSceneElevationClientEnabled, getSceneElevationSetting, parallaxHeightContrastKey, setSceneElevationClientEnabled, shadowLengthKey } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, TOKEN_SCALING_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, EDGE_STRETCH_LIMITS, REGION_BEHAVIOR_TYPE, ELEVATED_GRID_MODES, edgeStretchPercentValue, elevatedGridModeValue, elevationPresetValues, getSceneElevationClientEnabled, getSceneElevationSetting, parallaxHeightContrastKey, setSceneElevationClientEnabled, shadowLengthKey, tokenScalePerElevationValue, tokenScalingModeValue } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
 import {
@@ -401,6 +401,19 @@ Hooks.once("init", () => {
     scope: "world", config: true, type: Boolean, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_SCALE_ENABLED],
     onChange: () => _refreshAllTokenScales()
   });
+  game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALING_MODE, {
+    name: "SCENE_ELEVATION.Settings.TokenScalingMode",
+    hint: "SCENE_ELEVATION.Settings.TokenScalingModeHint",
+    scope: "world",
+    config: true,
+    type: String,
+    default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_SCALING_MODE],
+    choices: {
+      [TOKEN_SCALING_MODES.MAX_TOKEN_SCALE]: "SCENE_ELEVATION.Settings.TokenScalingModeMaxTokenScale",
+      [TOKEN_SCALING_MODES.SCALE_PER_ELEVATION]: "SCENE_ELEVATION.Settings.TokenScalingModeScalePerElevation"
+    },
+    onChange: () => _refreshAllTokenScales()
+  });
   game.settings.register(MODULE_ID, SETTINGS.TOKEN_ELEVATION_MODE, {
     name: "SCENE_ELEVATION.Settings.TokenElevationMode",
     hint: "SCENE_ELEVATION.Settings.TokenElevationModeHint",
@@ -421,6 +434,12 @@ Hooks.once("init", () => {
     name: "SCENE_ELEVATION.Settings.TokenScaleMax",
     hint: "SCENE_ELEVATION.Settings.TokenScaleMaxHint",
     scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_SCALE_MAX],
+    onChange: () => _refreshAllTokenScales()
+  });
+  game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_PER_ELEVATION, {
+    name: "SCENE_ELEVATION.Settings.TokenScalePerElevation",
+    hint: "SCENE_ELEVATION.Settings.TokenScalePerElevationHint",
+    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_SCALE_PER_ELEVATION],
     onChange: () => _refreshAllTokenScales()
   });
   game.settings.register(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS, {
@@ -517,6 +536,10 @@ Hooks.on("refreshTile", (tile) => {
 
 Hooks.on(`${MODULE_ID}.visualRefresh`, () => _queueTokenVisualRefresh());
 Hooks.on(`${MODULE_ID}.parallaxRefresh`, () => _queueTokenParallaxRefresh());
+
+Hooks.on("renderSettingsConfig", (_app, html) => {
+  requestAnimationFrame(() => _syncTokenScalingModeSettingsConfig(html));
+});
 
 Hooks.on("updateScene", (scene, change) => {
   if (scene !== canvas.scene) return;
@@ -708,7 +731,7 @@ function _regionBehaviorFieldName(name) {
 /*  Token elevation scaling                      */
 /* -------------------------------------------- */
 
-function _tokenScaleFactor(token) {
+function _tokenScaleFactor(token, baseTokenScale = 1) {
   if (!game.modules.get(MODULE_ID)?.active) return 1;
   if (!_sceneElevationClientEnabled()) return 1;
   if (!getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED)) return 1;
@@ -716,6 +739,15 @@ function _tokenScaleFactor(token) {
   const entries = getActiveElevationRegions(canvas.scene);
   const state = _tokenElevationState(token.document, { requireTokenScaling: true, allowOverheadSupport: true }, {}, entries);
   if (!state.found) return 1;
+  const mode = tokenScalingModeValue(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALING_MODE));
+  if (mode === TOKEN_SCALING_MODES.SCALE_PER_ELEVATION) {
+    const elevation = Number(state.elevation ?? 0);
+    if (!Number.isFinite(elevation)) return 1;
+    const perElevation = tokenScalePerElevationValue(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_PER_ELEVATION));
+    const base = Math.max(0.001, Math.abs(Number(baseTokenScale ?? 1)) || 1);
+    const targetScale = Math.max(0.05, base + elevation * perElevation);
+    return targetScale / base;
+  }
   const maxSetting = Number(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? 1.5);
   const max = Math.max(1, Number.isFinite(maxSetting) ? maxSetting : 1.5);
   const range = _tokenScalingElevationRange(entries);
@@ -728,6 +760,15 @@ function _tokenScaleFactor(token) {
     ? 1 + normalized * (max - 1)
     : 1 + normalized * (1 - (1 / max));
   return Math.clamp(factor, 1 / max, max);
+}
+
+function _tokenDocumentTextureScale(tokenDocument) {
+  const texture = tokenDocument?.texture ?? {};
+  const scaleX = Number(texture.scaleX ?? texture.scale ?? 1);
+  const scaleY = Number(texture.scaleY ?? texture.scale ?? scaleX);
+  const x = Number.isFinite(scaleX) ? Math.abs(scaleX) : 1;
+  const y = Number.isFinite(scaleY) ? Math.abs(scaleY) : x;
+  return Math.max(0.001, x || 1, y || 1);
 }
 
 function _normalizedTokenScaleElevation(elevation, range) {
@@ -890,6 +931,37 @@ function _elevatedGridOverrideSceneGridEnabled() {
   if (!_sceneElevationClientEnabled()) return false;
   try { return elevatedGridModeValue(game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATED_GRID)) === ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID; }
   catch (err) { return false; }
+}
+
+function _syncTokenScalingModeSettingsConfig(html) {
+  const root = _settingsConfigRoot(html);
+  if (!root) return;
+  const modeField = _settingsConfigField(root, SETTINGS.TOKEN_SCALING_MODE);
+  const maxField = _settingsConfigField(root, SETTINGS.TOKEN_SCALE_MAX);
+  const perElevationField = _settingsConfigField(root, SETTINGS.TOKEN_SCALE_PER_ELEVATION);
+  if (!modeField) return;
+  const maxGroup = maxField?.closest?.(".form-group") ?? maxField?.parentElement ?? null;
+  const perElevationGroup = perElevationField?.closest?.(".form-group") ?? perElevationField?.parentElement ?? null;
+  const sync = () => {
+    const mode = tokenScalingModeValue(modeField.value);
+    if (maxGroup) maxGroup.hidden = mode !== TOKEN_SCALING_MODES.MAX_TOKEN_SCALE;
+    if (perElevationGroup) perElevationGroup.hidden = mode !== TOKEN_SCALING_MODES.SCALE_PER_ELEVATION;
+  };
+  modeField.addEventListener("change", sync);
+  sync();
+}
+
+function _settingsConfigRoot(html) {
+  if (html instanceof HTMLElement) return html;
+  if (html?.[0] instanceof HTMLElement) return html[0];
+  if (html?.element instanceof HTMLElement) return html.element;
+  if (html?.element?.[0] instanceof HTMLElement) return html.element[0];
+  return null;
+}
+
+function _settingsConfigField(root, key) {
+  const names = new Set([`${MODULE_ID}.${key}`, key]);
+  return Array.from(root.querySelectorAll("input, select")).find(field => names.has(field.name));
 }
 
 function _validElevatedGridToken(token) {
@@ -1058,9 +1130,14 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
   // doc state + visualParams version (which bumps when parallax/perspective
   // change) + per-mesh visual flags.
   const renderer = RegionElevationRenderer.instance;
+  const tokenScaleEnabled = getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED);
+  const tokenScalingMode = tokenScalingModeValue(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALING_MODE));
+  const tokenScaleMax = Number(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? 1.5);
+  const tokenScalePerElevation = tokenScalePerElevationValue(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_PER_ELEVATION));
+  const tokenTextureScale = _tokenDocumentTextureScale(doc);
   const cacheKey = forceScale
     ? null
-    : `${doc?.x ?? 0}|${doc?.y ?? 0}|${doc?.elevation ?? 0}|${doc?.width ?? 1}|${doc?.height ?? 1}|${renderer?._visualParamsVersion ?? 0}|${getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED) ? 1 : 0}|${(doc?.uuid ?? doc?.id) && _tokensWithPendingMovement.has(doc.uuid ?? doc.id) ? 1 : 0}`;
+    : `${doc?.x ?? 0}|${doc?.y ?? 0}|${doc?.elevation ?? 0}|${doc?.width ?? 1}|${doc?.height ?? 1}|${renderer?._visualParamsVersion ?? 0}|${tokenScaleEnabled ? 1 : 0}|${tokenScalingMode}|${Number.isFinite(tokenScaleMax) ? tokenScaleMax : 1.5}|${tokenScalePerElevation}|${tokenTextureScale}|${(doc?.uuid ?? doc?.id) && _tokensWithPendingMovement.has(doc.uuid ?? doc.id) ? 1 : 0}`;
   if (cacheKey && m._seScaleCacheKey === cacheKey) {
     // Cheap path: re-apply cached parallax offset only. Mesh position is
     // overwritten by Foundry's drag/move animation between refreshes.
@@ -1075,7 +1152,7 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
       // Cache the engine-set base scale once, then drive absolute scale =
       // base * factor. This avoids the previous bug where successive refreshes
       // multiplied the scale unboundedly.
-      if (!getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED)) {
+      if (!tokenScaleEnabled) {
         if (m._seBaseScaleX !== undefined) m.scale.set(m._seBaseScaleX, m._seBaseScaleY);
         m._seLastFactor = 1;
       } else if (m._seBaseScaleX === undefined) {
@@ -1087,8 +1164,8 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
         m._seBaseScaleX = m.scale.x;
         m._seBaseScaleY = m.scale.y;
       }
-      if (getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED)) {
-        const factor = _tokenScaleFactor(token);
+      if (tokenScaleEnabled) {
+        const factor = _tokenScaleFactor(token, tokenTextureScale);
         m._seLastFactor = factor;
         const sgnX = Math.sign(m._seBaseScaleX) || 1;
         const sgnY = Math.sign(m._seBaseScaleY) || 1;
