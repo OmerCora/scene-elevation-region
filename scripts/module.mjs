@@ -10,6 +10,7 @@ import {
   regionContainsPoint,
   setTemporaryParallaxDisabled
 } from "./region-elevation-renderer.mjs";
+import { adjustSystemTokenElevationTarget, getSystemTokenScalingElevation, getSystemTokenVisualState } from "./systems/index.mjs";
 
 const TOKEN_ELEVATION_MIN_MOVEMENT_DELAY_MS = 250;
 const TOKEN_ELEVATION_SETTLE_TIMEOUT_MS = 900;
@@ -26,6 +27,10 @@ const TOKEN_PARALLAX_TARGET_NAME_PATTERN = /target|crosshair|reticle|reticule|ba
 const TOKEN_PARALLAX_TARGET_SCAN_LIMIT = 80;
 const TOKEN_PARALLAX_HIT_AREA_EPSILON = 0.5;
 const ZERO_PARALLAX_OFFSET = Object.freeze({ x: 0, y: 0 });
+const SYSTEM_TOKEN_FLIGHT_MOTION_GRID_FRACTION = 0.025;
+const SYSTEM_TOKEN_FLIGHT_MOTION_MIN_PIXELS = 1.5;
+const SYSTEM_TOKEN_BURROW_ALPHA_FACTOR = 0.72;
+const SYSTEM_TOKEN_BURROW_TINT = 0xb18455;
 const TOKEN_HUD_POSITION_PATCHED = "_sceneElevationRegionHudPositionPatched";
 const TOKEN_RULER_GUIDE_PATCHED = "_sceneElevationRegionRulerGuidePatched";
 const MOUSE_DRIFT_WORLD_DEFAULTS_VERSION = "mouse-drift-defaults-v2";
@@ -52,6 +57,7 @@ const _tokenUpdateMovementDeltas = new Map();
 let _tokenVisualRefreshFrame = null;
 let _regionOverheadRefreshFrame = null;
 let _elevatedGridRefreshFrame = null;
+let _systemTokenVisualAnimationFrame = null;
 let _hoveredElevatedGridToken = null;
 let _dragElevatedGridToken = null;
 let _rulerElevatedGridContext = null;
@@ -82,6 +88,7 @@ function _refreshSceneElevationClientState(enabled = _sceneElevationClientEnable
   if (!enabled) {
     _clearPendingTokenElevationUpdates();
     _clearPendingElevatedGridRefresh();
+    _clearPendingSystemTokenVisualAnimation();
     RegionElevationRenderer.instance.detach();
     _resetAllTokenVisuals();
     canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.activateTool(null);
@@ -442,6 +449,32 @@ Hooks.once("init", () => {
     scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_SCALE_PER_ELEVATION],
     onChange: () => _refreshAllTokenScales()
   });
+  if (game.system?.id === "draw-steel") {
+    game.settings.register(MODULE_ID, SETTINGS.DRAW_STEEL_MOVEMENT_TYPE_ANIMATIONS, {
+      name: "SCENE_ELEVATION.Settings.DrawSteelMovementTypeAnimations",
+      hint: "SCENE_ELEVATION.Settings.DrawSteelMovementTypeAnimationsHint",
+      scope: "world",
+      config: true,
+      type: Boolean,
+      default: true,
+      onChange: () => {
+        _clearPendingSystemTokenVisualAnimation();
+        _refreshAllTokenScales();
+      }
+    });
+    game.settings.register(MODULE_ID, SETTINGS.DRAW_STEEL_HANDLE_MOVEMENT_MODES, {
+      name: "SCENE_ELEVATION.Settings.DrawSteelHandleMovementModes",
+      hint: "SCENE_ELEVATION.Settings.DrawSteelHandleMovementModesHint",
+      scope: "world",
+      config: true,
+      type: Boolean,
+      default: true,
+      onChange: () => {
+        _refreshAllTokenScales();
+        void _refreshAllTokenElevations();
+      }
+    });
+  }
   game.settings.register(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS, {
     scope: "client", config: false, type: Boolean, default: false,
     onChange: () => canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.refreshElevationRegionVisibility()
@@ -731,13 +764,13 @@ function _regionBehaviorFieldName(name) {
 /*  Token elevation scaling                      */
 /* -------------------------------------------- */
 
-function _tokenScaleFactor(token, baseTokenScale = 1) {
+function _tokenScaleFactor(token, baseTokenScale = 1, { entries = null, systemScalingElevation = null } = {}) {
   if (!game.modules.get(MODULE_ID)?.active) return 1;
   if (!_sceneElevationClientEnabled()) return 1;
   if (!getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED)) return 1;
   if (!canvas?.scene || !token?.document) return 1;
-  const entries = getActiveElevationRegions(canvas.scene);
-  const state = _tokenElevationState(token.document, { requireTokenScaling: true, allowOverheadSupport: true }, {}, entries);
+  const activeEntries = entries ?? getActiveElevationRegions(canvas.scene);
+  const state = _tokenScaleElevationState(token, activeEntries, systemScalingElevation);
   if (!state.found) return 1;
   const mode = tokenScalingModeValue(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALING_MODE));
   if (mode === TOKEN_SCALING_MODES.SCALE_PER_ELEVATION) {
@@ -750,8 +783,12 @@ function _tokenScaleFactor(token, baseTokenScale = 1) {
   }
   const maxSetting = Number(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? 1.5);
   const max = Math.max(1, Number.isFinite(maxSetting) ? maxSetting : 1.5);
-  const range = _tokenScalingElevationRange(entries);
+  const range = _tokenScalingElevationRange(activeEntries);
   if (state.entry?.overhead) {
+    range.lowest = Math.min(range.lowest, Number(state.elevation ?? 0));
+    range.highest = Math.max(range.highest, Number(state.elevation ?? 0));
+  }
+  if (state.systemScaling) {
     range.lowest = Math.min(range.lowest, Number(state.elevation ?? 0));
     range.highest = Math.max(range.highest, Number(state.elevation ?? 0));
   }
@@ -760,6 +797,20 @@ function _tokenScaleFactor(token, baseTokenScale = 1) {
     ? 1 + normalized * (max - 1)
     : 1 + normalized * (1 - (1 / max));
   return Math.clamp(factor, 1 / max, max);
+}
+
+function _tokenScaleElevationState(token, entries, systemScalingElevation = null) {
+  const state = _tokenElevationState(token.document, { requireTokenScaling: true, allowOverheadSupport: true }, {}, entries);
+  const elevation = Number(systemScalingElevation);
+  if (!Number.isFinite(elevation) || Math.abs(elevation) <= 0.001) return state;
+  const systemState = { found: true, elevation, entry: state.entry ?? null, systemScaling: true };
+  if (!state.found) return systemState;
+  return elevation > Number(state.elevation ?? 0) ? systemState : state;
+}
+
+function _systemTokenScalingElevation(tokenDocument) {
+  const elevation = Number(getSystemTokenScalingElevation(tokenDocument));
+  return Number.isFinite(elevation) && Math.abs(elevation) > 0.001 ? elevation : null;
 }
 
 function _tokenDocumentTextureScale(tokenDocument) {
@@ -1077,6 +1128,7 @@ function _highestTokenElevationState(tokenDocument, position = {}) {
 
 function _applyTokenScale(token, { forceScale = false } = {}) {
   if (!token?.mesh) return;
+  _restoreSystemTokenMotion(token);
   if (!_sceneElevationClientEnabled()) {
     _resetTokenVisuals(token);
     return;
@@ -1096,30 +1148,35 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
   const activeEntries = getActiveElevationRegions(canvas?.scene);
   const m = token.mesh;
   const doc = token.document;
+  const systemScalingElevation = _systemTokenScalingElevation(doc);
+  const hasSystemScalingElevation = systemScalingElevation !== null;
+  const tokenScaleEnabled = getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED);
   // Fast bail: scenes with no active elevation regions can't change scale,
   // visibility floor, parallax offsets, or negative-parallax clips.
-  if (!activeEntries.length) {
+  if (!activeEntries.length && !(tokenScaleEnabled && hasSystemScalingElevation)) {
     if (m._seBaseScaleX !== undefined && m._seLastFactor && m._seLastFactor !== 1) {
       const sgnX = Math.sign(m._seBaseScaleX) || 1;
       const sgnY = Math.sign(m._seBaseScaleY) || 1;
       m.scale.set(Math.abs(m._seBaseScaleX) * sgnX, Math.abs(m._seBaseScaleY) * sgnY);
       m._seLastFactor = 1;
     }
-    _clearNegativeRegionTokenVisibilityFloor(token);
+    _applyNegativeRegionTokenVisibilityFloor(token);
     if (_tokenNeedsParallaxCleanup(token)) _applyTokenParallaxOffset(token);
     RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
+    _applySystemTokenVisualState(token);
     return;
   }
-  if (!forceScale && doc && !_tokenBoundsIntersectEntries(doc, {}, activeEntries)) {
+  if (!forceScale && doc && !_tokenBoundsIntersectEntries(doc, {}, activeEntries) && !(tokenScaleEnabled && hasSystemScalingElevation)) {
     if (m._seBaseScaleX !== undefined && m._seLastFactor && m._seLastFactor !== 1) {
       const sgnX = Math.sign(m._seBaseScaleX) || 1;
       const sgnY = Math.sign(m._seBaseScaleY) || 1;
       m.scale.set(Math.abs(m._seBaseScaleX) * sgnX, Math.abs(m._seBaseScaleY) * sgnY);
       m._seLastFactor = 1;
     }
-    _clearNegativeRegionTokenVisibilityFloor(token);
+    _applyNegativeRegionTokenVisibilityFloor(token);
     if (_tokenNeedsParallaxCleanup(token)) _applyTokenParallaxOffset(token);
     RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
+    _applySystemTokenVisualState(token);
     return;
   }
   // Per-token cache: when the *inputs* to the heavy elevation/scaling/clip
@@ -1130,18 +1187,18 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
   // doc state + visualParams version (which bumps when parallax/perspective
   // change) + per-mesh visual flags.
   const renderer = RegionElevationRenderer.instance;
-  const tokenScaleEnabled = getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_ENABLED);
   const tokenScalingMode = tokenScalingModeValue(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALING_MODE));
   const tokenScaleMax = Number(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? 1.5);
   const tokenScalePerElevation = tokenScalePerElevationValue(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_PER_ELEVATION));
   const tokenTextureScale = _tokenDocumentTextureScale(doc);
   const cacheKey = forceScale
     ? null
-    : `${doc?.x ?? 0}|${doc?.y ?? 0}|${doc?.elevation ?? 0}|${doc?.width ?? 1}|${doc?.height ?? 1}|${renderer?._visualParamsVersion ?? 0}|${tokenScaleEnabled ? 1 : 0}|${tokenScalingMode}|${Number.isFinite(tokenScaleMax) ? tokenScaleMax : 1.5}|${tokenScalePerElevation}|${tokenTextureScale}|${(doc?.uuid ?? doc?.id) && _tokensWithPendingMovement.has(doc.uuid ?? doc.id) ? 1 : 0}`;
+    : `${doc?.x ?? 0}|${doc?.y ?? 0}|${doc?.elevation ?? 0}|${doc?.width ?? 1}|${doc?.height ?? 1}|${renderer?._visualParamsVersion ?? 0}|${tokenScaleEnabled ? 1 : 0}|${tokenScalingMode}|${Number.isFinite(tokenScaleMax) ? tokenScaleMax : 1.5}|${tokenScalePerElevation}|${tokenTextureScale}|${systemScalingElevation ?? ""}|${(doc?.uuid ?? doc?.id) && _tokensWithPendingMovement.has(doc.uuid ?? doc.id) ? 1 : 0}|${doc?.movementAction ?? ""}`;
   if (cacheKey && m._seScaleCacheKey === cacheKey) {
     // Cheap path: re-apply cached parallax offset only. Mesh position is
     // overwritten by Foundry's drag/move animation between refreshes.
     _reapplyCachedTokenParallaxOffset(token);
+    _applySystemTokenVisualState(token);
     return;
   }
   const uuid = token.document?.uuid ?? token.document?.id;
@@ -1149,9 +1206,10 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
     const m = token.mesh;
     const skipScale = !forceScale && uuid && _tokensWithPendingMovement.has(uuid);
     if (!skipScale) {
-      // Cache the engine-set base scale once, then drive absolute scale =
-      // base * factor. This avoids the previous bug where successive refreshes
-      // multiplied the scale unboundedly.
+      // Cache Foundry's finalized PIXI mesh scale once, then drive absolute
+      // scale = base * factor. Do not use token.document.texture.scaleX here:
+      // that value is a token texture setting, not the actual mesh scale, and
+      // forcing it onto the mesh can inflate normal tokens several times over.
       if (!tokenScaleEnabled) {
         if (m._seBaseScaleX !== undefined) m.scale.set(m._seBaseScaleX, m._seBaseScaleY);
         m._seLastFactor = 1;
@@ -1165,7 +1223,7 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
         m._seBaseScaleY = m.scale.y;
       }
       if (tokenScaleEnabled) {
-        const factor = _tokenScaleFactor(token, tokenTextureScale);
+        const factor = _tokenScaleFactor(token, tokenTextureScale, { entries: activeEntries, systemScalingElevation });
         m._seLastFactor = factor;
         const sgnX = Math.sign(m._seBaseScaleX) || 1;
         const sgnY = Math.sign(m._seBaseScaleY) || 1;
@@ -1178,6 +1236,7 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
     _applyNegativeRegionTokenVisibilityFloor(token);
     _applyTokenParallaxOffset(token);
     RegionElevationRenderer.instance.applyNegativeParallaxClipForToken(token);
+    _applySystemTokenVisualState(token);
     if (cacheKey) m._seScaleCacheKey = cacheKey;
   } catch (err) {
     // Silent — drawToken can fire before our module/canvas is fully initialised.
@@ -1192,6 +1251,7 @@ function _applyNegativeRegionTokenVisibilityFloor(token) {
   }
   const mesh = token?.mesh;
   if (!mesh || !token?.document || !canvas?.scene) return;
+  const systemVisualState = getSystemTokenVisualState(token.document);
   const state = _tokenElevationState(token.document);
   const tokenElevation = Number(token.document.elevation ?? 0);
   const regionElevation = Number(state.elevation ?? 0);
@@ -1205,7 +1265,8 @@ function _applyNegativeRegionTokenVisibilityFloor(token) {
     && regionElevation < 0
     && Number.isFinite(tokenElevation)
     && tokenElevation >= regionElevation - 0.1;
-  if (!standingOnNegativeRegion && !movingFromNegativeIntoVisibleElevation) {
+  const systemSurfaceVisibility = systemVisualState?.forceSurfaceVisibility === true;
+  if (!standingOnNegativeRegion && !movingFromNegativeIntoVisibleElevation && !systemSurfaceVisibility) {
     _clearNegativeRegionTokenVisibilityFloor(token);
     return;
   }
@@ -1263,6 +1324,153 @@ function _setWritableObjectProperty(object, key, value) {
   } catch (err) {
     return false;
   }
+}
+
+function _applySystemTokenVisualState(token) {
+  const mesh = token?.mesh;
+  if (!mesh || mesh.destroyed) return;
+  const state = getSystemTokenVisualState(token.document);
+  if (state?.burrowing) _applySystemTokenBurrowVisual(token);
+  else _clearSystemTokenBurrowVisual(token);
+  if (state?.flying) {
+    _applySystemTokenFlyingMotion(token);
+    _queueSystemTokenVisualAnimation();
+  } else {
+    _restoreSystemTokenMotion(token);
+  }
+}
+
+function _clearSystemTokenVisualState(token) {
+  _restoreSystemTokenMotion(token);
+  _clearSystemTokenBurrowVisual(token);
+}
+
+function _applySystemTokenBurrowVisual(token) {
+  const mesh = token?.mesh;
+  if (!mesh || mesh.destroyed) return;
+  // Capture baseline only when not already tinted by us. Without this guard a
+  // re-entry can capture our burrow tint as the new "base" and the next clear
+  // would leave the token permanently tinted.
+  if (mesh._seSystemBurrowBaseAlpha === undefined) mesh._seSystemBurrowBaseAlpha = mesh.alpha;
+  if (mesh._seSystemBurrowBaseTint === undefined && "tint" in mesh && mesh.tint !== SYSTEM_TOKEN_BURROW_TINT) {
+    mesh._seSystemBurrowBaseTint = mesh.tint;
+  }
+  const baseAlpha = Number(mesh._seSystemBurrowBaseAlpha ?? 1);
+  mesh.alpha = Math.clamp((Number.isFinite(baseAlpha) ? baseAlpha : 1) * SYSTEM_TOKEN_BURROW_ALPHA_FACTOR, 0.15, 1);
+  if ("tint" in mesh) mesh.tint = SYSTEM_TOKEN_BURROW_TINT;
+}
+
+function _clearSystemTokenBurrowVisual(token) {
+  const mesh = token?.mesh;
+  if (!mesh) return;
+  if (mesh._seSystemBurrowBaseAlpha !== undefined) mesh.alpha = mesh._seSystemBurrowBaseAlpha;
+  if (mesh._seSystemBurrowBaseTint !== undefined && "tint" in mesh) mesh.tint = mesh._seSystemBurrowBaseTint;
+  else if ("tint" in mesh && mesh.tint === SYSTEM_TOKEN_BURROW_TINT) mesh.tint = 0xFFFFFF;
+  delete mesh._seSystemBurrowBaseAlpha;
+  delete mesh._seSystemBurrowBaseTint;
+}
+
+function _applySystemTokenFlyingMotion(token, now = performance.now()) {
+  const mesh = token?.mesh;
+  if (!mesh || mesh.destroyed || !mesh.pivot || !mesh.scale) return;
+  // IMPORTANT: this routine may NOT mutate `mesh.position` or any parallax
+  // target position. The parallax pipeline owns position via
+  // `_seBasePositionX/Y` + `_seLastOffset`, and any in-place writes here race
+  // with its drift self-healing and corrupt the cached base — breaking the
+  // hit area and the rendered position. We use `mesh.pivot` (a local visual
+  // transform that does NOT change `position`) for the hover bobble. Token
+  // scale is intentionally left to the region scaling pipeline only; layering
+  // a second scale animation here made reload and movement timing too easy to
+  // compound into oversized tokens.
+  const seed = _systemTokenAnimationSeed(token);
+  const phase = (now / 1000) + seed;
+  const gridMotion = Math.max(SYSTEM_TOKEN_FLIGHT_MOTION_MIN_PIXELS, _canvasGridSize() * SYSTEM_TOKEN_FLIGHT_MOTION_GRID_FRACTION);
+  const offsetX = Math.sin(phase * Math.PI * 2 / 3.8) * gridMotion;
+  const offsetY = Math.cos(phase * Math.PI * 2 / 3.1) * gridMotion * 0.7;
+  // Pivot lives in pre-scale local space; the rendered visual shift equals
+  // -pivot * scale. We want a visual shift of (offsetX, offsetY), so
+  // pivot delta = (-offsetX/sx, -offsetY/sy).
+  const sx = mesh.scale.x || 1;
+  const sy = mesh.scale.y || 1;
+  if (mesh._seSystemMotionBasePivotX === undefined) {
+    mesh._seSystemMotionBasePivotX = mesh.pivot.x;
+    mesh._seSystemMotionBasePivotY = mesh.pivot.y;
+  }
+  mesh.pivot.set(
+    mesh._seSystemMotionBasePivotX - offsetX / sx,
+    mesh._seSystemMotionBasePivotY - offsetY / sy
+  );
+}
+
+function _resolveSystemTokenElevationScale(mesh) {
+  if (!mesh) return null;
+  const baseX = Number(mesh._seBaseScaleX);
+  const baseY = Number(mesh._seBaseScaleY);
+  if (!Number.isFinite(baseX) || !Number.isFinite(baseY)) return null;
+  const factor = Number.isFinite(mesh._seLastFactor) && mesh._seLastFactor !== 0 ? mesh._seLastFactor : 1;
+  const sgnX = Math.sign(baseX) || 1;
+  const sgnY = Math.sign(baseY) || 1;
+  return { x: Math.abs(baseX) * factor * sgnX, y: Math.abs(baseY) * factor * sgnY };
+}
+
+function _restoreSystemTokenMotion(token) {
+  const mesh = token?.mesh;
+  if (!mesh) return;
+  // New flight motion only touches pivot. The scale branch below is legacy
+  // cleanup for clients that still have the previous pulse bookkeeping live.
+  const elevBase = _resolveSystemTokenElevationScale(mesh);
+  if (elevBase) {
+    mesh.scale?.set?.(elevBase.x, elevBase.y);
+  } else if (Number.isFinite(mesh._seSystemMotionLastScaleMul) && mesh._seSystemMotionLastScaleMul !== 0) {
+    const inv = 1 / mesh._seSystemMotionLastScaleMul;
+    mesh.scale?.set?.(mesh.scale.x * inv, mesh.scale.y * inv);
+  }
+  if (mesh._seSystemMotionBasePivotX !== undefined && mesh._seSystemMotionBasePivotY !== undefined) {
+    mesh.pivot?.set?.(mesh._seSystemMotionBasePivotX, mesh._seSystemMotionBasePivotY);
+  }
+  // Legacy cleanup: earlier builds also stored a captured base scale and
+  // mutated parallax target positions. Drop any stale bookkeeping.
+  delete mesh._seSystemMotionBaseScaleX;
+  delete mesh._seSystemMotionBaseScaleY;
+  delete mesh._seSystemMotionBasePivotX;
+  delete mesh._seSystemMotionBasePivotY;
+  delete mesh._seSystemMotionLastScaleMul;
+  delete mesh._seSystemMotionTargets;
+}
+
+function _systemTokenAnimationSeed(token) {
+  const text = String(token?.document?.id ?? token?.id ?? "");
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
+  return Math.abs(hash % 1000) / 1000;
+}
+
+function _queueSystemTokenVisualAnimation() {
+  if (!_sceneElevationClientEnabled() || _systemTokenVisualAnimationFrame) return;
+  _systemTokenVisualAnimationFrame = requestAnimationFrame(_animateSystemTokenVisuals);
+}
+
+function _animateSystemTokenVisuals(now) {
+  _systemTokenVisualAnimationFrame = null;
+  if (!_sceneElevationClientEnabled() || !canvas?.tokens) return;
+  let anyFlying = false;
+  for (const token of canvas.tokens.placeables) {
+    const state = getSystemTokenVisualState(token.document);
+    if (state?.burrowing) _applySystemTokenBurrowVisual(token);
+    else _clearSystemTokenBurrowVisual(token);
+    if (state?.flying) {
+      anyFlying = true;
+      _applySystemTokenFlyingMotion(token, now);
+    } else {
+      _restoreSystemTokenMotion(token);
+    }
+  }
+  if (anyFlying) _queueSystemTokenVisualAnimation();
+}
+
+function _clearPendingSystemTokenVisualAnimation() {
+  if (_systemTokenVisualAnimationFrame) cancelAnimationFrame(_systemTokenVisualAnimationFrame);
+  _systemTokenVisualAnimationFrame = null;
 }
 
 function _applyTokenParallaxOffset(token) {
@@ -1428,6 +1636,7 @@ function _applyDisplayObjectParallaxOffset(displayObject, offset) {
 }
 
 function _clearTokenParallaxCaches(token, { restorePositions = true } = {}) {
+  _restoreSystemTokenMotion(token);
   const targets = token?._seParallaxTargets ?? _tokenParallaxTargets(token);
   for (const target of targets) _clearDisplayObjectParallaxCache(target, { restorePosition: restorePositions });
   _clearTokenParallaxApplicationCache(token);
@@ -1917,7 +2126,7 @@ async function _syncTokenElevation(tokenDocument, position = {}, options = {}) {
   if (rawState.skip) return;
   const current = Number(tokenDocument.elevation ?? 0);
   const state = _stabilizeMovementElevationState(rawState, options.movementStart, tokenDocument, position);
-  const target = state.found ? state.elevation : 0;
+  const target = _adjustedTokenElevationTarget(tokenDocument, current, state, { rawState, position, movementStart: options.movementStart });
   _dsLog("sync", tokenDocument, {
     pos: { x: tokenDocument.x, y: tokenDocument.y },
     samplePos: position,
@@ -1927,6 +2136,7 @@ async function _syncTokenElevation(tokenDocument, position = {}, options = {}) {
     rawElev: rawState.elevation,
     stabilizedFound: state.found,
     stabilizedElev: state.elevation,
+    targetBeforeSystem: state.found ? state.elevation : 0,
     movementStart: options.movementStart?.state ? { found: options.movementStart.state.found, elevation: options.movementStart.state.elevation } : null
   });
   if (Math.abs(current - target) <= 0.001) return;
@@ -1939,6 +2149,19 @@ async function _syncTokenElevation(tokenDocument, position = {}, options = {}) {
   } finally {
     _syncingTokenElevation.delete(uuid);
   }
+}
+
+function _adjustedTokenElevationTarget(tokenDocument, current, state, context = {}) {
+  const target = state?.found ? Number(state.elevation ?? 0) : 0;
+  const currentElevation = Number(current ?? tokenDocument?.elevation ?? 0);
+  if (!Number.isFinite(target) || !Number.isFinite(currentElevation)) return target;
+  return adjustSystemTokenElevationTarget({
+    tokenDocument,
+    current: currentElevation,
+    target,
+    state,
+    ...context
+  });
 }
 
 function _queueTokenElevationAfterMovement(tokenDocument, change = {}, options = {}) {
@@ -2010,8 +2233,8 @@ function _movementChangesTokenElevation(tokenDocument, position = {}) {
   const rawState = _highestTokenElevationState(tokenDocument, position);
   if (rawState.skip) return false;
   const state = _stabilizeMovementElevationState(rawState, _tokenMovementStartStates.get(tokenDocument.uuid ?? tokenDocument.id), tokenDocument, position);
-  const target = state.found ? state.elevation : 0;
   const current = Number(tokenDocument.elevation ?? 0);
+  const target = _adjustedTokenElevationTarget(tokenDocument, current, state, { rawState, position });
   return Number.isFinite(current) && Number.isFinite(target) && Math.abs(current - target) > 0.001;
 }
 
@@ -2030,7 +2253,7 @@ async function _promoteNegativeTokenElevationForVisibleMovement(tokenDocument, p
   if (!Number.isFinite(current) || current >= -0.001) return;
   const state = _highestTokenElevationState(tokenDocument, position);
   if (state.skip) return;
-  const target = state.found ? state.elevation : 0;
+  const target = _adjustedTokenElevationTarget(tokenDocument, current, state, { rawState: state, position, movementStart: _tokenMovementStartStates.get(tokenDocument.uuid ?? tokenDocument.id) });
   if (!Number.isFinite(target) || target < -0.001) return;
   _syncingTokenElevation.add(uuid);
   try {
@@ -2075,7 +2298,7 @@ function _correctMovementElevationChange(tokenDocument, change = {}) {
   const rawState = _highestTokenElevationState(tokenDocument, position);
   if (rawState.skip) return null;
   const state = _stabilizeMovementElevationState(rawState, { state: startState }, tokenDocument, position);
-  const expected = state.found ? state.elevation : 0;
+  const expected = _adjustedTokenElevationTarget(tokenDocument, current, state, { rawState, position, movementStart: { state: startState } });
   if (!Number.isFinite(expected) || Math.abs(requested - expected) <= 0.001) return null;
   change.elevation = expected;
   const correction = {
@@ -2208,6 +2431,7 @@ function _resetAllTokenVisuals() {
 }
 
 function _resetTokenVisuals(token) {
+  _clearSystemTokenVisualState(token);
   const mesh = token?.mesh;
   if (mesh?._seBaseScaleX !== undefined && mesh?._seBaseScaleY !== undefined) mesh.scale?.set?.(mesh._seBaseScaleX, mesh._seBaseScaleY);
   if (mesh) {
@@ -2346,6 +2570,7 @@ Hooks.on("drawToken", (token) => {
   // Clear stale mesh cache so the upcoming refreshToken re-caches from Foundry's finalized scale
   const m = token?.mesh;
   if (m) {
+    _clearSystemTokenVisualState(token);
     delete m._seBaseScaleX;
     delete m._seBaseScaleY;
     delete m._seLastFactor;
@@ -2353,7 +2578,11 @@ Hooks.on("drawToken", (token) => {
     delete m._seCachedParallaxOffset;
   }
   _clearTokenParallaxCaches(token);
-  _applyTokenScale(token);
+  // Do NOT call _applyTokenScale here. At drawToken time PIXI mesh.scale is
+  // still the default (1) — capturing it as the base would produce a wrong
+  // baseline that gets locked behind the scale cache key. Foundry fires
+  // refreshToken right after drawToken with mesh.scale at its natural
+  // image-fit value; that is the correct moment to capture the base.
   _queueOverheadRefreshForToken(token);
 });
 Hooks.on("refreshToken", (token) => {

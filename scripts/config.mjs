@@ -22,6 +22,8 @@ export const SETTINGS = {
   TOKEN_SCALING_MODE: "tokenScalingMode",
   TOKEN_SCALE_MAX: "tokenScaleMax",
   TOKEN_SCALE_PER_ELEVATION: "tokenScalePerElevation",
+  DRAW_STEEL_MOVEMENT_TYPE_ANIMATIONS: "drawSteelMovementTypeAnimations",
+  DRAW_STEEL_HANDLE_MOVEMENT_MODES: "drawSteelHandleMovementModes",
   DEPTH_SCALE: "depthScale",
   ELEVATION_SCALE: "elevationScale",
   WORLD_DEFAULTS_VERSION: "worldDefaultsVersion"

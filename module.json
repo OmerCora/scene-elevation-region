@@ -2,14 +2,23 @@
   "id": "scene-elevation-region",
   "title": "Scene Elevation Region",
   "description": "System-agnostic visual scene elevation using Foundry Regions. Add an Elevation behavior to regions to create raised overlays or negative holes with transition texture, contact/drop or inward shadows, optional parallax modes, and token scaling on top-down maps.",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "compatibility": {
     "minimum": "14",
-    "verified": "14"
+    "verified": "14.360"
   },
-  "authors": [{ "name": "Author" }],
-  "esmodules": ["scripts/module.mjs"],
-  "styles": ["styles/elevation.css"],
+  "authors": [
+    {
+      "name": "OmerCora",
+      "url": "https://www.coraomer.com"
+    }
+  ],
+  "esmodules": [
+    "scripts/module.mjs"
+  ],
+  "styles": [
+    "styles/elevation.css"
+  ],
   "languages": [
     { "lang": "en", "name": "English", "path": "lang/en.json" }
   ],
@@ -18,9 +27,7 @@
       "elevation": {}
     }
   },
-  "url": "",
-  "manifest": "",
-  "download": "",
-  "socket": false,
-  "library": false
+  "url": "https://github.com/OmerCora/scene-elevation-region",
+  "manifest": "https://github.com/OmerCora/scene-elevation-region/releases/latest/download/module.json",
+  "download": "https://github.com/OmerCora/scene-elevation-region/releases/download/v1.0.3/scene-elevation-region.zip"
 }
