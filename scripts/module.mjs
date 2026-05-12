@@ -23,6 +23,7 @@ const TOKEN_PARALLAX_UI_KEYS = Object.freeze([
 const TOKEN_PARALLAX_TARGET_NAME_PATTERN = /target|crosshair|reticle|reticule|bar|resource|health|stamina|effect|status|control|hud|overlay/i;
 const TOKEN_PARALLAX_TARGET_SCAN_LIMIT = 80;
 const TOKEN_PARALLAX_HIT_AREA_EPSILON = 0.5;
+const ZERO_PARALLAX_OFFSET = Object.freeze({ x: 0, y: 0 });
 const TOKEN_HUD_POSITION_PATCHED = "_sceneElevationRegionHudPositionPatched";
 const MOUSE_DRIFT_WORLD_DEFAULTS_VERSION = "mouse-drift-defaults-v2";
 const REGION_PRESET_FIELD_MAP = Object.freeze({
@@ -695,8 +696,9 @@ function _tokenScalingElevationRange(sceneOrEntries = canvas?.scene) {
 }
 
 function _tokenElevationState(tokenDocument, options = {}, position = {}, entries = null) {
-  const points = _tokenElevationSamplePoints(tokenDocument, position);
   const activeEntries = entries ?? getActiveElevationRegions(canvas.scene);
+  if (!activeEntries.length || !_tokenBoundsIntersectEntries(tokenDocument, position, activeEntries)) return { found: false, elevation: 0, entry: null };
+  const points = _tokenElevationSamplePoints(tokenDocument, position);
   let best = getRegionElevationStateAtPoint(points[0], canvas.scene, activeEntries, options);
   if (best.found && !options.preferHighest) return best;
   for (const point of points.slice(1)) {
@@ -775,6 +777,56 @@ function _quantizeLivePosition(value, gridSize) {
   return Math.round(value / step) * step;
 }
 
+function _tokenDocumentBounds(tokenDocument, position = {}) {
+  const gridSize = _canvasGridSize();
+  const x = _finitePositionValue(position.x, tokenDocument?.x ?? 0);
+  const y = _finitePositionValue(position.y, tokenDocument?.y ?? 0);
+  const width = Math.max(0.25, _finitePositionValue(position.width, tokenDocument?.width ?? 1)) * gridSize;
+  const height = Math.max(0.25, _finitePositionValue(position.height, tokenDocument?.height ?? 1)) * gridSize;
+  return { minX: x, minY: y, maxX: x + width, maxY: y + height };
+}
+
+function _tokenBoundsIntersectEntries(tokenDocument, position = {}, entries = []) {
+  if (!tokenDocument || !entries.length) return false;
+  const bounds = _tokenDocumentBounds(tokenDocument, position);
+  return entries.some(entry => {
+    const entryBounds = entry?.bounds;
+    if (!entryBounds) return true;
+    return bounds.maxX >= entryBounds.minX - 1
+      && bounds.minX <= entryBounds.maxX + 1
+      && bounds.maxY >= entryBounds.minY - 1
+      && bounds.minY <= entryBounds.maxY + 1;
+  });
+}
+
+// A token object is the "canonical" representation of its document when it
+// is the placeable returned by canvas.tokens.get(id). Foundry's drag preview
+// clones live in canvas.tokens.preview, so canvas.tokens.get(id) still
+// resolves to the original token. We use this to skip elevation scaling on
+// drag preview clones whose mesh inherits the original's already-elevated
+// scale (capturing that as a new "base" caused multiplicative blow-ups when
+// crossing region edges).
+function _isCanonicalSceneToken(token) {
+  const id = token?.document?.id;
+  if (!id || !canvas?.tokens?.get) return true;
+  const placeable = canvas.tokens.get(id);
+  return !placeable || placeable === token;
+}
+
+function _offsetIsEffectivelyZero(offset) {
+  return Math.hypot(Number(offset?.x ?? 0), Number(offset?.y ?? 0)) <= TOKEN_PARALLAX_HIT_AREA_EPSILON;
+}
+
+function _offsetsNearlyEqual(left, right) {
+  return Math.abs(Number(left?.x ?? 0) - Number(right?.x ?? 0)) <= TOKEN_PARALLAX_HIT_AREA_EPSILON
+    && Math.abs(Number(left?.y ?? 0) - Number(right?.y ?? 0)) <= TOKEN_PARALLAX_HIT_AREA_EPSILON;
+}
+
+function _tokenNeedsParallaxCleanup(token) {
+  const mesh = token?.mesh;
+  return !!mesh && (!_offsetIsEffectivelyZero(mesh._seCachedParallaxOffset) || !!mesh._sceneElevationNegativeClip);
+}
+
 function _highestTokenElevationState(tokenDocument, position = {}) {
   if (!_sceneElevationClientEnabled()) return { skip: true, found: false, elevation: 0, entry: null };
   const mode = getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_ELEVATION_MODE) ?? TOKEN_ELEVATION_MODES.PER_REGION;
@@ -795,16 +847,45 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
     _resetTokenVisuals(token);
     return;
   }
+  // Drag preview clones share a document id with a real scene token but get
+  // their mesh scale copied from that token's already-elevated mesh. If we
+  // treat that as a fresh natural base and multiply by the elevation factor
+  // again the ghost balloons; restoring on bounds exit and re-entering then
+  // grows it further. Leave preview clone mesh scale alone — Foundry's ghost
+  // already reflects the original token's display size — but DO still apply
+  // the parallax offset so the ghost shows where the token will actually
+  // land in the elevated region instead of where the cursor is.
+  if (!_isCanonicalSceneToken(token)) {
+    try { _applyTokenParallaxOffset(token); } catch (_) { /* ignore */ }
+    return;
+  }
+  const activeEntries = getActiveElevationRegions(canvas?.scene);
+  const m = token.mesh;
+  const doc = token.document;
   // Fast bail: scenes with no active elevation regions can't change scale,
   // visibility floor, parallax offsets, or negative-parallax clips.
-  if (!getActiveElevationRegions(canvas?.scene).length) {
-    const m = token.mesh;
+  if (!activeEntries.length) {
     if (m._seBaseScaleX !== undefined && m._seLastFactor && m._seLastFactor !== 1) {
       const sgnX = Math.sign(m._seBaseScaleX) || 1;
       const sgnY = Math.sign(m._seBaseScaleY) || 1;
       m.scale.set(Math.abs(m._seBaseScaleX) * sgnX, Math.abs(m._seBaseScaleY) * sgnY);
       m._seLastFactor = 1;
     }
+    _clearNegativeRegionTokenVisibilityFloor(token);
+    if (_tokenNeedsParallaxCleanup(token)) _applyTokenParallaxOffset(token);
+    else RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
+    return;
+  }
+  if (!forceScale && doc && !_tokenBoundsIntersectEntries(doc, {}, activeEntries)) {
+    if (m._seBaseScaleX !== undefined && m._seLastFactor && m._seLastFactor !== 1) {
+      const sgnX = Math.sign(m._seBaseScaleX) || 1;
+      const sgnY = Math.sign(m._seBaseScaleY) || 1;
+      m.scale.set(Math.abs(m._seBaseScaleX) * sgnX, Math.abs(m._seBaseScaleY) * sgnY);
+      m._seLastFactor = 1;
+    }
+    _clearNegativeRegionTokenVisibilityFloor(token);
+    if (_tokenNeedsParallaxCleanup(token)) _applyTokenParallaxOffset(token);
+    else RegionElevationRenderer.instance.clearNegativeParallaxClipForToken(token);
     return;
   }
   // Per-token cache: when the *inputs* to the heavy elevation/scaling/clip
@@ -814,8 +895,6 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
   // always re-apply the offset (cheap), even on cache hit. Cache key covers
   // doc state + visualParams version (which bumps when parallax/perspective
   // change) + per-mesh visual flags.
-  const m = token.mesh;
-  const doc = token.document;
   const renderer = RegionElevationRenderer.instance;
   const cacheKey = forceScale
     ? null
@@ -980,15 +1059,19 @@ function _applyTokenParallaxOffset(token) {
     && mesh._seParallaxAppliedH === doc.height
   ) {
     const cached = mesh._seCachedParallaxOffset;
-    if (cached) {
+    if (cached && !_offsetIsEffectivelyZero(cached)) {
       const targets = token._seParallaxTargets ?? _tokenParallaxTargets(token);
       for (const target of targets) _applyDisplayObjectParallaxOffset(target, cached);
     }
     return;
   }
-  const offset = renderer.tokenParallaxOffset(doc, {
-    x: liveX, y: liveY, width: doc.width, height: doc.height
-  });
+  const activeEntries = getActiveElevationRegions(canvas?.scene);
+  const canOverlapRegion = activeEntries.length && _tokenBoundsIntersectEntries(doc, { x: liveX, y: liveY, width: doc.width, height: doc.height }, activeEntries);
+  const offset = canOverlapRegion
+    ? renderer.tokenParallaxOffset(doc, { x: liveX, y: liveY, width: doc.width, height: doc.height })
+    : ZERO_PARALLAX_OFFSET;
+  const previousOffset = mesh?._seCachedParallaxOffset;
+  const offsetChanged = !_offsetsNearlyEqual(previousOffset, offset);
   if (mesh) {
     mesh._seCachedParallaxOffset = offset;
     mesh._seParallaxAppliedX = liveX;
@@ -998,10 +1081,12 @@ function _applyTokenParallaxOffset(token) {
     mesh._seParallaxAppliedW = doc.width;
     mesh._seParallaxAppliedH = doc.height;
   }
-  const targets = token._seParallaxTargets ?? _tokenParallaxTargets(token);
-  for (const target of targets) _applyDisplayObjectParallaxOffset(target, offset);
-  _applyTokenParallaxHitArea(token, offset);
-  _refreshTokenHudOffset(token);
+  if (offsetChanged || !_offsetIsEffectivelyZero(offset)) {
+    const targets = token._seParallaxTargets ?? _tokenParallaxTargets(token);
+    for (const target of targets) _applyDisplayObjectParallaxOffset(target, offset);
+    _applyTokenParallaxHitArea(token, offset);
+    _refreshTokenHudOffset(token, offset);
+  }
 }
 
 // Cheap path used when the token's heavy state (scale / visibility floor /
@@ -1196,18 +1281,18 @@ function _patchTokenHudClass(hudClass) {
   Object.defineProperty(prototype, TOKEN_HUD_POSITION_PATCHED, { value: true });
 }
 
-function _refreshTokenHudOffset(token) {
+function _refreshTokenHudOffset(token, offset = null) {
   for (const hud of _tokenHudCandidates()) {
-    if (hud?.object === token) _applyTokenHudParallaxOffset(hud);
+    if (hud?.object === token) _applyTokenHudParallaxOffset(hud, offset);
   }
 }
 
-function _applyTokenHudParallaxOffset(hud) {
+function _applyTokenHudParallaxOffset(hud, offset = null) {
   const token = hud?.object;
   const element = _tokenHudElement(hud);
   if (!token?.document || !element) return;
-  const offset = RegionElevationRenderer.instance.tokenParallaxOffset(token.document);
-  const viewportOffset = _tokenOffsetToViewport(token, offset);
+  const parallaxOffset = offset ?? RegionElevationRenderer.instance.tokenParallaxOffset(token.document);
+  const viewportOffset = _tokenOffsetToViewport(token, parallaxOffset);
   const hudOffset = _viewportOffsetToOffsetParent(element, viewportOffset);
   _applyTokenHudElementOffset(element, hudOffset);
 }
@@ -1335,9 +1420,11 @@ function _refreshAllTokenScales() {
 function _refreshAllTokenParallax() {
   if (!canvas?.tokens) return;
   if (!_sceneElevationClientEnabled()) return;
-  if (!getActiveElevationRegions(canvas?.scene).length) return;
+  const activeEntries = getActiveElevationRegions(canvas?.scene);
+  if (!activeEntries.length) return;
   for (const t of canvas.tokens.placeables) {
     if (!t?.mesh) continue;
+    if (!_tokenBoundsIntersectEntries(t.document, {}, activeEntries) && !_tokenNeedsParallaxCleanup(t)) continue;
     _applyTokenParallaxOffset(t);
     RegionElevationRenderer.instance.applyNegativeParallaxClipForToken(t);
   }

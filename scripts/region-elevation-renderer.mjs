@@ -316,7 +316,8 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
     if (!Number.isFinite(elevation)) continue;
     const presetOverride = _regionPresetOverride(behavior.system?.presetOverride ?? sourceSystem.presetOverride);
     const presetValues = presetOverride ? elevationPresetValues(presetOverride, scene) : null;
-    const paths = (pathCache || slope) ? _regionPaths(region) : null;
+    const paths = _regionPaths(region);
+    const bounds = paths.length ? _cachedPathsBounds(paths) : null;
     if (pathCache) pathCache.set(region, paths);
     const slopeDirection = _normalizeDegrees(behavior.system?.slopeDirection ?? sourceSystem.slopeDirection ?? 0);
     const slopeVector = _slopeDirectionVector(slopeDirection);
@@ -340,6 +341,8 @@ export function getActiveElevationRegions(scene = canvas?.scene, pathCache = nul
       shadowStrength: Math.clamp(Number.isFinite(shadowStrength) ? shadowStrength : SHADOW_STRENGTH_LIMITS.DEFAULT, SHADOW_STRENGTH_LIMITS.MIN, SHADOW_STRENGTH_LIMITS.MAX),
       overhead,
       underOverheadMode,
+      paths,
+      bounds,
       area: _regionArea(region, paths),
       presetOverride,
       parallaxStrengthOverride: _keyOverride(_presetValue(presetValues, SCENE_SETTING_KEYS.PARALLAX, behavior.system?.parallaxStrengthOverride ?? sourceSystem.parallaxStrengthOverride), PARALLAX_STRENGTHS),
@@ -443,12 +446,13 @@ export function getRegionElevationStateAtPoint(point, scene = canvas?.scene, ent
   let found = false;
   let area = Infinity;
   for (const candidate of candidates) {
+    if (!_entryBoundsContainPoint(candidate, point)) continue;
     const candidateElevation = _entryElevationAtPoint(candidate, point);
     const overheadSupport = _overheadSupportsPoint(candidate, point, candidateElevation, options);
     if (options.allowOverheadSupport && candidate.overhead && !overheadSupport) continue;
     if (options.requireTokenElevation && !candidate.modifyTokenElevation && !overheadSupport) continue;
     if (options.requireTokenScaling && !candidate.modifyTokenScaling && !overheadSupport) continue;
-    if (!_regionContains(candidate.region, point, candidateElevation)) continue;
+    if (!_entryContainsPoint(candidate, point, candidateElevation)) continue;
     if (options.preferHighest) {
       if (!found || candidateElevation > elevation) {
         elevation = candidateElevation;
@@ -472,6 +476,21 @@ function _overheadSupportsPoint(entry, point, elevation, options = {}) {
   if (!options.allowOverheadSupport || !entry?.overhead) return false;
   const tokenElevation = Number(point?.elevation);
   return Number.isFinite(tokenElevation) && tokenElevation >= Number(elevation ?? 0) - OVERHEAD_SUPPORT_EPSILON;
+}
+
+function _entryBoundsContainPoint(entry, point) {
+  const bounds = entry?.bounds;
+  if (!bounds) return true;
+  const x = Number(point?.x);
+  const y = Number(point?.y);
+  return Number.isFinite(x) && Number.isFinite(y)
+    && x >= bounds.minX && x <= bounds.maxX
+    && y >= bounds.minY && y <= bounds.maxY;
+}
+
+function _entryContainsPoint(entry, point, elevation = undefined) {
+  if (!_entryBoundsContainPoint(entry, point)) return false;
+  return _regionContains(entry.region, point, elevation, entry.paths);
 }
 
 export function getRegionElevationAtPoint(point, scene = canvas?.scene, entries = null, options = {}) {
@@ -568,7 +587,7 @@ export function regionContainsPoint(region, point, elevation = undefined) {
   return _regionContains(region, point, elevation);
 }
 
-function _regionContains(region, point, elevation = undefined) {
+function _regionContains(region, point, elevation = undefined, paths = null) {
   try {
     if (region.testPoint?.({ x: point.x, y: point.y })) return true;
   } catch (err) {}
@@ -578,7 +597,7 @@ function _regionContains(region, point, elevation = undefined) {
       if (region.testPoint?.({ x: point.x, y: point.y, elevation: testElevation })) return true;
     } catch (err) {}
   }
-  return _regionPaths(region).some(path => _pointInPolygon(point, path));
+  return (paths ?? _regionPaths(region)).some(path => _pointInPolygon(point, path));
 }
 
 function _pointInPolygon(point, path) {
