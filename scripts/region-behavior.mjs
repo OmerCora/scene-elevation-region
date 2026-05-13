@@ -1,145 +1,12 @@
-import { BLEND_MODES, DEPTH_SCALES, ELEVATION_PRESETS, ELEVATION_SCALE_LIMITS, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, PARALLAX_MODES, PERSPECTIVE_POINTS, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, edgeStretchPercentValue, shadowLengthKey } from "./config.mjs";
+import { ELEVATION_PRESETS, ELEVATION_SCALE_LIMITS, OVERHEAD_MODES, REGION_BEHAVIOR_TYPE, SHADOW_MODES, SHADOW_STRENGTH_LIMITS, edgeStretchPercentValue, shadowLengthKey } from "./config.mjs";
+import { REGION_BEHAVIOR_CHOICES, USE_SCENE_SETTING } from "./choices.mjs";
 
 const fields = foundry.data.fields;
-const USE_SCENE_SETTING = "";
-
-const PRESET_CHOICES = Object.freeze({
-  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  [ELEVATION_PRESETS.CUSTOM]: "SCENE_ELEVATION.Settings.PresetCustom",
-  [ELEVATION_PRESETS.DEFAULT]: "SCENE_ELEVATION.Settings.PresetDefault",
-  [ELEVATION_PRESETS.CAMERA_LIFT_DRIFT_SHADOW]: "SCENE_ELEVATION.Settings.PresetCameraLiftDriftShadow",
-  [ELEVATION_PRESETS.MULTI_LAYER_DRIFT_SHADOW]: "SCENE_ELEVATION.Settings.PresetMultiLayerDriftShadow",
-  [ELEVATION_PRESETS.MULTI_LAYER_DRIFT_SHADOWLESS]: "SCENE_ELEVATION.Settings.PresetMultiLayerDriftShadowless",
-  [ELEVATION_PRESETS.MOUSE_DRIFT_SHADOW]: "SCENE_ELEVATION.Settings.PresetMouseDriftShadow",
-  [ELEVATION_PRESETS.RESPONSIVE_SHADOW_ONLY]: "SCENE_ELEVATION.Settings.PresetResponsiveShadowOnly",
-  [ELEVATION_PRESETS.CAMERA_LIFT_TEXTURE_MELD]: "SCENE_ELEVATION.Settings.PresetCameraLiftTextureMeld"
-});
-
-const PARALLAX_STRENGTH_CHOICES = Object.freeze({
-  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  off: "SCENE_ELEVATION.Settings.ParallaxOff",
-  trace: "SCENE_ELEVATION.Settings.ParallaxTrace",
-  minimal: "SCENE_ELEVATION.Settings.ParallaxMinimal",
-  verySubtle: "SCENE_ELEVATION.Settings.ParallaxVerySubtle",
-  subtle: "SCENE_ELEVATION.Settings.ParallaxSubtle",
-  medium: "SCENE_ELEVATION.Settings.ParallaxMedium",
-  strong: "SCENE_ELEVATION.Settings.ParallaxStrong",
-  extreme: "SCENE_ELEVATION.Settings.ParallaxExtreme"
-});
-
-const PARALLAX_MODE_CHOICES = Object.freeze({
-  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  [PARALLAX_MODES.ANCHORED_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard",
-  [PARALLAX_MODES.VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard",
-  [PARALLAX_MODES.ANCHORED_VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard",
-  [PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN]: "SCENE_ELEVATION.Settings.ParallaxModeOrthographicTopDown",
-  [PARALLAX_MODES.ORTHOGRAPHIC_ANGLE]: "SCENE_ELEVATION.Settings.ParallaxModeOrthographicAngle",
-  [PARALLAX_MODES.LAYERED]: "SCENE_ELEVATION.Settings.ParallaxModeLayered",
-  [PARALLAX_MODES.HORIZONTAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeHorizontalScroll",
-  [PARALLAX_MODES.VERTICAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeVerticalScroll",
-  [PARALLAX_MODES.MOUSE]: "SCENE_ELEVATION.Settings.ParallaxModeMouse",
-  [PARALLAX_MODES.SHADOW]: "SCENE_ELEVATION.Settings.ParallaxModeShadow"
-});
-
-const PERSPECTIVE_POINT_CHOICES = Object.freeze({
-  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  [PERSPECTIVE_POINTS.CENTER]: "SCENE_ELEVATION.Settings.PerspectivePointCenter",
-  [PERSPECTIVE_POINTS.TOP_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointTopLeft",
-  [PERSPECTIVE_POINTS.TOP_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointTopRight",
-  [PERSPECTIVE_POINTS.BOTTOM_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointBottomLeft",
-  [PERSPECTIVE_POINTS.BOTTOM_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointBottomRight",
-  [PERSPECTIVE_POINTS.FAR_TOP]: "SCENE_ELEVATION.Settings.PerspectivePointFarTop",
-  [PERSPECTIVE_POINTS.FAR_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointFarLeft",
-  [PERSPECTIVE_POINTS.FAR_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointFarRight",
-  [PERSPECTIVE_POINTS.FAR_BOTTOM]: "SCENE_ELEVATION.Settings.PerspectivePointFarBottom",
-  [PERSPECTIVE_POINTS.REGION_CENTER]: "SCENE_ELEVATION.Settings.PerspectivePointRegionCenter",
-  [PERSPECTIVE_POINTS.REGION_TOP_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionTopLeft",
-  [PERSPECTIVE_POINTS.REGION_TOP_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionTopRight",
-  [PERSPECTIVE_POINTS.REGION_BOTTOM_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionBottomLeft",
-  [PERSPECTIVE_POINTS.REGION_BOTTOM_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionBottomRight",
-  [PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointSceneEdge",
-  [PERSPECTIVE_POINTS.CAMERA_CENTER]: "SCENE_ELEVATION.Settings.PerspectivePointCameraCenter",
-  [PERSPECTIVE_POINTS.FURTHEST_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointFurthestEdge",
-  [PERSPECTIVE_POINTS.NEAREST_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointNearestEdge"
-});
-
-const OVERLAY_SCALE_CHOICES = Object.freeze({
-  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  shrinkMedium: "SCENE_ELEVATION.Settings.OverlayScaleShrinkMedium",
-  shrinkSubtle: "SCENE_ELEVATION.Settings.OverlayScaleShrinkSubtle",
-  off: "SCENE_ELEVATION.Settings.OverlayScaleOff",
-  subtle: "SCENE_ELEVATION.Settings.OverlayScaleSubtle",
-  medium: "SCENE_ELEVATION.Settings.OverlayScaleMedium",
-  strong: "SCENE_ELEVATION.Settings.OverlayScaleStrong"
-});
-
-const SHADOW_MODE_CHOICES = Object.freeze({
-  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  [SHADOW_MODES.OFF]: "SCENE_ELEVATION.Settings.ShadowModeOff",
-  [SHADOW_MODES.RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeResponsive",
-  [SHADOW_MODES.RESPONSIVE_ALL_AROUND]: "SCENE_ELEVATION.Settings.ShadowModeResponsiveAllAround",
-  [SHADOW_MODES.REVERSED_RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeReversedResponsive",
-  [SHADOW_MODES.TEXTURE_MELD]: "SCENE_ELEVATION.Settings.ShadowModeTextureMeld",
-  [SHADOW_MODES.FULL_TEXTURE_MELD]: "SCENE_ELEVATION.Settings.ShadowModeFullTextureMeld",
-  [SHADOW_MODES.TOP_DOWN]: "SCENE_ELEVATION.Settings.ShadowModeTopDown",
-  [SHADOW_MODES.TOP_DOWN_STRONG]: "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong",
-  [SHADOW_MODES.SUN_AT_EDGE]: "SCENE_ELEVATION.Settings.ShadowModeSunAtEdge"
-});
-
-const BLEND_MODE_CHOICES = Object.freeze({
-  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  [BLEND_MODES.OFF]: "SCENE_ELEVATION.Settings.BlendModeOff",
-  [BLEND_MODES.SOFT]: "SCENE_ELEVATION.Settings.BlendModeSoft",
-  [BLEND_MODES.WIDE]: "SCENE_ELEVATION.Settings.BlendModeWide",
-  [BLEND_MODES.EDGE_STRETCH]: "SCENE_ELEVATION.Settings.BlendModeEdgeStretch",
-  [BLEND_MODES.CLIFF_WARP]: "SCENE_ELEVATION.Settings.BlendModeCliffWarp",
-  [BLEND_MODES.EXTRUDED_WALLS]: "SCENE_ELEVATION.Settings.BlendModeExtrudedWalls"
-});
-
-const DEPTH_SCALE_CHOICES = Object.freeze({
-  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  [DEPTH_SCALES.COMPRESSED]: "SCENE_ELEVATION.Settings.DepthScaleCompressed",
-  [DEPTH_SCALES.LINEAR]: "SCENE_ELEVATION.Settings.DepthScaleLinear",
-  [DEPTH_SCALES.DRAMATIC]: "SCENE_ELEVATION.Settings.DepthScaleDramatic"
-});
-
-const ELEVATION_SCALE_CHOICES = Object.freeze(Object.fromEntries([
-  [USE_SCENE_SETTING, "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting"],
-  ...Array.from({ length: ELEVATION_SCALE_LIMITS.MAX - ELEVATION_SCALE_LIMITS.MIN + 1 }, (_, index) => {
-    const value = String(ELEVATION_SCALE_LIMITS.MIN + index);
-    return [value, value];
-  })
-]));
-
-const UNDER_OVERHEAD_CHOICES = Object.freeze({
-  [OVERHEAD_MODES.HIDE]: "SCENE_ELEVATION.RegionBehavior.Choices.UnderOverheadHide",
-  [OVERHEAD_MODES.FADE]: "SCENE_ELEVATION.RegionBehavior.Choices.UnderOverheadFade",
-  [OVERHEAD_MODES.KEEP]: "SCENE_ELEVATION.RegionBehavior.Choices.UnderOverheadKeep"
-});
-
-const PARALLAX_HEIGHT_CONTRAST_CHOICES = Object.freeze({
-  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  reduced: "SCENE_ELEVATION.Settings.ParallaxHeightContrastReduced",
-  normal: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNormal",
-  noticeable: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNoticeable",
-  strong: "SCENE_ELEVATION.Settings.ParallaxHeightContrastStrong",
-  dramatic: "SCENE_ELEVATION.Settings.ParallaxHeightContrastDramatic",
-  extreme: "SCENE_ELEVATION.Settings.ParallaxHeightContrastExtreme"
-});
-
-const SHADOW_LENGTH_CHOICES = Object.freeze({
-  [USE_SCENE_SETTING]: "SCENE_ELEVATION.RegionBehavior.Choices.UseSceneSetting",
-  off: "SCENE_ELEVATION.Settings.ShadowLengthOff",
-  short: "SCENE_ELEVATION.Settings.ShadowLengthShort",
-  normal: "SCENE_ELEVATION.Settings.ShadowLengthNormal",
-  long: "SCENE_ELEVATION.Settings.ShadowLengthLong",
-  extreme: "SCENE_ELEVATION.Settings.ShadowLengthExtreme"
-});
 
 function _shadowLengthChoice(value) {
   const override = String(value ?? USE_SCENE_SETTING);
   if (!override) return USE_SCENE_SETTING;
-  if (Object.prototype.hasOwnProperty.call(SHADOW_LENGTH_CHOICES, override)) return override;
+  if (Object.prototype.hasOwnProperty.call(REGION_BEHAVIOR_CHOICES.SHADOW_LENGTH, override)) return override;
   return Number.isFinite(Number(override)) ? shadowLengthKey(value) : USE_SCENE_SETTING;
 }
 
@@ -260,7 +127,7 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
       underOverheadMode: new fields.StringField({
         required: true,
         initial: OVERHEAD_MODES.FADE,
-        choices: UNDER_OVERHEAD_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.UNDER_OVERHEAD,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.underOverheadMode.label",
         hint: "SCENE_ELEVATION.RegionBehavior.FIELDS.underOverheadMode.hint"
       }),
@@ -268,42 +135,42 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: PRESET_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.PRESET,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.presetOverride.label"
       }),
       parallaxStrengthOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: PARALLAX_STRENGTH_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.PARALLAX_STRENGTH,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxStrengthOverride.label"
       }),
       parallaxHeightContrastOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: PARALLAX_HEIGHT_CONTRAST_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.PARALLAX_HEIGHT_CONTRAST,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxHeightContrastOverride.label"
       }),
       parallaxModeOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: PARALLAX_MODE_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.PARALLAX_MODE,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.parallaxModeOverride.label"
       }),
       perspectivePointOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: PERSPECTIVE_POINT_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.PERSPECTIVE_POINT,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.perspectivePointOverride.label"
       }),
       blendModeOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: BLEND_MODE_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.BLEND_MODE,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.blendModeOverride.label"
       }),
       edgeStretchPercentOverride: new fields.StringField({
@@ -317,21 +184,21 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: OVERLAY_SCALE_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.OVERLAY_SCALE,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.overlayScaleOverride.label"
       }),
       shadowModeOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: SHADOW_MODE_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.SHADOW_MODE,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowModeOverride.label"
       }),
       shadowLengthOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: SHADOW_LENGTH_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.SHADOW_LENGTH,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.shadowLengthOverride.label"
       }),
       shadowStrength: new fields.NumberField({
@@ -347,14 +214,14 @@ export class ElevationRegionBehavior extends foundry.data.regionBehaviors.Region
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: DEPTH_SCALE_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.DEPTH_SCALE,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.depthScaleOverride.label"
       }),
       elevationScaleOverride: new fields.StringField({
         required: true,
         blank: true,
         initial: USE_SCENE_SETTING,
-        choices: ELEVATION_SCALE_CHOICES,
+        choices: REGION_BEHAVIOR_CHOICES.ELEVATION_SCALE,
         label: "SCENE_ELEVATION.RegionBehavior.FIELDS.elevationScaleOverride.label"
       }),
       modifyTokenElevation: new fields.BooleanField({

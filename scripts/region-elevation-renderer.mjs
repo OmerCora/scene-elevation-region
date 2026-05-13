@@ -1,10 +1,12 @@
 import { MODULE_ID, SETTINGS, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, ELEVATED_GRID_MODES, elevatedGridModeValue, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey, elevationScaleValue, edgeStretchPercentValue } from "./config.mjs";
+import { debugWarn } from "./debug.mjs";
+import { GeneratedTextureCache, validTexture as _validTexture } from "./generated-textures.mjs";
+import { pathsBounds as _pathsBounds, pointInPolygon as _pointInPolygon, regionPaths as _regionPaths } from "./region-geometry.mjs";
 
 /**
- * Per-draw settings cache. `getSceneElevationSettings()` rebuilds via two deep clones
- * + mergeObjects on every call; with ~7 helper calls per draw plus per-region perspective
- * lookups this dominated the pan loop. The renderer fills this once at the top of
- * `_drawRegions` and clears it in `finally`. All hot-path readers route through `_setting`.
+ * Per-draw settings snapshot. `getSceneElevationSettings()` has its own scene cache,
+ * and the renderer still fills this once at the top of `_drawRegions` so all helper
+ * reads inside the draw use the same values without repeated cache lookups.
  */
 let _settingsCache = null;
 function _setting(key) {
@@ -618,57 +620,14 @@ export function regionContainsPoint(region, point, elevation = undefined) {
 function _regionContains(region, point, elevation = undefined, paths = null) {
   try {
     if (region.testPoint?.({ x: point.x, y: point.y })) return true;
-  } catch (err) {}
+  } catch (err) { debugWarn("regionContains.baseTest", err, region?.id, point); }
   const elevations = new Set([point.elevation, elevation, 0].filter(value => Number.isFinite(Number(value))).map(Number));
   for (const testElevation of elevations) {
     try {
       if (region.testPoint?.({ x: point.x, y: point.y, elevation: testElevation })) return true;
-    } catch (err) {}
+    } catch (err) { debugWarn("regionContains.elevationTest", err, region?.id, point, testElevation); }
   }
   return (paths ?? _regionPaths(region)).some(path => _pointInPolygon(point, path));
-}
-
-function _pointInPolygon(point, path) {
-  let inside = false;
-  for (let index = 0, previous = path.length - 1; index < path.length; previous = index++) {
-    const currentPoint = path[index];
-    const previousPoint = path[previous];
-    const intersects = (currentPoint.y > point.y) !== (previousPoint.y > point.y)
-      && point.x < ((previousPoint.x - currentPoint.x) * (point.y - currentPoint.y)) / ((previousPoint.y - currentPoint.y) || 1e-9) + currentPoint.x;
-    if (intersects) inside = !inside;
-  }
-  return inside;
-}
-
-function _normalizeRegionPath(path) {
-  if (!Array.isArray(path) || !path.length) return [];
-  const points = [];
-  const first = path[0];
-  if (typeof first === "number") {
-    for (let index = 0; index < path.length - 1; index += 2) {
-      points.push({ x: Number(path[index]), y: Number(path[index + 1]) });
-    }
-  } else {
-    for (const point of path) {
-      if (Array.isArray(point)) points.push({ x: Number(point[0]), y: Number(point[1]) });
-      else points.push({ x: Number(point.X ?? point.x), y: Number(point.Y ?? point.y) });
-    }
-  }
-  return points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
-}
-
-function _looksLikePoint(value) {
-  if (typeof value === "number") return true;
-  if (Array.isArray(value)) return value.length === 2 && typeof value[0] === "number" && typeof value[1] === "number";
-  return value && (Number.isFinite(value.x) || Number.isFinite(value.X));
-}
-
-function _regionPaths(region) {
-  const raw = region.polygonTree?.toClipperPoints?.()
-    ?? region.polygons?.map(polygon => Array.from(polygon.points ?? []))
-    ?? [];
-  const rawPaths = typeof raw[0] === "number" || _looksLikePoint(raw[0]) ? [raw] : raw;
-  return rawPaths.map(_normalizeRegionPath).filter(path => path.length >= 3);
 }
 
 function _pathArea(path) {
@@ -764,31 +723,6 @@ function _regionArea(region, paths = null) {
   return paths.reduce((sum, path) => sum + _pathArea(path), 0) || Infinity;
 }
 
-function _pathsBounds(paths) {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const path of paths) {
-    for (const point of path) {
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-    }
-  }
-  if (!Number.isFinite(minX)) return null;
-  return {
-    minX,
-    minY,
-    maxX,
-    maxY,
-    width: Math.max(1, maxX - minX),
-    height: Math.max(1, maxY - minY),
-    center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
-  };
-}
-
 const _pathsBoundsCache = new WeakMap();
 const _pathsSignatureCache = new WeakMap();
 
@@ -852,10 +786,6 @@ function _drawShiftedPaths(graphics, paths, shiftX, shiftY) {
   for (const path of paths) {
     graphics.drawPolygon(path.flatMap(point => [point.x + shiftX, point.y + shiftY]));
   }
-}
-
-function _validTexture(texture) {
-  return !!texture && texture !== PIXI.Texture.EMPTY && texture.valid !== false && texture.baseTexture?.valid !== false;
 }
 
 function _makeBlurFilter(strength) {
@@ -1021,7 +951,7 @@ export class RegionElevationRenderer {
     this._visualParamsVersion = 0;
     this._entriesArr = [];
     this._visualByEntry = new Map();
-    this._generatedTextureCache = new Map();
+    this._generatedTextureCache = new GeneratedTextureCache();
     this._cliffWarpPathCache = new WeakMap();
     this._needsParallaxFrame = false;
     this._pointerEventTarget = null;
@@ -1075,14 +1005,14 @@ export class RegionElevationRenderer {
     if (this._panRaf) cancelAnimationFrame(this._panRaf);
     this._panRaf = null;
     invalidateActiveElevationRegionsCache();
-    try { this._pointerEventTarget?.removeEventListener?.("pointermove", this._pointerMoveHandler); } catch (err) {}
-    try { this.clearNegativeParallaxClips(); } catch (err) {}
-    try { this.resetTileParallax(); } catch (err) {}
-    try { this._restoreNativeSceneGrid(); } catch (err) {}
-    try { this.container?.parent?.removeChild(this.container); } catch (err) {}
-    try { this.elevatedGridContainer?.parent?.removeChild(this.elevatedGridContainer); } catch (err) {}
-    try { this.overheadContainer?.parent?.removeChild(this.overheadContainer); } catch (err) {}
-    try { this.mask?.parent?.removeChild(this.mask); } catch (err) {}
+    try { this._pointerEventTarget?.removeEventListener?.("pointermove", this._pointerMoveHandler); } catch (err) { debugWarn("renderer.detach.pointer", err); }
+    try { this.clearNegativeParallaxClips(); } catch (err) { debugWarn("renderer.detach.negativeClips", err); }
+    try { this.resetTileParallax(); } catch (err) { debugWarn("renderer.detach.tileParallax", err); }
+    try { this._restoreNativeSceneGrid(); } catch (err) { debugWarn("renderer.detach.nativeGrid", err); }
+    try { this.container?.parent?.removeChild(this.container); } catch (err) { debugWarn("renderer.detach.container", err); }
+    try { this.elevatedGridContainer?.parent?.removeChild(this.elevatedGridContainer); } catch (err) { debugWarn("renderer.detach.elevatedGrid", err); }
+    try { this.overheadContainer?.parent?.removeChild(this.overheadContainer); } catch (err) { debugWarn("renderer.detach.overhead", err); }
+    try { this.mask?.parent?.removeChild(this.mask); } catch (err) { debugWarn("renderer.detach.mask", err); }
     this.container?.destroy({ children: true });
     this.elevatedGridContainer?.destroy({ children: true });
     this.overheadContainer?.destroy({ children: true });
@@ -1217,7 +1147,7 @@ export class RegionElevationRenderer {
     const parent = this._overheadRenderParent() ?? canvas?.primary;
     if (!parent) return null;
     if (container.parent !== parent) {
-      try { container.parent?.removeChild(container); } catch (err) {}
+      try { container.parent?.removeChild(container); } catch (err) { debugWarn("renderer.elevatedGrid.reparent", err); }
       parent.addChild(container);
     }
     container.zIndex = ELEVATED_GRID_Z_INDEX;
@@ -1254,7 +1184,7 @@ export class RegionElevationRenderer {
         if ("visible" in layer) layer.visible = state.visible;
         if ("renderable" in layer) layer.renderable = state.renderable;
         if ("alpha" in layer) layer.alpha = state.alpha;
-      } catch (err) {}
+      } catch (err) { debugWarn("renderer.nativeGrid.restore", err, layer); }
     }
     this._nativeGridStates = new Map();
   }
@@ -1518,9 +1448,7 @@ export class RegionElevationRenderer {
     if (!visual?.paths?.length) return null;
     const params = this._visualParams.get(this._parallaxStateKey(visual));
     if (!params) return null;
-    const offset = params.slope
-      ? this._slopeOverlayOffsetAtPoint(center, params)
-      : params.overlayOffset ? { x: params.overlayOffset.x, y: params.overlayOffset.y } : { x: 0, y: 0 };
+    const offset = this._topSurfaceOffsetAtPoint(center, params);
     const hasVisibleShift = !_offsetEffectivelyZero(offset) || Math.abs(Number(params.overlayScale ?? 1) - 1) > 0.001;
     if (!hasVisibleShift && Math.abs(Number(params.visualElevation ?? 0)) < MIN_ELEVATION_DELTA) return null;
     return {
@@ -1664,8 +1592,23 @@ export class RegionElevationRenderer {
     if (!visual) return { x: 0, y: 0 };
     const params = this._visualParams.get(this._parallaxStateKey(visual));
     if (!params) return { x: 0, y: 0 };
-    if (params.slope) return this._slopeOverlayOffsetAtPoint(point, params);
-    return params.overlayOffset ? { x: params.overlayOffset.x, y: params.overlayOffset.y } : { x: 0, y: 0 };
+    return this._topSurfaceOffsetAtPoint(point, params);
+  }
+
+  _topSurfaceOffsetAtPoint(point, params) {
+    const surfacePoint = this._topSurfacePoint(point, params);
+    return {
+      x: Number(surfacePoint?.x ?? point.x) - point.x,
+      y: Number(surfacePoint?.y ?? point.y) - point.y
+    };
+  }
+
+  _topSurfacePoint(point, params) {
+    if (!point || !params || params.isHole) return point;
+    if (params.slope) return this._slopedOverlayPoint(point, params);
+    if (this._usesProjectedFlatSurface(params)) return this._flatOverlaySurfacePoint(point, params);
+    const matrix = this._regionTransformMatrix(params);
+    return matrix ? this._transformPoint(point, matrix) : point;
   }
 
   applyNegativeParallaxClipForToken(token) {
@@ -1705,8 +1648,7 @@ export class RegionElevationRenderer {
     if (!visual) return { x: 0, y: 0 };
     const params = this._visualParams.get(this._parallaxStateKey(visual));
     if (!params) return { x: 0, y: 0 };
-    if (params.slope) return this._slopeOverlayOffsetAtPoint(point, params);
-    return params.overlayOffset ? { x: params.overlayOffset.x, y: params.overlayOffset.y } : { x: 0, y: 0 };
+    return this._topSurfaceOffsetAtPoint(point, params);
   }
 
   /** Apply the parallax offset to all tile meshes in the scene. */
@@ -1813,7 +1755,7 @@ export class RegionElevationRenderer {
     const clip = displayObject?._sceneElevationNegativeClip;
     if (!displayObject || !clip) return;
     if (displayObject.mask === clip.mask) displayObject.mask = clip.previousMask ?? null;
-    try { clip.mask?.parent?.removeChild(clip.mask); } catch (err) {}
+    try { clip.mask?.parent?.removeChild(clip.mask); } catch (err) { debugWarn("renderer.negativeClip.clear", err); }
     clip.mask?.destroy?.({ children: true });
     delete displayObject._sceneElevationNegativeClip;
   }
@@ -1854,7 +1796,7 @@ export class RegionElevationRenderer {
     const global = new PIXI.Point();
     try {
       renderer?.events?.mapPositionToPoint?.(global, event.clientX, event.clientY);
-    } catch (err) {}
+    } catch (err) { debugWarn("renderer.pointer.mapPosition", err); }
     if (!Number.isFinite(global.x) || !Number.isFinite(global.y) || (global.x === 0 && global.y === 0)) {
       const rect = renderer?.view?.getBoundingClientRect?.() ?? canvas.app?.view?.getBoundingClientRect?.();
       if (!rect) return null;
@@ -2302,7 +2244,7 @@ export class RegionElevationRenderer {
       this._overheadContainers.set(key, container);
     }
     if (container.parent !== parent) {
-      try { container.parent?.removeChild(container); } catch (err) {}
+      try { container.parent?.removeChild(container); } catch (err) { debugWarn("renderer.overhead.reparent", err); }
       parent.addChild(container);
     }
     container.zIndex = sortElevation;
@@ -2397,7 +2339,7 @@ export class RegionElevationRenderer {
     for (const container of this._overheadContainers.values()) {
       this._clearContainerChildren(container);
       if (destroy) {
-        try { container.parent?.removeChild(container); } catch (err) {}
+        try { container.parent?.removeChild(container); } catch (err) { debugWarn("renderer.overhead.destroy", err); }
         container.destroy({ children: true });
       }
     }
@@ -4047,22 +3989,11 @@ export class RegionElevationRenderer {
   }
 
   _generateTexture(displayObject, width, height) {
-    const renderer = canvas.app?.renderer;
-    if (!renderer) return null;
-    const region = new PIXI.Rectangle(0, 0, width, height);
-    try {
-      return renderer.generateTexture(displayObject, { region, resolution: 1 });
-    } catch (err) {}
-    try {
-      return renderer.generateTexture(displayObject, PIXI.SCALE_MODES.LINEAR, 1, region);
-    } catch (err) {}
-    return null;
+    return this._generatedTextureCache.generate(displayObject, width, height);
   }
 
   _clearGeneratedTextureCache() {
-    if (!this._generatedTextureCache) return;
-    for (const texture of this._generatedTextureCache.values()) texture?.destroy?.(true);
-    this._generatedTextureCache.clear();
+    this._generatedTextureCache?.clear();
   }
 
   _createMask(paths) {
@@ -4413,6 +4344,6 @@ function _cameraCenter(geo) {
     const parent = canvas.primary ?? canvas.stage;
     const focus = parent ? _cameraFocus(parent) : null;
     if (Number.isFinite(focus?.x) && Number.isFinite(focus?.y)) return { x: focus.x, y: focus.y };
-  } catch (err) {}
+  } catch (err) { debugWarn("renderer.cameraCenter", err); }
   return { x: geo.x + geo.width / 2, y: geo.y + geo.height / 2 };
 }

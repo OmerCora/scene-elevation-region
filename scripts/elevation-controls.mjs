@@ -15,7 +15,9 @@ import {
   setTransientSceneElevationSetting,
   clearTransientSceneElevationSettings
 } from "./config.mjs";
+import { debugWarn } from "./debug.mjs";
 import { RegionElevationRenderer, getActiveElevationRegions, getRegionElevationStateAtPoint } from "./region-elevation-renderer.mjs";
+import { pathsBounds as _pathsBounds, pointInPolygon as _pointInPolygon, regionPaths as _regionPaths } from "./region-geometry.mjs";
 import { openSceneElevationSettingsDialog } from "./scene-settings.mjs";
 
 function _sceneElevationClientEnabled() {
@@ -1603,31 +1605,6 @@ function _sceneControlHostElement(element) {
   return element.closest("li") ?? element.closest(".control-tool") ?? element;
 }
 
-function _normalizeRegionPath(path) {
-  if (!Array.isArray(path) || !path.length) return [];
-  if (typeof path[0] === "number") {
-    const points = [];
-    for (let index = 0; index < path.length - 1; index += 2) points.push({ x: Number(path[index]), y: Number(path[index + 1]) });
-    return points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
-  }
-  return path.map(point => ({ x: Number(point.X ?? point.x), y: Number(point.Y ?? point.y) }))
-    .filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
-}
-
-function _looksLikePoint(value) {
-  if (typeof value === "number") return true;
-  if (Array.isArray(value)) return value.length === 2 && typeof value[0] === "number" && typeof value[1] === "number";
-  return value && (Number.isFinite(value.x) || Number.isFinite(value.X));
-}
-
-function _regionPaths(region) {
-  const raw = region.polygonTree?.toClipperPoints?.()
-    ?? region.polygons?.map(polygon => Array.from(polygon.points ?? []))
-    ?? [];
-  const rawPaths = typeof raw[0] === "number" || _looksLikePoint(raw[0]) ? [raw] : raw;
-  return rawPaths.map(_normalizeRegionPath).filter(path => path.length >= MIN_POLYGON_POINTS);
-}
-
 function _hoverElevationStateAtPoint(point) {
   const state = getRegionElevationStateAtPoint(point, canvas.scene);
   return state.found ? state : null;
@@ -1637,22 +1614,9 @@ function _regionContainsPoint(region, point) {
   for (const shape of Array.from(region?.shapes ?? [])) {
     try {
       if (shape?.testPoint?.(point)) return true;
-    } catch (err) {}
+    } catch (err) { debugWarn("controls.regionContains.shapeTest", err, region?.id, point); }
   }
   return _regionPaths(region).some(path => _pointInPolygon(point, path));
-}
-
-function _pointInPolygon(point, path) {
-  let inside = false;
-  for (let index = 0, previous = path.length - 1; index < path.length; previous = index++) {
-    const currentPoint = path[index];
-    const previousPoint = path[previous];
-    const crosses = (currentPoint.y > point.y) !== (previousPoint.y > point.y);
-    if (!crosses) continue;
-    const x = ((previousPoint.x - currentPoint.x) * (point.y - currentPoint.y)) / (previousPoint.y - currentPoint.y) + currentPoint.x;
-    if (point.x < x) inside = !inside;
-  }
-  return inside;
 }
 
 function _regionRotationAngleFromWheel(event) {
@@ -1782,31 +1746,6 @@ function _renderDocumentSheet(document, sheet = document?.sheet) {
   const app = new RegionConfig({ document });
   app.render({ force: true });
   return app;
-}
-
-function _pathsBounds(paths) {
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const path of paths) {
-    for (const point of path) {
-      minX = Math.min(minX, point.x);
-      minY = Math.min(minY, point.y);
-      maxX = Math.max(maxX, point.x);
-      maxY = Math.max(maxY, point.y);
-    }
-  }
-  if (!Number.isFinite(minX)) return null;
-  return {
-    minX,
-    minY,
-    maxX,
-    maxY,
-    width: Math.max(1, maxX - minX),
-    height: Math.max(1, maxY - minY),
-    center: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 }
-  };
 }
 
 function _canvasPointToViewport(point) {

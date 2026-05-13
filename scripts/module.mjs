@@ -1,6 +1,10 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, TOKEN_SCALING_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, EDGE_STRETCH_LIMITS, REGION_BEHAVIOR_TYPE, ELEVATED_GRID_MODES, edgeStretchPercentValue, elevatedGridModeValue, elevationPresetValues, getSceneElevationClientEnabled, getSceneElevationSetting, parallaxHeightContrastKey, setSceneElevationClientEnabled, shadowLengthKey, tokenScalePerElevationValue, tokenScalingModeValue } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, TOKEN_SCALING_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, EDGE_STRETCH_LIMITS, REGION_BEHAVIOR_TYPE, ELEVATED_GRID_MODES, edgeStretchPercentValue, elevatedGridModeValue, elevationPresetValues, getSceneElevationClientEnabled, getSceneElevationSetting, invalidateSceneElevationSettingsCache, parallaxHeightContrastKey, setSceneElevationClientEnabled, shadowLengthKey, tokenScalePerElevationValue, tokenScalingModeValue } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
+import { registerModuleSettings } from "./settings-registration.mjs";
+import { debugLog, debugWarn, setDebugLogging } from "./debug.mjs";
+import { buildTokenScaleCacheKey } from "./token-scale-cache-key.mjs";
+import { applyAnimatedSystemTokenVisuals, applySystemTokenVisualState, clearSystemTokenVisualState, restoreSystemTokenMotion } from "./system-token-visuals.mjs";
 import {
   RegionElevationRenderer,
   getRegionElevationAtPoint,
@@ -27,10 +31,6 @@ const TOKEN_PARALLAX_TARGET_NAME_PATTERN = /target|crosshair|reticle|reticule|ba
 const TOKEN_PARALLAX_TARGET_SCAN_LIMIT = 80;
 const TOKEN_PARALLAX_HIT_AREA_EPSILON = 0.5;
 const ZERO_PARALLAX_OFFSET = Object.freeze({ x: 0, y: 0 });
-const SYSTEM_TOKEN_FLIGHT_MOTION_GRID_FRACTION = 0.025;
-const SYSTEM_TOKEN_FLIGHT_MOTION_MIN_PIXELS = 1.5;
-const SYSTEM_TOKEN_BURROW_ALPHA_FACTOR = 0.72;
-const SYSTEM_TOKEN_BURROW_TINT = 0xb18455;
 const TOKEN_HUD_POSITION_PATCHED = "_sceneElevationRegionHudPositionPatched";
 const TOKEN_RULER_GUIDE_PATCHED = "_sceneElevationRegionRulerGuidePatched";
 const MOUSE_DRIFT_WORLD_DEFAULTS_VERSION = "mouse-drift-defaults-v2";
@@ -62,18 +62,6 @@ let _hoveredElevatedGridToken = null;
 let _dragElevatedGridToken = null;
 let _rulerElevatedGridContext = null;
 let _rulerElevatedGridClearFrame = null;
-
-// Diagnostic logging for token-elevation issues. Enable via:
-//   game.modules.get("scene-elevation-region").api.setDebug(true)
-// or set window.SCENE_ELEVATION_DEBUG = true in the F12 console.
-let _DEBUG = false;
-function _dsLog(tag, ...args) {
-  if (!_DEBUG && !globalThis.SCENE_ELEVATION_DEBUG) return;
-  const tokenArg = args.find(a => a?.name && a?.id);
-  const label = tokenArg ? `${tokenArg.name}#${tokenArg.id}` : "";
-  // eslint-disable-next-line no-console
-  console.log(`[scene-elevation-region:${tag}]`, label, ...args);
-}
 
 function _sceneElevationClientEnabled() {
   return getSceneElevationClientEnabled();
@@ -169,315 +157,26 @@ function _toggleTemporaryParallaxOverlay() {
 
 Hooks.once("init", () => {
   _registerKeybindings();
-
-  game.settings.register(MODULE_ID, SETTINGS.WORLD_DEFAULTS_VERSION, {
-    scope: "world", config: false, type: String, default: ""
-  });
-
-  game.settings.register(MODULE_ID, SETTINGS.CLIENT_ENABLED, {
-    name: "SCENE_ELEVATION.Settings.ClientEnabled",
-    hint: "SCENE_ELEVATION.Settings.ClientEnabledHint",
-    scope: "client",
-    config: true,
-    type: Boolean,
-    default: true,
-    onChange: enabled => _refreshSceneElevationClientState(enabled)
-  });
-  try { setSceneElevationClientEnabled(game.settings.get(MODULE_ID, SETTINGS.CLIENT_ENABLED)); }
-  catch (err) { setSceneElevationClientEnabled(true); }
-
-  game.settings.register(MODULE_ID, SETTINGS.SHOW_ELEVATED_GRID, {
-    name: "SCENE_ELEVATION.Settings.ShowElevatedGrid",
-    hint: "SCENE_ELEVATION.Settings.ShowElevatedGridHint",
-    scope: "client",
-    config: true,
-    type: String,
-    default: ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID,
-    choices: {
-      [ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID]: "SCENE_ELEVATION.Settings.ShowElevatedGridOverrideSceneGrid",
-      [ELEVATED_GRID_MODES.INTERACTION]: "SCENE_ELEVATION.Settings.ShowElevatedGridInteraction",
-      [ELEVATED_GRID_MODES.OFF]: "SCENE_ELEVATION.Settings.ShowElevatedGridOff"
-    },
-    onChange: () => _queueElevatedGridRefresh()
-  });
-
-  game.settings.registerMenu(MODULE_ID, "resetDefaults", {
-    name: "SCENE_ELEVATION.Settings.ResetDefaults",
-    label: "SCENE_ELEVATION.Settings.ResetDefaultsLabel",
-    hint: "SCENE_ELEVATION.Settings.ResetDefaultsHint",
-    icon: "fa-solid fa-rotate-left",
-    type: ResetElevationDefaultsDialog,
-    restricted: true
-  });
-
-  game.settings.register(MODULE_ID, SETTINGS.PARALLAX, {
-    name: "SCENE_ELEVATION.Settings.Parallax",
-    hint: "SCENE_ELEVATION.Settings.ParallaxHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.PARALLAX],
-    choices: {
-      off: "SCENE_ELEVATION.Settings.ParallaxOff",
-      trace: "SCENE_ELEVATION.Settings.ParallaxTrace",
-      minimal: "SCENE_ELEVATION.Settings.ParallaxMinimal",
-      verySubtle: "SCENE_ELEVATION.Settings.ParallaxVerySubtle",
-      subtle: "SCENE_ELEVATION.Settings.ParallaxSubtle",
-      medium: "SCENE_ELEVATION.Settings.ParallaxMedium",
-      strong: "SCENE_ELEVATION.Settings.ParallaxStrong",
-      extreme: "SCENE_ELEVATION.Settings.ParallaxExtreme"
-    },
-    onChange: () => {
+  registerModuleSettings({
+    resetDefaultsDialogClass: ResetElevationDefaultsDialog,
+    onClientEnabledChange: enabled => _refreshSceneElevationClientState(enabled),
+    onElevatedGridChange: () => _queueElevatedGridRefresh(),
+    onVisualSettingsChange: () => {
       RegionElevationRenderer.instance.update();
       _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.PARALLAX_HEIGHT_CONTRAST, {
-    name: "SCENE_ELEVATION.Settings.ParallaxHeightContrast",
-    hint: "SCENE_ELEVATION.Settings.ParallaxHeightContrastHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.PARALLAX_HEIGHT_CONTRAST],
-    choices: {
-      reduced: "SCENE_ELEVATION.Settings.ParallaxHeightContrastReduced",
-      normal: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNormal",
-      noticeable: "SCENE_ELEVATION.Settings.ParallaxHeightContrastNoticeable",
-      strong: "SCENE_ELEVATION.Settings.ParallaxHeightContrastStrong",
-      dramatic: "SCENE_ELEVATION.Settings.ParallaxHeightContrastDramatic",
-      extreme: "SCENE_ELEVATION.Settings.ParallaxHeightContrastExtreme"
     },
-    onChange: () => {
-      RegionElevationRenderer.instance.update();
+    onRendererSettingsChange: () => RegionElevationRenderer.instance.update(),
+    onTokenScaleSettingsChange: () => _refreshAllTokenScales(),
+    onTokenElevationSettingsChange: () => void _refreshAllTokenElevations(),
+    onDrawSteelMovementTypeAnimationsChange: () => {
+      _clearPendingSystemTokenVisualAnimation();
       _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.PARALLAX_MODE, {
-    name: "SCENE_ELEVATION.Settings.ParallaxMode",
-    hint: "SCENE_ELEVATION.Settings.ParallaxModeHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.PARALLAX_MODE],
-    choices: {
-      [PARALLAX_MODES.ANCHORED_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredCard",
-      [PARALLAX_MODES.VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeVelocityCard",
-      [PARALLAX_MODES.ANCHORED_VELOCITY_CARD]: "SCENE_ELEVATION.Settings.ParallaxModeAnchoredVelocityCard",
-      [PARALLAX_MODES.ORTHOGRAPHIC_TOP_DOWN]: "SCENE_ELEVATION.Settings.ParallaxModeOrthographicTopDown",
-      [PARALLAX_MODES.ORTHOGRAPHIC_ANGLE]: "SCENE_ELEVATION.Settings.ParallaxModeOrthographicAngle",
-      [PARALLAX_MODES.LAYERED]: "SCENE_ELEVATION.Settings.ParallaxModeLayered",
-      [PARALLAX_MODES.HORIZONTAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeHorizontalScroll",
-      [PARALLAX_MODES.VERTICAL_SCROLL]: "SCENE_ELEVATION.Settings.ParallaxModeVerticalScroll",
-      [PARALLAX_MODES.MOUSE]: "SCENE_ELEVATION.Settings.ParallaxModeMouse",
-      [PARALLAX_MODES.SHADOW]: "SCENE_ELEVATION.Settings.ParallaxModeShadow",
-      [PARALLAX_MODES.TOP_DOWN_HEIGHT]: "SCENE_ELEVATION.Settings.ParallaxModeTopDownHeight"
     },
-    onChange: () => {
-      RegionElevationRenderer.instance.update();
+    onDrawSteelHandleMovementModesChange: () => {
       _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.PERSPECTIVE_POINT, {
-    name: "SCENE_ELEVATION.Settings.PerspectivePoint",
-    hint: "SCENE_ELEVATION.Settings.PerspectivePointHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.PERSPECTIVE_POINT],
-    choices: {
-      [PERSPECTIVE_POINTS.CENTER]: "SCENE_ELEVATION.Settings.PerspectivePointCenter",
-      [PERSPECTIVE_POINTS.TOP_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointTopLeft",
-      [PERSPECTIVE_POINTS.TOP_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointTopRight",
-      [PERSPECTIVE_POINTS.BOTTOM_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointBottomLeft",
-      [PERSPECTIVE_POINTS.BOTTOM_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointBottomRight",
-      [PERSPECTIVE_POINTS.FAR_TOP]: "SCENE_ELEVATION.Settings.PerspectivePointFarTop",
-      [PERSPECTIVE_POINTS.FAR_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointFarLeft",
-      [PERSPECTIVE_POINTS.FAR_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointFarRight",
-      [PERSPECTIVE_POINTS.FAR_BOTTOM]: "SCENE_ELEVATION.Settings.PerspectivePointFarBottom",
-      [PERSPECTIVE_POINTS.REGION_CENTER]: "SCENE_ELEVATION.Settings.PerspectivePointRegionCenter",
-      [PERSPECTIVE_POINTS.REGION_TOP_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionTopLeft",
-      [PERSPECTIVE_POINTS.REGION_TOP_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionTopRight",
-      [PERSPECTIVE_POINTS.REGION_BOTTOM_LEFT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionBottomLeft",
-      [PERSPECTIVE_POINTS.REGION_BOTTOM_RIGHT]: "SCENE_ELEVATION.Settings.PerspectivePointRegionBottomRight",
-      [PERSPECTIVE_POINTS.POINT_ON_SCENE_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointSceneEdge",
-      [PERSPECTIVE_POINTS.CAMERA_CENTER]: "SCENE_ELEVATION.Settings.PerspectivePointCameraCenter",
-      [PERSPECTIVE_POINTS.FURTHEST_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointFurthestEdge",
-      [PERSPECTIVE_POINTS.NEAREST_EDGE]: "SCENE_ELEVATION.Settings.PerspectivePointNearestEdge",
-      [PERSPECTIVE_POINTS.SCENE_CAMERA_OFFSET]: "SCENE_ELEVATION.Settings.PerspectivePointSceneCameraOffset"
+      void _refreshAllTokenElevations();
     },
-    onChange: () => {
-      RegionElevationRenderer.instance.update();
-      _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.BLEND_MODE, {
-    name: "SCENE_ELEVATION.Settings.TransitionMode",
-    hint: "SCENE_ELEVATION.Settings.TransitionModeHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.BLEND_MODE],
-    choices: {
-      [BLEND_MODES.OFF]: "SCENE_ELEVATION.Settings.BlendModeOff",
-      [BLEND_MODES.SOFT]: "SCENE_ELEVATION.Settings.BlendModeSoft",
-      [BLEND_MODES.WIDE]: "SCENE_ELEVATION.Settings.BlendModeWide",
-      [BLEND_MODES.EDGE_STRETCH]: "SCENE_ELEVATION.Settings.BlendModeEdgeStretch",
-      [BLEND_MODES.CLIFF_WARP]: "SCENE_ELEVATION.Settings.BlendModeCliffWarp",
-      [BLEND_MODES.EXTRUDED_WALLS]: "SCENE_ELEVATION.Settings.BlendModeExtrudedWalls"
-    },
-    onChange: () => {
-      RegionElevationRenderer.instance.update();
-      _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.EDGE_STRETCH_PERCENT, {
-    name: "SCENE_ELEVATION.Settings.EdgeStretchPercent",
-    hint: "SCENE_ELEVATION.Settings.EdgeStretchPercentHint",
-    scope: "world",
-    config: true,
-    type: Number,
-    default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.EDGE_STRETCH_PERCENT],
-    range: { min: EDGE_STRETCH_LIMITS.MIN, max: EDGE_STRETCH_LIMITS.MAX, step: EDGE_STRETCH_LIMITS.STEP },
-    onChange: () => RegionElevationRenderer.instance.update()
-  });
-  game.settings.register(MODULE_ID, SETTINGS.OVERLAY_SCALE, {
-    name: "SCENE_ELEVATION.Settings.OverlayScale",
-    hint: "SCENE_ELEVATION.Settings.OverlayScaleHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.OVERLAY_SCALE],
-    choices: {
-      shrinkMedium: "SCENE_ELEVATION.Settings.OverlayScaleShrinkMedium",
-      shrinkSubtle: "SCENE_ELEVATION.Settings.OverlayScaleShrinkSubtle",
-      off: "SCENE_ELEVATION.Settings.OverlayScaleOff",
-      subtle: "SCENE_ELEVATION.Settings.OverlayScaleSubtle",
-      medium: "SCENE_ELEVATION.Settings.OverlayScaleMedium",
-      strong: "SCENE_ELEVATION.Settings.OverlayScaleStrong"
-    },
-    onChange: () => {
-      RegionElevationRenderer.instance.update();
-      _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.SHADOW_MODE, {
-    name: "SCENE_ELEVATION.Settings.ShadowMode",
-    hint: "SCENE_ELEVATION.Settings.ShadowModeHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.SHADOW_MODE],
-    choices: {
-      [SHADOW_MODES.OFF]: "SCENE_ELEVATION.Settings.ShadowModeOff",
-      [SHADOW_MODES.RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeResponsive",
-      [SHADOW_MODES.RESPONSIVE_ALL_AROUND]: "SCENE_ELEVATION.Settings.ShadowModeResponsiveAllAround",
-      [SHADOW_MODES.REVERSED_RESPONSIVE]: "SCENE_ELEVATION.Settings.ShadowModeReversedResponsive",
-      [SHADOW_MODES.TEXTURE_MELD]: "SCENE_ELEVATION.Settings.ShadowModeTextureMeld",
-      [SHADOW_MODES.FULL_TEXTURE_MELD]: "SCENE_ELEVATION.Settings.ShadowModeFullTextureMeld",
-      [SHADOW_MODES.TOP_DOWN]: "SCENE_ELEVATION.Settings.ShadowModeTopDown",
-      [SHADOW_MODES.TOP_DOWN_STRONG]: "SCENE_ELEVATION.Settings.ShadowModeTopDownStrong",
-      [SHADOW_MODES.SUN_AT_EDGE]: "SCENE_ELEVATION.Settings.ShadowModeSunAtEdge"
-    },
-    onChange: () => {
-      RegionElevationRenderer.instance.update();
-      _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.SHADOW_LENGTH, {
-    name: "SCENE_ELEVATION.Settings.ShadowLength",
-    hint: "SCENE_ELEVATION.Settings.ShadowLengthHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.SHADOW_LENGTH],
-    choices: {
-      off: "SCENE_ELEVATION.Settings.ShadowLengthOff",
-      short: "SCENE_ELEVATION.Settings.ShadowLengthShort",
-      normal: "SCENE_ELEVATION.Settings.ShadowLengthNormal",
-      long: "SCENE_ELEVATION.Settings.ShadowLengthLong",
-      extreme: "SCENE_ELEVATION.Settings.ShadowLengthExtreme"
-    },
-    onChange: () => RegionElevationRenderer.instance.update()
-  });
-  game.settings.register(MODULE_ID, SETTINGS.DEPTH_SCALE, {
-    name: "SCENE_ELEVATION.Settings.DepthScale",
-    hint: "SCENE_ELEVATION.Settings.DepthScaleHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.DEPTH_SCALE],
-    choices: {
-      [DEPTH_SCALES.COMPRESSED]: "SCENE_ELEVATION.Settings.DepthScaleCompressed",
-      [DEPTH_SCALES.LINEAR]: "SCENE_ELEVATION.Settings.DepthScaleLinear",
-      [DEPTH_SCALES.DRAMATIC]: "SCENE_ELEVATION.Settings.DepthScaleDramatic"
-    },
-    onChange: () => {
-      RegionElevationRenderer.instance.update();
-      _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.ELEVATION_SCALE, {
-    name: "SCENE_ELEVATION.Settings.ElevationScale",
-    hint: "SCENE_ELEVATION.Settings.ElevationScaleHint",
-    scope: "world",
-    config: true,
-    type: Number,
-    default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.ELEVATION_SCALE],
-    range: { min: ELEVATION_SCALE_LIMITS.MIN, max: ELEVATION_SCALE_LIMITS.MAX, step: ELEVATION_SCALE_LIMITS.STEP },
-    onChange: () => {
-      RegionElevationRenderer.instance.update();
-      _refreshAllTokenScales();
-    }
-  });
-  game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_ENABLED, {
-    name: "SCENE_ELEVATION.Settings.TokenScale",
-    hint: "SCENE_ELEVATION.Settings.TokenScaleHint",
-    scope: "world", config: true, type: Boolean, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_SCALE_ENABLED],
-    onChange: () => _refreshAllTokenScales()
-  });
-  game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALING_MODE, {
-    name: "SCENE_ELEVATION.Settings.TokenScalingMode",
-    hint: "SCENE_ELEVATION.Settings.TokenScalingModeHint",
-    scope: "world",
-    config: true,
-    type: String,
-    default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_SCALING_MODE],
-    choices: {
-      [TOKEN_SCALING_MODES.MAX_TOKEN_SCALE]: "SCENE_ELEVATION.Settings.TokenScalingModeMaxTokenScale",
-      [TOKEN_SCALING_MODES.SCALE_PER_ELEVATION]: "SCENE_ELEVATION.Settings.TokenScalingModeScalePerElevation"
-    },
-    onChange: () => _refreshAllTokenScales()
-  });
-  game.settings.register(MODULE_ID, SETTINGS.TOKEN_ELEVATION_MODE, {
-    name: "SCENE_ELEVATION.Settings.TokenElevationMode",
-    hint: "SCENE_ELEVATION.Settings.TokenElevationModeHint",
-    scope: "world", config: true, type: String, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_ELEVATION_MODE],
-    choices: {
-      [TOKEN_ELEVATION_MODES.ALWAYS]: "SCENE_ELEVATION.Settings.TokenElevationModeAlways",
-      [TOKEN_ELEVATION_MODES.NEVER]: "SCENE_ELEVATION.Settings.TokenElevationModeNever",
-      [TOKEN_ELEVATION_MODES.PER_REGION]: "SCENE_ELEVATION.Settings.TokenElevationModePerRegion"
-    },
-    onChange: () => void _refreshAllTokenElevations()
-  });
-  game.settings.register(MODULE_ID, SETTINGS.TOKEN_ELEVATION_ANIMATION_MS, {
-    name: "SCENE_ELEVATION.Settings.TokenElevationAnimationMs",
-    hint: "SCENE_ELEVATION.Settings.TokenElevationAnimationMsHint",
-    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_ELEVATION_ANIMATION_MS]
-  });
-  game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_MAX, {
-    name: "SCENE_ELEVATION.Settings.TokenScaleMax",
-    hint: "SCENE_ELEVATION.Settings.TokenScaleMaxHint",
-    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_SCALE_MAX],
-    onChange: () => _refreshAllTokenScales()
-  });
-  game.settings.register(MODULE_ID, SETTINGS.TOKEN_SCALE_PER_ELEVATION, {
-    name: "SCENE_ELEVATION.Settings.TokenScalePerElevation",
-    hint: "SCENE_ELEVATION.Settings.TokenScalePerElevationHint",
-    scope: "world", config: true, type: Number, default: ELEVATION_DEFAULT_SETTINGS[SETTINGS.TOKEN_SCALE_PER_ELEVATION],
-    onChange: () => _refreshAllTokenScales()
-  });
-  if (game.system?.id === "draw-steel") {
-    game.settings.register(MODULE_ID, SETTINGS.DRAW_STEEL_MOVEMENT_TYPE_ANIMATIONS, {
-      name: "SCENE_ELEVATION.Settings.DrawSteelMovementTypeAnimations",
-      hint: "SCENE_ELEVATION.Settings.DrawSteelMovementTypeAnimationsHint",
-      scope: "world",
-      config: true,
-      type: Boolean,
-      default: true,
-      onChange: () => {
-        _clearPendingSystemTokenVisualAnimation();
-        _refreshAllTokenScales();
-      }
-    });
-    game.settings.register(MODULE_ID, SETTINGS.DRAW_STEEL_HANDLE_MOVEMENT_MODES, {
-      name: "SCENE_ELEVATION.Settings.DrawSteelHandleMovementModes",
-      hint: "SCENE_ELEVATION.Settings.DrawSteelHandleMovementModesHint",
-      scope: "world",
-      config: true,
-      type: Boolean,
-      default: true,
-      onChange: () => {
-        _refreshAllTokenScales();
-        void _refreshAllTokenElevations();
-      }
-    });
-  }
-  game.settings.register(MODULE_ID, SETTINGS.SHOW_ELEVATION_REGIONS, {
-    scope: "client", config: false, type: Boolean, default: false,
-    onChange: () => canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.refreshElevationRegionVisibility()
+    onShowElevationRegionsChange: () => canvas?.[ElevationAuthoringLayer.LAYER_NAME]?.refreshElevationRegionVisibility()
   });
 
   CONFIG.Canvas.layers[ElevationAuthoringLayer.LAYER_NAME] = {
@@ -508,7 +207,7 @@ Hooks.once("init", () => {
     getRegionElevationStateAtPoint,
     getActiveElevationRegions,
     isEnabled: _sceneElevationClientEnabled,
-    setDebug: (on = true) => { _DEBUG = !!on; console.log(`[${MODULE_ID}] debug logging ${_DEBUG ? "enabled" : "disabled"}`); }
+    setDebug: setDebugLogging
   };
   else console.error(`[${MODULE_ID}] Module not registered — manifest id likely doesn't match install folder.`);
 });
@@ -580,6 +279,7 @@ Hooks.on("updateScene", (scene, change) => {
   const sceneSettingsChanged = foundry.utils.hasProperty(change, `flags.${MODULE_ID}.${SCENE_SETTINGS_FLAG}`);
   if (!geometryChanged && !sceneSettingsChanged) return;
   if (!_sceneElevationClientEnabled()) return;
+  if (sceneSettingsChanged) invalidateSceneElevationSettingsCache(scene);
   RegionElevationRenderer.instance.update();
   if (geometryChanged || sceneSettingsChanged) void _refreshAllTokenElevations();
   _refreshAllTokenScales();
@@ -820,6 +520,67 @@ function _tokenDocumentTextureScale(tokenDocument) {
   const x = Number.isFinite(scaleX) ? Math.abs(scaleX) : 1;
   const y = Number.isFinite(scaleY) ? Math.abs(scaleY) : x;
   return Math.max(0.001, x || 1, y || 1);
+}
+
+function _tokenDocumentTextureScaleAxes(tokenDocument) {
+  const texture = tokenDocument?.texture ?? {};
+  const scaleX = Number(texture.scaleX ?? texture.scale ?? 1);
+  const scaleY = Number(texture.scaleY ?? texture.scale ?? scaleX);
+  const normalizedX = Number.isFinite(scaleX) ? Math.max(0.001, Math.abs(scaleX) || 1) : 1;
+  const normalizedY = Number.isFinite(scaleY) ? Math.max(0.001, Math.abs(scaleY) || 1) : normalizedX;
+  return { x: normalizedX, y: normalizedY };
+}
+
+function _captureTokenBaseScale(token, factor = 1) {
+  const mesh = token?.mesh;
+  const tokenDocument = token?.document;
+  if (!mesh?.scale || !tokenDocument) return;
+  const naturalScale = _naturalTokenMeshScale(token);
+  if (naturalScale) {
+    mesh._seBaseScaleX = naturalScale.x;
+    mesh._seBaseScaleY = naturalScale.y;
+    return true;
+  }
+  if (Math.abs(Number(factor ?? 1)) > 1.001) return false;
+  mesh._seBaseScaleX = mesh.scale.x;
+  mesh._seBaseScaleY = mesh.scale.y;
+  return true;
+}
+
+function _naturalTokenMeshScale(token) {
+  const mesh = token?.mesh;
+  const tokenDocument = token?.document;
+  const texture = _meshTextureDimensions(mesh);
+  if (!texture) return null;
+  const render = _tokenRenderDimensions(token, tokenDocument);
+  if (!render) return null;
+  const textureScale = _tokenDocumentTextureScaleAxes(tokenDocument);
+  const signX = Math.sign(Number(mesh?.scale?.x)) || Math.sign(Number(tokenDocument?.texture?.scaleX)) || 1;
+  const signY = Math.sign(Number(mesh?.scale?.y)) || Math.sign(Number(tokenDocument?.texture?.scaleY)) || signX;
+  return {
+    x: (render.width * textureScale.x / texture.width) * signX,
+    y: (render.height * textureScale.y / texture.height) * signY
+  };
+}
+
+function _meshTextureDimensions(mesh) {
+  const texture = mesh?.texture;
+  const width = Number(texture?.orig?.width ?? texture?.frame?.width ?? texture?.width ?? texture?.baseTexture?.width ?? texture?.source?.width);
+  const height = Number(texture?.orig?.height ?? texture?.frame?.height ?? texture?.height ?? texture?.baseTexture?.height ?? texture?.source?.height);
+  return Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0 ? { width, height } : null;
+}
+
+function _tokenRenderDimensions(token, tokenDocument = token?.document) {
+  const gridSize = _canvasGridSize();
+  const width = Number(token?.w ?? tokenDocument?.width * gridSize);
+  const height = Number(token?.h ?? tokenDocument?.height * gridSize);
+  const fallbackWidth = Math.max(0.25, _finitePositionValue(tokenDocument?.width, 1)) * gridSize;
+  const fallbackHeight = Math.max(0.25, _finitePositionValue(tokenDocument?.height, 1)) * gridSize;
+  const renderWidth = Number.isFinite(width) && width > 0 ? width : fallbackWidth;
+  const renderHeight = Number.isFinite(height) && height > 0 ? height : fallbackHeight;
+  return Number.isFinite(renderWidth) && renderWidth > 0 && Number.isFinite(renderHeight) && renderHeight > 0
+    ? { width: renderWidth, height: renderHeight }
+    : null;
 }
 
 function _normalizedTokenScaleElevation(elevation, range) {
@@ -1128,7 +889,7 @@ function _highestTokenElevationState(tokenDocument, position = {}) {
 
 function _applyTokenScale(token, { forceScale = false } = {}) {
   if (!token?.mesh) return;
-  _restoreSystemTokenMotion(token);
+  restoreSystemTokenMotion(token);
   if (!_sceneElevationClientEnabled()) {
     _resetTokenVisuals(token);
     return;
@@ -1191,9 +952,18 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
   const tokenScaleMax = Number(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? 1.5);
   const tokenScalePerElevation = tokenScalePerElevationValue(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_PER_ELEVATION));
   const tokenTextureScale = _tokenDocumentTextureScale(doc);
-  const cacheKey = forceScale
-    ? null
-    : `${doc?.x ?? 0}|${doc?.y ?? 0}|${doc?.elevation ?? 0}|${doc?.width ?? 1}|${doc?.height ?? 1}|${renderer?._visualParamsVersion ?? 0}|${tokenScaleEnabled ? 1 : 0}|${tokenScalingMode}|${Number.isFinite(tokenScaleMax) ? tokenScaleMax : 1.5}|${tokenScalePerElevation}|${tokenTextureScale}|${systemScalingElevation ?? ""}|${(doc?.uuid ?? doc?.id) && _tokensWithPendingMovement.has(doc.uuid ?? doc.id) ? 1 : 0}|${doc?.movementAction ?? ""}`;
+  const cacheKey = buildTokenScaleCacheKey({
+    forceScale,
+    tokenDocument: doc,
+    visualParamsVersion: renderer?._visualParamsVersion ?? 0,
+    tokenScaleEnabled,
+    tokenScalingMode,
+    tokenScaleMax,
+    tokenScalePerElevation,
+    tokenTextureScale,
+    systemScalingElevation,
+    movementPending: (doc?.uuid ?? doc?.id) ? _tokensWithPendingMovement.has(doc.uuid ?? doc.id) : false
+  });
   if (cacheKey && m._seScaleCacheKey === cacheKey) {
     // Cheap path: re-apply cached parallax offset only. Mesh position is
     // overwritten by Foundry's drag/move animation between refreshes.
@@ -1210,20 +980,18 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
       // scale = base * factor. Do not use token.document.texture.scaleX here:
       // that value is a token texture setting, not the actual mesh scale, and
       // forcing it onto the mesh can inflate normal tokens several times over.
+      const factor = tokenScaleEnabled ? _tokenScaleFactor(token, tokenTextureScale, { entries: activeEntries, systemScalingElevation }) : 1;
       if (!tokenScaleEnabled) {
         if (m._seBaseScaleX !== undefined) m.scale.set(m._seBaseScaleX, m._seBaseScaleY);
         m._seLastFactor = 1;
       } else if (m._seBaseScaleX === undefined) {
-        m._seBaseScaleX = m.scale.x;
-        m._seBaseScaleY = m.scale.y;
+        if (!_captureTokenBaseScale(token, factor)) _queueTokenVisualRefresh();
       } else if (m._seLastFactor && Math.abs(m.scale.x - m._seBaseScaleX * m._seLastFactor) > 1e-4) {
         // If Foundry just rewrote the scale (e.g. token resize / mirror toggle),
         // re-cache by comparing to the previously applied product.
-        m._seBaseScaleX = m.scale.x;
-        m._seBaseScaleY = m.scale.y;
+        if (!_captureTokenBaseScale(token, m._seLastFactor)) _queueTokenVisualRefresh();
       }
-      if (tokenScaleEnabled) {
-        const factor = _tokenScaleFactor(token, tokenTextureScale, { entries: activeEntries, systemScalingElevation });
+      if (tokenScaleEnabled && m._seBaseScaleX !== undefined && m._seBaseScaleY !== undefined) {
         m._seLastFactor = factor;
         const sgnX = Math.sign(m._seBaseScaleX) || 1;
         const sgnY = Math.sign(m._seBaseScaleY) || 1;
@@ -1244,11 +1012,6 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
 }
 
 function _applyNegativeRegionTokenVisibilityFloor(token) {
-  // TEMPORARY: disable to test bisect — set window.SCENE_ELEVATION_DISABLE_NEG = true to disable.
-  if (globalThis.SCENE_ELEVATION_DISABLE_NEG) {
-    _clearNegativeRegionTokenVisibilityFloor(token);
-    return;
-  }
   const mesh = token?.mesh;
   if (!mesh || !token?.document || !canvas?.scene) return;
   const systemVisualState = getSystemTokenVisualState(token.document);
@@ -1327,122 +1090,11 @@ function _setWritableObjectProperty(object, key, value) {
 }
 
 function _applySystemTokenVisualState(token) {
-  const mesh = token?.mesh;
-  if (!mesh || mesh.destroyed) return;
-  const state = getSystemTokenVisualState(token.document);
-  if (state?.burrowing) _applySystemTokenBurrowVisual(token);
-  else _clearSystemTokenBurrowVisual(token);
-  if (state?.flying) {
-    _applySystemTokenFlyingMotion(token);
-    _queueSystemTokenVisualAnimation();
-  } else {
-    _restoreSystemTokenMotion(token);
-  }
+  applySystemTokenVisualState(token, { gridSize: _canvasGridSize(), queueAnimation: _queueSystemTokenVisualAnimation });
 }
 
 function _clearSystemTokenVisualState(token) {
-  _restoreSystemTokenMotion(token);
-  _clearSystemTokenBurrowVisual(token);
-}
-
-function _applySystemTokenBurrowVisual(token) {
-  const mesh = token?.mesh;
-  if (!mesh || mesh.destroyed) return;
-  // Capture baseline only when not already tinted by us. Without this guard a
-  // re-entry can capture our burrow tint as the new "base" and the next clear
-  // would leave the token permanently tinted.
-  if (mesh._seSystemBurrowBaseAlpha === undefined) mesh._seSystemBurrowBaseAlpha = mesh.alpha;
-  if (mesh._seSystemBurrowBaseTint === undefined && "tint" in mesh && mesh.tint !== SYSTEM_TOKEN_BURROW_TINT) {
-    mesh._seSystemBurrowBaseTint = mesh.tint;
-  }
-  const baseAlpha = Number(mesh._seSystemBurrowBaseAlpha ?? 1);
-  mesh.alpha = Math.clamp((Number.isFinite(baseAlpha) ? baseAlpha : 1) * SYSTEM_TOKEN_BURROW_ALPHA_FACTOR, 0.15, 1);
-  if ("tint" in mesh) mesh.tint = SYSTEM_TOKEN_BURROW_TINT;
-}
-
-function _clearSystemTokenBurrowVisual(token) {
-  const mesh = token?.mesh;
-  if (!mesh) return;
-  if (mesh._seSystemBurrowBaseAlpha !== undefined) mesh.alpha = mesh._seSystemBurrowBaseAlpha;
-  if (mesh._seSystemBurrowBaseTint !== undefined && "tint" in mesh) mesh.tint = mesh._seSystemBurrowBaseTint;
-  else if ("tint" in mesh && mesh.tint === SYSTEM_TOKEN_BURROW_TINT) mesh.tint = 0xFFFFFF;
-  delete mesh._seSystemBurrowBaseAlpha;
-  delete mesh._seSystemBurrowBaseTint;
-}
-
-function _applySystemTokenFlyingMotion(token, now = performance.now()) {
-  const mesh = token?.mesh;
-  if (!mesh || mesh.destroyed || !mesh.pivot || !mesh.scale) return;
-  // IMPORTANT: this routine may NOT mutate `mesh.position` or any parallax
-  // target position. The parallax pipeline owns position via
-  // `_seBasePositionX/Y` + `_seLastOffset`, and any in-place writes here race
-  // with its drift self-healing and corrupt the cached base — breaking the
-  // hit area and the rendered position. We use `mesh.pivot` (a local visual
-  // transform that does NOT change `position`) for the hover bobble. Token
-  // scale is intentionally left to the region scaling pipeline only; layering
-  // a second scale animation here made reload and movement timing too easy to
-  // compound into oversized tokens.
-  const seed = _systemTokenAnimationSeed(token);
-  const phase = (now / 1000) + seed;
-  const gridMotion = Math.max(SYSTEM_TOKEN_FLIGHT_MOTION_MIN_PIXELS, _canvasGridSize() * SYSTEM_TOKEN_FLIGHT_MOTION_GRID_FRACTION);
-  const offsetX = Math.sin(phase * Math.PI * 2 / 3.8) * gridMotion;
-  const offsetY = Math.cos(phase * Math.PI * 2 / 3.1) * gridMotion * 0.7;
-  // Pivot lives in pre-scale local space; the rendered visual shift equals
-  // -pivot * scale. We want a visual shift of (offsetX, offsetY), so
-  // pivot delta = (-offsetX/sx, -offsetY/sy).
-  const sx = mesh.scale.x || 1;
-  const sy = mesh.scale.y || 1;
-  if (mesh._seSystemMotionBasePivotX === undefined) {
-    mesh._seSystemMotionBasePivotX = mesh.pivot.x;
-    mesh._seSystemMotionBasePivotY = mesh.pivot.y;
-  }
-  mesh.pivot.set(
-    mesh._seSystemMotionBasePivotX - offsetX / sx,
-    mesh._seSystemMotionBasePivotY - offsetY / sy
-  );
-}
-
-function _resolveSystemTokenElevationScale(mesh) {
-  if (!mesh) return null;
-  const baseX = Number(mesh._seBaseScaleX);
-  const baseY = Number(mesh._seBaseScaleY);
-  if (!Number.isFinite(baseX) || !Number.isFinite(baseY)) return null;
-  const factor = Number.isFinite(mesh._seLastFactor) && mesh._seLastFactor !== 0 ? mesh._seLastFactor : 1;
-  const sgnX = Math.sign(baseX) || 1;
-  const sgnY = Math.sign(baseY) || 1;
-  return { x: Math.abs(baseX) * factor * sgnX, y: Math.abs(baseY) * factor * sgnY };
-}
-
-function _restoreSystemTokenMotion(token) {
-  const mesh = token?.mesh;
-  if (!mesh) return;
-  // New flight motion only touches pivot. The scale branch below is legacy
-  // cleanup for clients that still have the previous pulse bookkeeping live.
-  const elevBase = _resolveSystemTokenElevationScale(mesh);
-  if (elevBase) {
-    mesh.scale?.set?.(elevBase.x, elevBase.y);
-  } else if (Number.isFinite(mesh._seSystemMotionLastScaleMul) && mesh._seSystemMotionLastScaleMul !== 0) {
-    const inv = 1 / mesh._seSystemMotionLastScaleMul;
-    mesh.scale?.set?.(mesh.scale.x * inv, mesh.scale.y * inv);
-  }
-  if (mesh._seSystemMotionBasePivotX !== undefined && mesh._seSystemMotionBasePivotY !== undefined) {
-    mesh.pivot?.set?.(mesh._seSystemMotionBasePivotX, mesh._seSystemMotionBasePivotY);
-  }
-  // Legacy cleanup: earlier builds also stored a captured base scale and
-  // mutated parallax target positions. Drop any stale bookkeeping.
-  delete mesh._seSystemMotionBaseScaleX;
-  delete mesh._seSystemMotionBaseScaleY;
-  delete mesh._seSystemMotionBasePivotX;
-  delete mesh._seSystemMotionBasePivotY;
-  delete mesh._seSystemMotionLastScaleMul;
-  delete mesh._seSystemMotionTargets;
-}
-
-function _systemTokenAnimationSeed(token) {
-  const text = String(token?.document?.id ?? token?.id ?? "");
-  let hash = 0;
-  for (let index = 0; index < text.length; index += 1) hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
-  return Math.abs(hash % 1000) / 1000;
+  clearSystemTokenVisualState(token);
 }
 
 function _queueSystemTokenVisualAnimation() {
@@ -1453,18 +1105,7 @@ function _queueSystemTokenVisualAnimation() {
 function _animateSystemTokenVisuals(now) {
   _systemTokenVisualAnimationFrame = null;
   if (!_sceneElevationClientEnabled() || !canvas?.tokens) return;
-  let anyFlying = false;
-  for (const token of canvas.tokens.placeables) {
-    const state = getSystemTokenVisualState(token.document);
-    if (state?.burrowing) _applySystemTokenBurrowVisual(token);
-    else _clearSystemTokenBurrowVisual(token);
-    if (state?.flying) {
-      anyFlying = true;
-      _applySystemTokenFlyingMotion(token, now);
-    } else {
-      _restoreSystemTokenMotion(token);
-    }
-  }
+  const anyFlying = applyAnimatedSystemTokenVisuals(canvas.tokens.placeables, now, { gridSize: _canvasGridSize() });
   if (anyFlying) _queueSystemTokenVisualAnimation();
 }
 
@@ -1636,7 +1277,7 @@ function _applyDisplayObjectParallaxOffset(displayObject, offset) {
 }
 
 function _clearTokenParallaxCaches(token, { restorePositions = true } = {}) {
-  _restoreSystemTokenMotion(token);
+  restoreSystemTokenMotion(token);
   const targets = token?._seParallaxTargets ?? _tokenParallaxTargets(token);
   for (const target of targets) _clearDisplayObjectParallaxCache(target, { restorePosition: restorePositions });
   _clearTokenParallaxApplicationCache(token);
@@ -1969,7 +1610,7 @@ function _tokenOffsetToViewport(token, offset) {
       const shifted = reference.toGlobal(new PIXI.Point(offset.x, offset.y));
       const viewportOffset = _rendererOffsetToCss({ x: shifted.x - origin.x, y: shifted.y - origin.y });
       if (Number.isFinite(viewportOffset.x) && Number.isFinite(viewportOffset.y)) return viewportOffset;
-    } catch (err) {}
+    } catch (err) { debugWarn("tokenHud.viewportOffset", err, token?.document?.uuid ?? token?.id); }
   }
   const scale = canvas.stage?.scale ?? { x: 1, y: 1 };
   return _rendererOffsetToCss({
@@ -2127,7 +1768,7 @@ async function _syncTokenElevation(tokenDocument, position = {}, options = {}) {
   const current = Number(tokenDocument.elevation ?? 0);
   const state = _stabilizeMovementElevationState(rawState, options.movementStart, tokenDocument, position);
   const target = _adjustedTokenElevationTarget(tokenDocument, current, state, { rawState, position, movementStart: options.movementStart });
-  _dsLog("sync", tokenDocument, {
+  debugLog("sync", tokenDocument, {
     pos: { x: tokenDocument.x, y: tokenDocument.y },
     samplePos: position,
     current,
@@ -2143,7 +1784,7 @@ async function _syncTokenElevation(tokenDocument, position = {}, options = {}) {
   _syncingTokenElevation.add(uuid);
   try {
     const duration = _tokenElevationAnimationDuration();
-    _dsLog("sync:write", tokenDocument, { from: current, to: target, duration });
+    debugLog("sync:write", tokenDocument, { from: current, to: target, duration });
     await tokenDocument.update({ elevation: target }, { animate: duration > 0, animation: { duration } });
     _applyTokenScale(tokenDocument.object);
   } finally {
@@ -2172,9 +1813,7 @@ function _queueTokenElevationAfterMovement(tokenDocument, change = {}, options =
   if (pending) cancelAnimationFrame(pending.frame);
   _tokensWithPendingMovement.add(uuid);
   const finalPosition = _tokenMovementPosition(tokenDocument, change);
-  if (!globalThis.SCENE_ELEVATION_DISABLE_NEG) {
-    void _promoteNegativeTokenElevationForVisibleMovement(tokenDocument, finalPosition);
-  }
+  void _promoteNegativeTokenElevationForVisibleMovement(tokenDocument, finalPosition);
 
   // Only force destination visuals when elevation is not changing.  If the
   // move enters/leaves elevation, the configured elevation sync should control
@@ -2278,7 +1917,7 @@ function _stripMovementElevationChange(tokenDocument, change = {}) {
     changeKeys: Object.keys(change ?? {})
   };
   delete change.elevation;
-  _dsLog("movementElevationStripped", tokenDocument, stripped);
+  debugLog("movementElevationStripped", tokenDocument, stripped);
   return stripped;
 }
 
@@ -2314,7 +1953,7 @@ function _correctMovementElevationChange(tokenDocument, change = {}) {
     stabilizedFound: state.found,
     stabilizedElevation: state.elevation
   };
-  _dsLog("movementElevationCorrected", tokenDocument, correction);
+  debugLog("movementElevationCorrected", tokenDocument, correction);
   return correction;
 }
 
@@ -2324,7 +1963,7 @@ function _markTokenMovementStarting(tokenDocument) {
   const uuid = tokenDocument.uuid ?? tokenDocument.id;
   if (!uuid) return;
   const startState = _highestTokenElevationState(tokenDocument);
-  _dsLog("moveStart", tokenDocument, { pos: { x: tokenDocument.x, y: tokenDocument.y }, currentElev: tokenDocument.elevation, startStateFound: startState.found, startStateElev: startState.elevation });
+  debugLog("moveStart", tokenDocument, { pos: { x: tokenDocument.x, y: tokenDocument.y }, currentElev: tokenDocument.elevation, startStateFound: startState.found, startStateElev: startState.elevation });
   _tokenMovementStartStates.set(uuid, { state: startState });
   _tokensWithPendingMovement.add(uuid);
   requestAnimationFrame(() => {
@@ -2656,9 +2295,9 @@ Hooks.on("preUpdateToken", (document, change, options, userId) => {
   const json = (() => { try { return JSON.stringify(change); } catch { return "<unstringifiable>"; } })();
   const optJson = (() => { try { return JSON.stringify(Object.keys(options ?? {})); } catch { return ""; } })();
   if (hasElev && !hasMove) {
-    _dsLog("hook:preUpdateToken:ELEVATION-ONLY", document, { change: json, options: optJson, userId, syncing, currentElev: document.elevation, correctedElevation });
+    debugLog("hook:preUpdateToken:ELEVATION-ONLY", document, { change: json, options: optJson, userId, syncing, currentElev: document.elevation, correctedElevation });
   } else {
-    _dsLog("hook:preUpdateToken", document, { changeKeys: Object.keys(change ?? {}), changeJson: json, hasMove, hasElev, syncing, strippedMovementElevation, correctedElevation });
+    debugLog("hook:preUpdateToken", document, { changeKeys: Object.keys(change ?? {}), changeJson: json, hasMove, hasElev, syncing, strippedMovementElevation, correctedElevation });
   }
   if (!hasMove) return;
   _markTokenMovementStarting(document);
@@ -2673,7 +2312,7 @@ Hooks.on("updateToken", (document, change, options) => {
   const hasTrackedMovementDelta = uuid && _tokenUpdateMovementDeltas.has(uuid);
   const hasMove = hasTrackedMovementDelta ? _tokenUpdateMovementDeltas.get(uuid) : (options?.[TOKEN_MOVEMENT_DELTA_OPTION] ?? _hasTokenMovementChange(change));
   if (hasTrackedMovementDelta) _tokenUpdateMovementDeltas.delete(uuid);
-  _dsLog("hook:updateToken", document, { changeKeys: Object.keys(change ?? {}), changeJson: json, hasMove, optionsKeys: Object.keys(options ?? {}) });
+  debugLog("hook:updateToken", document, { changeKeys: Object.keys(change ?? {}), changeJson: json, hasMove, optionsKeys: Object.keys(options ?? {}) });
   if (document.parent !== canvas?.scene) return;
   if (hasMove) {
     if (_dragElevatedGridToken?.document === document) {
@@ -2685,7 +2324,7 @@ Hooks.on("updateToken", (document, change, options) => {
     return;
   }
   if (foundry.utils.hasProperty(change, "elevation")) {
-    _dsLog("elevationChanged", document, { newElevation: change.elevation, syncing: _syncingTokenElevation.has(document.uuid ?? document.id) });
+    debugLog("elevationChanged", document, { newElevation: change.elevation, syncing: _syncingTokenElevation.has(document.uuid ?? document.id) });
     _queueRegionOverheadRefresh();
   }
   _applyTokenScale(document.object);

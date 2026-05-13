@@ -420,6 +420,8 @@ export function sceneGeometry(scene = canvas?.scene) {
 }
 
 const _transientSceneSettings = new WeakMap();
+let _sceneElevationSettingsCache = new WeakMap();
+let _sceneElevationSettingsCacheVersion = 0;
 const MERGE_SCENE_SETTING_OPTIONS = Object.freeze({
   inplace: false,
   insertKeys: true,
@@ -457,16 +459,41 @@ export function elevationDefaultSettings(scene = canvas?.scene) {
 }
 
 export function getSceneElevationSettings(scene = canvas?.scene) {
+  if (scene) {
+    const stored = scene?.getFlag?.(MODULE_ID, SCENE_SETTINGS_FLAG) ?? foundry.utils.getProperty(scene ?? {}, `flags.${MODULE_ID}.${SCENE_SETTINGS_FLAG}`) ?? {};
+    const transient = _transientSceneSettings.get(scene) ?? null;
+    const cached = _sceneElevationSettingsCache.get(scene);
+    if (cached
+      && cached.version === _sceneElevationSettingsCacheVersion
+      && cached.stored === stored
+      && cached.transient === transient
+    ) return cached.settings;
+    const settings = _buildSceneElevationSettings(scene, stored, transient ?? {});
+    _sceneElevationSettingsCache.set(scene, { version: _sceneElevationSettingsCacheVersion, stored, transient, settings });
+    return settings;
+  }
+  return _buildSceneElevationSettings(scene);
+}
+
+function _buildSceneElevationSettings(scene = canvas?.scene, stored = undefined, transient = undefined) {
   const defaults = defaultSceneElevationSettings(scene);
-  const stored = scene?.getFlag?.(MODULE_ID, SCENE_SETTINGS_FLAG) ?? foundry.utils.getProperty(scene ?? {}, `flags.${MODULE_ID}.${SCENE_SETTINGS_FLAG}`) ?? {};
-  const storedSettings = foundry.utils.deepClone(stored);
+  const storedSettings = foundry.utils.deepClone(stored ?? scene?.getFlag?.(MODULE_ID, SCENE_SETTINGS_FLAG) ?? foundry.utils.getProperty(scene ?? {}, `flags.${MODULE_ID}.${SCENE_SETTINGS_FLAG}`) ?? {});
   if (!_hasOwn(storedSettings, SCENE_SETTING_KEYS.PRESET) && ELEVATION_PRESET_SETTING_KEYS.some(key => _hasOwn(storedSettings, key))) {
     storedSettings[SCENE_SETTING_KEYS.PRESET] = ELEVATION_PRESETS.CUSTOM;
   }
-  const transient = scene ? (_transientSceneSettings.get(scene) ?? {}) : {};
+  const transientSettings = transient ?? (scene ? (_transientSceneSettings.get(scene) ?? {}) : {});
   const sceneSettings = foundry.utils.mergeObject(foundry.utils.deepClone(defaults), storedSettings, MERGE_KNOWN_SCENE_SETTING_OPTIONS);
-  const merged = foundry.utils.mergeObject(sceneSettings, foundry.utils.deepClone(transient), MERGE_KNOWN_SCENE_SETTING_OPTIONS);
+  const merged = foundry.utils.mergeObject(sceneSettings, foundry.utils.deepClone(transientSettings), MERGE_KNOWN_SCENE_SETTING_OPTIONS);
   return applyElevationPreset(merged, scene);
+}
+
+export function invalidateSceneElevationSettingsCache(scene = null) {
+  if (scene) {
+    _sceneElevationSettingsCache.delete(scene);
+    return;
+  }
+  _sceneElevationSettingsCache = new WeakMap();
+  _sceneElevationSettingsCacheVersion += 1;
 }
 
 export function getSceneElevationSetting(key, scene = canvas?.scene) {
@@ -561,6 +588,7 @@ export async function setSceneElevationSettings(scene, settings) {
   if (!scene) return null;
   const next = foundry.utils.mergeObject(getSceneElevationSettings(scene), foundry.utils.deepClone(settings), MERGE_KNOWN_SCENE_SETTING_OPTIONS);
   await scene.setFlag(MODULE_ID, SCENE_SETTINGS_FLAG, next);
+  invalidateSceneElevationSettingsCache(scene);
   return next;
 }
 
@@ -568,10 +596,14 @@ export function setTransientSceneElevationSetting(scene, key, value) {
   if (!scene) return;
   const current = _transientSceneSettings.get(scene) ?? {};
   _transientSceneSettings.set(scene, foundry.utils.mergeObject(current, { [key]: value }, { inplace: false, insertKeys: true, overwrite: true, recursive: true }));
+  invalidateSceneElevationSettingsCache(scene);
 }
 
 export function clearTransientSceneElevationSettings(scene) {
-  if (scene) _transientSceneSettings.delete(scene);
+  if (scene) {
+    _transientSceneSettings.delete(scene);
+    invalidateSceneElevationSettingsCache(scene);
+  }
 }
 
 function _worldSetting(key, fallback) {
