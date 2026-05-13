@@ -475,6 +475,14 @@ export function getSceneElevationSettings(scene = canvas?.scene) {
   return _buildSceneElevationSettings(scene);
 }
 
+export function getSceneElevationSettingsSnapshot(scene = canvas?.scene) {
+  return getSceneElevationSettings(scene);
+}
+
+export function sceneElevationSettingsCacheVersion() {
+  return _sceneElevationSettingsCacheVersion;
+}
+
 function _buildSceneElevationSettings(scene = canvas?.scene, stored = undefined, transient = undefined) {
   const defaults = defaultSceneElevationSettings(scene);
   const storedSettings = foundry.utils.deepClone(stored ?? scene?.getFlag?.(MODULE_ID, SCENE_SETTINGS_FLAG) ?? foundry.utils.getProperty(scene ?? {}, `flags.${MODULE_ID}.${SCENE_SETTINGS_FLAG}`) ?? {});

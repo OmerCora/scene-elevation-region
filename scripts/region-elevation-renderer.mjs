@@ -1,6 +1,21 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, ELEVATED_GRID_MODES, elevatedGridModeValue, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey, elevationScaleValue, edgeStretchPercentValue } from "./config.mjs";
+import { MODULE_ID, SCENE_SETTING_KEYS, PARALLAX_STRENGTHS, PARALLAX_LIFT_LIMITS, PARALLAX_DISTANCE_FACTORS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, OVERHEAD_MODES, OVERLAY_SCALE_STRENGTHS, DEPTH_SCALES, DEPTH_SCALE_REFERENCE, REGION_BEHAVIOR_TYPE, SHADOW_STRENGTH_LIMITS, SHADOW_LENGTHS, PARALLAX_HEIGHT_CONTRASTS, ELEVATED_GRID_MODES, elevationPresetValues, sceneGeometry, getSceneElevationSetting, getSceneElevationSettings, parallaxHeightContrastValue, shadowLengthValue, shadowLengthKey, elevationScaleValue, edgeStretchPercentValue } from "./config.mjs";
 import { debugWarn } from "./debug.mjs";
 import { GeneratedTextureCache, validTexture as _validTexture } from "./generated-textures.mjs";
+import {
+  ELEVATED_GRID_COLOR,
+  ELEVATED_GRID_SORT,
+  ELEVATED_GRID_Z_INDEX,
+  ELEVATED_GUIDE_COLOR,
+  applyGridLineStyle as _applyGridLineStyle,
+  canvasDisplayLineWidth as _canvasDisplayLineWidth,
+  elevatedGridMode as _elevatedGridMode,
+  sceneGridAlpha as _sceneGridAlpha,
+  sceneGridIsSquareLike as _sceneGridIsSquareLike,
+  sceneGridLineMode as _sceneGridLineMode,
+  sceneGridSize as _sceneGridSize,
+  sceneGridStyle as _sceneGridStyle,
+  showElevatedGridEnabled as _showElevatedGridEnabled
+} from "./grid-renderer.mjs";
 import { pathsBounds as _pathsBounds, pointInPolygon as _pointInPolygon, regionPaths as _regionPaths } from "./region-geometry.mjs";
 
 /**
@@ -140,12 +155,6 @@ const FULL_TEXTURE_MELD_SOFT_ALPHA = 0.62;
 const FULL_TEXTURE_MELD_CONTACT_ALPHA = 0.5;
 const OVERHEAD_FADE_ALPHA = 0.5;
 const REGION_CONTAINER_Z_INDEX = 10_000;
-const ELEVATED_GRID_Z_INDEX = REGION_CONTAINER_Z_INDEX + 2;
-const ELEVATED_GRID_SORT = 1_000_000;
-const ELEVATED_GRID_COLOR = 0x000000;
-const ELEVATED_GUIDE_COLOR = 0x00a2ff;
-const ELEVATED_GRID_MIN_ALPHA = 0.28;
-const ELEVATED_GRID_MAX_ALPHA = 0.7;
 const OVERHEAD_SORT_EPSILON = 0.001;
 const OVERHEAD_SUPPORT_EPSILON = 0.001;
 // Compensation factor applied to the Elevation Scale setting at render time.
@@ -792,135 +801,6 @@ function _makeBlurFilter(strength) {
   const filter = new PIXI.BlurFilter(strength, 4);
   filter.padding = Math.ceil(strength * 3);
   return filter;
-}
-
-function _elevatedGridMode() {
-  try { return elevatedGridModeValue(game.settings.get(MODULE_ID, SETTINGS.SHOW_ELEVATED_GRID)); }
-  catch (err) { return ELEVATED_GRID_MODES.OVERRIDE_SCENE_GRID; }
-}
-
-function _showElevatedGridEnabled(mode = _elevatedGridMode()) {
-  return mode !== ELEVATED_GRID_MODES.OFF;
-}
-
-function _canvasDisplayLineWidth(pixels = 1) {
-  const scale = Number(canvas.stage?.scale?.x ?? 1) || 1;
-  return Math.max(0.35, pixels / Math.abs(scale));
-}
-
-function _sceneGridSize() {
-  const size = Number(canvas.grid?.size ?? canvas.scene?.grid?.size ?? 100);
-  return Number.isFinite(size) && size > 0 ? size : 100;
-}
-
-function _sceneGridAlpha({ clamp = true } = {}) {
-  const raw = Number(canvas.scene?.grid?.alpha ?? canvas.scene?.gridAlpha ?? canvas.grid?.alpha ?? 0.45);
-  const alpha = Number.isFinite(raw) ? raw : 0.45;
-  return clamp ? Math.clamp(alpha, ELEVATED_GRID_MIN_ALPHA, ELEVATED_GRID_MAX_ALPHA) : Math.clamp(alpha, 0, 1);
-}
-
-function _sceneGridColor() {
-  return _parseColor(canvas.scene?.grid?.color ?? canvas.scene?.gridColor ?? ELEVATED_GRID_COLOR, ELEVATED_GRID_COLOR);
-}
-
-function _sceneGridThickness() {
-  const raw = Number(canvas.scene?.grid?.thickness ?? canvas.scene?.gridWidth ?? 1);
-  return Number.isFinite(raw) && raw > 0 ? raw : 1;
-}
-
-function _sceneGridOffset(gridSize = _sceneGridSize()) {
-  const grid = canvas.scene?.grid ?? {};
-  const x = Number(grid.offsetX ?? grid.offset?.x ?? canvas.scene?.gridOffsetX ?? 0);
-  const y = Number(grid.offsetY ?? grid.offset?.y ?? canvas.scene?.gridOffsetY ?? 0);
-  return {
-    x: Number.isFinite(x) ? x % gridSize : 0,
-    y: Number.isFinite(y) ? y % gridSize : 0
-  };
-}
-
-function _sceneGridLineMode() {
-  const sceneGrid = canvas.scene?.grid ?? {};
-  const canvasGrid = canvas.grid ?? {};
-  const candidates = [
-    sceneGrid.style,
-    sceneGrid.lineStyle,
-    sceneGrid.gridStyle,
-    canvas.scene?.gridStyle,
-    canvas.scene?.gridLineStyle,
-    canvasGrid.style,
-    canvasGrid.lineStyle,
-    canvasGrid.gridStyle,
-    canvasGrid.options?.style,
-    canvasGrid.options?.lineStyle,
-    canvasGrid.options?.gridStyle
-  ];
-  for (const candidate of candidates) {
-    const mode = _gridLineModeFromValue(candidate);
-    if (mode) return mode;
-  }
-  return "solid";
-}
-
-function _gridLineModeFromValue(value) {
-  if (value === undefined || value === null || value === "") return null;
-  const constants = CONST.GRID_STYLES ?? {};
-  for (const [name, constantValue] of Object.entries(constants)) {
-    if (value === constantValue) return _gridLineModeFromText(name);
-  }
-  if (typeof value === "object") return _gridLineModeFromValue(value.type ?? value.name ?? value.id ?? value.value);
-  const numeric = Number(value);
-  if (Number.isFinite(numeric)) {
-    if (numeric === 0) return "solid";
-    if (numeric === 1) return "dashed";
-    if (numeric === 2 || numeric === 3) return "dotted";
-  }
-  return _gridLineModeFromText(value);
-}
-
-function _gridLineModeFromText(value) {
-  const text = String(value ?? "").toLowerCase().replace(/[\s_-]/g, "");
-  if (!text) return null;
-  if (text.includes("none") || text.includes("hidden")) return "none";
-  if (text.includes("dash")) return "dashed";
-  if (text.includes("dot") || text.includes("point")) return "dotted";
-  if (text.includes("solid") || text.includes("line")) return "solid";
-  return null;
-}
-
-function _sceneGridType() {
-  return canvas.scene?.grid?.type ?? canvas.scene?.gridType ?? CONST.GRID_TYPES?.SQUARE ?? 1;
-}
-
-function _sceneGridIsSquareLike() {
-  const type = _sceneGridType();
-  const square = CONST.GRID_TYPES?.SQUARE ?? 1;
-  if (type === square || type === undefined || type === null || type === "") return true;
-  return String(type).toLowerCase().includes("square");
-}
-
-function _parseColor(value, fallback) {
-  if (Number.isFinite(Number(value))) return Number(value);
-  const text = String(value ?? "").trim();
-  const match = text.match(/^#?([0-9a-f]{6})$/i);
-  return match ? Number.parseInt(match[1], 16) : fallback;
-}
-
-function _sceneGridStyle({ elevated = false } = {}) {
-  return {
-    gridSize: _sceneGridSize(),
-    offset: _sceneGridOffset(),
-    color: elevated ? ELEVATED_GRID_COLOR : _sceneGridColor(),
-    alpha: elevated ? _sceneGridAlpha() : _sceneGridAlpha({ clamp: false }),
-    lineWidth: _canvasDisplayLineWidth(_sceneGridThickness()),
-    lineMode: _sceneGridLineMode()
-  };
-}
-
-function _applyGridLineStyle(graphics, style) {
-  const cap = style?.lineMode === "dotted"
-    ? PIXI.LINE_CAP?.ROUND ?? undefined
-    : PIXI.LINE_CAP?.BUTT ?? undefined;
-  graphics.lineStyle(style.lineWidth, style.color, style.alpha, 0.5, false, PIXI.LINE_JOIN?.MITER ?? undefined, cap);
 }
 
 function _offsetEffectivelyZero(offset) {

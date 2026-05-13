@@ -1,3 +1,5 @@
+import { getSystemTokenScalingElevation } from "./systems/index.mjs";
+
 export function tokenDocumentTextureScale(tokenDocument) {
   const texture = tokenDocument?.texture ?? {};
   const scaleX = Number(texture.scaleX ?? texture.scale ?? 1);
@@ -5,6 +7,11 @@ export function tokenDocumentTextureScale(tokenDocument) {
   const x = Number.isFinite(scaleX) ? Math.abs(scaleX) : 1;
   const y = Number.isFinite(scaleY) ? Math.abs(scaleY) : x;
   return Math.max(0.001, x || 1, y || 1);
+}
+
+export function systemTokenScalingElevation(tokenDocument) {
+  const elevation = Number(getSystemTokenScalingElevation(tokenDocument));
+  return Number.isFinite(elevation) && Math.abs(elevation) > 0.001 ? elevation : null;
 }
 
 export function captureTokenBaseScale(token, factor = 1, { gridSize = 100 } = {}) {
