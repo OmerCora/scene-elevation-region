@@ -646,7 +646,3 @@ function _defaultSunEdgePoint(scene) {
   const geo = sceneGeometry(scene);
   return { x: geo.x + geo.width / 2, y: geo.y };
 }
-
-export function logger(...args) {
-  console.log(`[${MODULE_ID}]`, ...args);
-}

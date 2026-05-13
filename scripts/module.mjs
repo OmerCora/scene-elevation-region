@@ -1,8 +1,11 @@
-import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, ELEVATION_PRESETS, ELEVATION_PRESET_SETTING_KEYS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, BLEND_MODES, TOKEN_ELEVATION_MODES, TOKEN_SCALING_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, EDGE_STRETCH_LIMITS, REGION_BEHAVIOR_TYPE, ELEVATED_GRID_MODES, edgeStretchPercentValue, elevatedGridModeValue, elevationPresetValues, getSceneElevationClientEnabled, getSceneElevationSetting, invalidateSceneElevationSettingsCache, parallaxHeightContrastKey, setSceneElevationClientEnabled, shadowLengthKey, tokenScalePerElevationValue, tokenScalingModeValue } from "./config.mjs";
+import { MODULE_ID, SETTINGS, SCENE_SETTINGS_FLAG, SCENE_SETTING_KEYS, ELEVATION_DEFAULT_SETTINGS, PARALLAX_MODES, PERSPECTIVE_POINTS, SHADOW_MODES, TOKEN_ELEVATION_MODES, TOKEN_SCALING_MODES, DEPTH_SCALES, ELEVATION_SCALE_LIMITS, REGION_BEHAVIOR_TYPE, ELEVATED_GRID_MODES, elevatedGridModeValue, getSceneElevationClientEnabled, getSceneElevationSetting, invalidateSceneElevationSettingsCache, setSceneElevationClientEnabled, tokenScalePerElevationValue, tokenScalingModeValue } from "./config.mjs";
 import { ElevationAuthoringLayer, registerElevationControls } from "./elevation-controls.mjs";
 import { ElevationRegionBehavior, registerRegionHooks } from "./region-behavior.mjs";
+import { enhanceRegionBehaviorConfigForm } from "./region-behavior-form.mjs";
+import { migrateSceneElevationSettings } from "./settings-migrations.mjs";
 import { registerModuleSettings } from "./settings-registration.mjs";
 import { debugLog, debugWarn, setDebugLogging } from "./debug.mjs";
+import { captureTokenBaseScale, tokenDocumentTextureScale } from "./token-scale.mjs";
 import { buildTokenScaleCacheKey } from "./token-scale-cache-key.mjs";
 import { applyAnimatedSystemTokenVisuals, applySystemTokenVisualState, clearSystemTokenVisualState, restoreSystemTokenMotion } from "./system-token-visuals.mjs";
 import {
@@ -33,21 +36,6 @@ const TOKEN_PARALLAX_HIT_AREA_EPSILON = 0.5;
 const ZERO_PARALLAX_OFFSET = Object.freeze({ x: 0, y: 0 });
 const TOKEN_HUD_POSITION_PATCHED = "_sceneElevationRegionHudPositionPatched";
 const TOKEN_RULER_GUIDE_PATCHED = "_sceneElevationRegionRulerGuidePatched";
-const MOUSE_DRIFT_WORLD_DEFAULTS_VERSION = "mouse-drift-defaults-v2";
-const REGION_PRESET_FIELD_MAP = Object.freeze({
-  [SCENE_SETTING_KEYS.PARALLAX]: "parallaxStrengthOverride",
-  [SCENE_SETTING_KEYS.PARALLAX_HEIGHT_CONTRAST]: "parallaxHeightContrastOverride",
-  [SCENE_SETTING_KEYS.PARALLAX_MODE]: "parallaxModeOverride",
-  [SCENE_SETTING_KEYS.PERSPECTIVE_POINT]: "perspectivePointOverride",
-  [SCENE_SETTING_KEYS.BLEND_MODE]: "blendModeOverride",
-  [SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT]: "edgeStretchPercentOverride",
-  [SCENE_SETTING_KEYS.OVERLAY_SCALE]: "overlayScaleOverride",
-  [SCENE_SETTING_KEYS.SHADOW_MODE]: "shadowModeOverride",
-  [SCENE_SETTING_KEYS.SHADOW_LENGTH]: "shadowLengthOverride",
-  [SCENE_SETTING_KEYS.DEPTH_SCALE]: "depthScaleOverride"
-});
-const REGION_PRESET_CONTROL_FIELDS = new Set(Object.values(REGION_PRESET_FIELD_MAP));
-const REGION_SCENE_SETTING_RESET_FIELDS = new Set([...REGION_PRESET_CONTROL_FIELDS, "elevationScaleOverride"]);
 const _syncingTokenElevation = new Set();
 const _pendingTokenElevationUpdates = new Map();
 const _tokensWithPendingMovement = new Set();
@@ -219,9 +207,7 @@ Hooks.once("setup", () => {
 Hooks.once("ready", async () => {
   _patchTokenHudPositioning();
   _patchTokenRulerParallaxGuide();
-  await _migrateParallaxHeightContrastSetting();
-  await _migrateShadowLengthSetting();
-  await _migrateMouseDriftWorldDefaults();
+  await migrateSceneElevationSettings();
 });
 
 /* -------------------------------------------- */
@@ -286,179 +272,8 @@ Hooks.on("updateScene", (scene, change) => {
   _queueElevatedGridRefresh();
 });
 
-Hooks.on("renderRegionConfig", _insertRegionBehaviorDivider);
-Hooks.on("renderRegionBehaviorConfig", _insertRegionBehaviorDivider);
-
-function _insertRegionBehaviorDivider(app, html) {
-  const root = _renderedHtmlElement(html) ?? app?.element;
-  if (!root?.querySelectorAll) return;
-  _insertRegionDividerAfterField(root, "underOverheadMode", `${MODULE_ID}-region-settings-divider`);
-  _insertRegionDividerAfterField(root, "depthScaleOverride", `${MODULE_ID}-region-settings-preset-end-divider`);
-  _enhanceRegionEdgeStretchControl(root);
-  _syncRegionEdgeStretchVisibility(root);
-  _wireRegionPresetControls(root);
-  app?.setPosition?.({ height: "auto" });
-}
-
-function _insertRegionDividerAfterField(root, fieldName, className) {
-  const fields = root.querySelectorAll(`[name="system.${fieldName}"], [name$=".${fieldName}"]`);
-  for (const field of fields) {
-    const formGroup = field.closest?.(".form-group") ?? field.parentElement;
-    if (!formGroup || formGroup.nextElementSibling?.classList?.contains(className)) continue;
-    const divider = document.createElement("div");
-    divider.className = className;
-    divider.setAttribute("aria-hidden", "true");
-    formGroup.after(divider);
-  }
-}
-
-function _renderedHtmlElement(html) {
-  if (html instanceof HTMLElement) return html;
-  if (html?.[0] instanceof HTMLElement) return html[0];
-  return null;
-}
-
-function _wireRegionPresetControls(root) {
-  const presetField = _regionBehaviorField(root, "presetOverride");
-  if (!presetField) return;
-  const form = presetField.closest?.("form") ?? root;
-  if (!form || form.dataset.sceneElevationPresetWired) return;
-  form.dataset.sceneElevationPresetWired = "true";
-  form.addEventListener("change", event => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) return;
-    const fieldName = _regionBehaviorFieldName(target.name);
-    if (fieldName === "presetOverride") {
-      if (!target.value) {
-        for (const overrideField of REGION_SCENE_SETTING_RESET_FIELDS) {
-          const el = _regionBehaviorField(root, overrideField);
-          if (el) el.value = "";
-        }
-      }
-      _applyRegionPresetToForm(root, target.value);
-      _syncRegionEdgeStretchControl(root);
-      _syncRegionEdgeStretchVisibility(root);
-      return;
-    }
-    if (REGION_PRESET_CONTROL_FIELDS.has(fieldName)) {
-      const currentPresetField = _regionBehaviorField(root, "presetOverride");
-      if (currentPresetField && currentPresetField.value !== ELEVATION_PRESETS.CUSTOM) currentPresetField.value = ELEVATION_PRESETS.CUSTOM;
-    }
-    _syncRegionEdgeStretchVisibility(root);
-  });
-}
-
-function _applyRegionPresetToForm(root, presetKey) {
-  const values = elevationPresetValues(presetKey, canvas?.scene);
-  if (!values) return;
-  for (const [settingKey, fieldName] of Object.entries(REGION_PRESET_FIELD_MAP)) {
-    const field = _regionBehaviorField(root, fieldName);
-    if (!field || values[settingKey] === undefined) continue;
-    field.value = values[settingKey];
-  }
-  const edgeStretchField = _regionBehaviorField(root, "edgeStretchPercentOverride");
-  if (edgeStretchField && values[SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT] === undefined) edgeStretchField.value = String(EDGE_STRETCH_LIMITS.DEFAULT);
-  _syncRegionEdgeStretchControl(root);
-  _syncRegionEdgeStretchVisibility(root);
-}
-
-function _enhanceRegionEdgeStretchControl(root) {
-  const field = _regionBehaviorField(root, "edgeStretchPercentOverride");
-  if (!(field instanceof HTMLInputElement)) return;
-  const formGroup = field.closest?.(".form-group") ?? field.parentElement;
-  if (!formGroup) return;
-  formGroup.dataset.sceneElevationEdgeStretchPercent = "true";
-  if (formGroup.dataset.sceneElevationEdgeStretchEnhanced) {
-    _syncRegionEdgeStretchControl(root);
-    return;
-  }
-  formGroup.dataset.sceneElevationEdgeStretchEnhanced = "true";
-  field.type = "hidden";
-  const value = _regionEdgeStretchDisplayValue(root, field);
-  const control = document.createElement("div");
-  control.style.display = "grid";
-  control.style.gridTemplateColumns = "1fr 4ch";
-  control.style.gap = "8px";
-  control.style.alignItems = "center";
-  const range = document.createElement("input");
-  range.type = "range";
-  range.min = String(EDGE_STRETCH_LIMITS.MIN);
-  range.max = String(EDGE_STRETCH_LIMITS.MAX);
-  range.step = String(EDGE_STRETCH_LIMITS.STEP);
-  range.value = String(value);
-  range.dataset.sceneElevationEdgeStretchRange = "true";
-  const output = document.createElement("output");
-  output.dataset.sceneElevationEdgeStretchOutput = "true";
-  output.value = String(value);
-  output.textContent = String(value);
-  control.append(range, output);
-  field.after(control);
-  range.addEventListener("input", () => {
-    const next = String(edgeStretchPercentValue(range.value));
-    range.value = next;
-    output.value = next;
-    output.textContent = next;
-    field.value = next;
-  });
-  range.addEventListener("change", () => {
-    field.value = String(edgeStretchPercentValue(range.value));
-    field.dispatchEvent(new Event("change", { bubbles: true }));
-  });
-}
-
-function _syncRegionEdgeStretchControl(root) {
-  const field = _regionBehaviorField(root, "edgeStretchPercentOverride");
-  if (!(field instanceof HTMLInputElement)) return;
-  const formGroup = field.closest?.(".form-group") ?? field.parentElement;
-  const range = formGroup?.querySelector?.("[data-scene-elevation-edge-stretch-range]");
-  const output = formGroup?.querySelector?.("[data-scene-elevation-edge-stretch-output]");
-  if (!(range instanceof HTMLInputElement)) return;
-  const value = String(_regionEdgeStretchDisplayValue(root, field));
-  range.value = value;
-  if (output instanceof HTMLOutputElement) {
-    output.value = value;
-    output.textContent = value;
-  }
-}
-
-function _syncRegionEdgeStretchVisibility(root) {
-  const field = _regionBehaviorField(root, "edgeStretchPercentOverride");
-  const formGroup = field?.closest?.(".form-group") ?? field?.parentElement;
-  if (!formGroup) return;
-  formGroup.hidden = _regionEffectiveBlendMode(root) !== BLEND_MODES.EDGE_STRETCH;
-}
-
-function _regionEffectiveBlendMode(root) {
-  const presetField = _regionBehaviorField(root, "presetOverride");
-  const presetValues = elevationPresetValues(presetField?.value, canvas?.scene);
-  if (presetValues?.[SCENE_SETTING_KEYS.BLEND_MODE]) return presetValues[SCENE_SETTING_KEYS.BLEND_MODE];
-  const blendField = _regionBehaviorField(root, "blendModeOverride");
-  const blendOverride = String(blendField?.value ?? "");
-  return blendOverride || String(getSceneElevationSetting(SCENE_SETTING_KEYS.BLEND_MODE) ?? "");
-}
-
-function _regionEdgeStretchDisplayValue(root, field) {
-  const override = _regionEdgeStretchOverrideValue(field?.value);
-  if (override !== null) return override;
-  const presetField = _regionBehaviorField(root, "presetOverride");
-  const presetValue = elevationPresetValues(presetField?.value, canvas?.scene)?.[SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT];
-  if (presetValue !== undefined) return edgeStretchPercentValue(presetValue);
-  return edgeStretchPercentValue(getSceneElevationSetting(SCENE_SETTING_KEYS.EDGE_STRETCH_PERCENT));
-}
-
-function _regionEdgeStretchOverrideValue(value) {
-  const text = String(value ?? "").trim();
-  return text ? edgeStretchPercentValue(text) : null;
-}
-
-function _regionBehaviorField(root, fieldName) {
-  return root.querySelector(`[name="system.${fieldName}"], [name$=".${fieldName}"]`);
-}
-
-function _regionBehaviorFieldName(name) {
-  const parts = String(name ?? "").split(".");
-  return parts[parts.length - 1] ?? "";
-}
+Hooks.on("renderRegionConfig", enhanceRegionBehaviorConfigForm);
+Hooks.on("renderRegionBehaviorConfig", enhanceRegionBehaviorConfigForm);
 
 /* -------------------------------------------- */
 /*  Token elevation scaling                      */
@@ -511,76 +326,6 @@ function _tokenScaleElevationState(token, entries, systemScalingElevation = null
 function _systemTokenScalingElevation(tokenDocument) {
   const elevation = Number(getSystemTokenScalingElevation(tokenDocument));
   return Number.isFinite(elevation) && Math.abs(elevation) > 0.001 ? elevation : null;
-}
-
-function _tokenDocumentTextureScale(tokenDocument) {
-  const texture = tokenDocument?.texture ?? {};
-  const scaleX = Number(texture.scaleX ?? texture.scale ?? 1);
-  const scaleY = Number(texture.scaleY ?? texture.scale ?? scaleX);
-  const x = Number.isFinite(scaleX) ? Math.abs(scaleX) : 1;
-  const y = Number.isFinite(scaleY) ? Math.abs(scaleY) : x;
-  return Math.max(0.001, x || 1, y || 1);
-}
-
-function _tokenDocumentTextureScaleAxes(tokenDocument) {
-  const texture = tokenDocument?.texture ?? {};
-  const scaleX = Number(texture.scaleX ?? texture.scale ?? 1);
-  const scaleY = Number(texture.scaleY ?? texture.scale ?? scaleX);
-  const normalizedX = Number.isFinite(scaleX) ? Math.max(0.001, Math.abs(scaleX) || 1) : 1;
-  const normalizedY = Number.isFinite(scaleY) ? Math.max(0.001, Math.abs(scaleY) || 1) : normalizedX;
-  return { x: normalizedX, y: normalizedY };
-}
-
-function _captureTokenBaseScale(token, factor = 1) {
-  const mesh = token?.mesh;
-  const tokenDocument = token?.document;
-  if (!mesh?.scale || !tokenDocument) return;
-  const naturalScale = _naturalTokenMeshScale(token);
-  if (naturalScale) {
-    mesh._seBaseScaleX = naturalScale.x;
-    mesh._seBaseScaleY = naturalScale.y;
-    return true;
-  }
-  if (Math.abs(Number(factor ?? 1)) > 1.001) return false;
-  mesh._seBaseScaleX = mesh.scale.x;
-  mesh._seBaseScaleY = mesh.scale.y;
-  return true;
-}
-
-function _naturalTokenMeshScale(token) {
-  const mesh = token?.mesh;
-  const tokenDocument = token?.document;
-  const texture = _meshTextureDimensions(mesh);
-  if (!texture) return null;
-  const render = _tokenRenderDimensions(token, tokenDocument);
-  if (!render) return null;
-  const textureScale = _tokenDocumentTextureScaleAxes(tokenDocument);
-  const signX = Math.sign(Number(mesh?.scale?.x)) || Math.sign(Number(tokenDocument?.texture?.scaleX)) || 1;
-  const signY = Math.sign(Number(mesh?.scale?.y)) || Math.sign(Number(tokenDocument?.texture?.scaleY)) || signX;
-  return {
-    x: (render.width * textureScale.x / texture.width) * signX,
-    y: (render.height * textureScale.y / texture.height) * signY
-  };
-}
-
-function _meshTextureDimensions(mesh) {
-  const texture = mesh?.texture;
-  const width = Number(texture?.orig?.width ?? texture?.frame?.width ?? texture?.width ?? texture?.baseTexture?.width ?? texture?.source?.width);
-  const height = Number(texture?.orig?.height ?? texture?.frame?.height ?? texture?.height ?? texture?.baseTexture?.height ?? texture?.source?.height);
-  return Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0 ? { width, height } : null;
-}
-
-function _tokenRenderDimensions(token, tokenDocument = token?.document) {
-  const gridSize = _canvasGridSize();
-  const width = Number(token?.w ?? tokenDocument?.width * gridSize);
-  const height = Number(token?.h ?? tokenDocument?.height * gridSize);
-  const fallbackWidth = Math.max(0.25, _finitePositionValue(tokenDocument?.width, 1)) * gridSize;
-  const fallbackHeight = Math.max(0.25, _finitePositionValue(tokenDocument?.height, 1)) * gridSize;
-  const renderWidth = Number.isFinite(width) && width > 0 ? width : fallbackWidth;
-  const renderHeight = Number.isFinite(height) && height > 0 ? height : fallbackHeight;
-  return Number.isFinite(renderWidth) && renderWidth > 0 && Number.isFinite(renderHeight) && renderHeight > 0
-    ? { width: renderWidth, height: renderHeight }
-    : null;
 }
 
 function _normalizedTokenScaleElevation(elevation, range) {
@@ -951,7 +696,7 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
   const tokenScalingMode = tokenScalingModeValue(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALING_MODE));
   const tokenScaleMax = Number(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_MAX) ?? 1.5);
   const tokenScalePerElevation = tokenScalePerElevationValue(getSceneElevationSetting(SCENE_SETTING_KEYS.TOKEN_SCALE_PER_ELEVATION));
-  const tokenTextureScale = _tokenDocumentTextureScale(doc);
+  const tokenTextureScale = tokenDocumentTextureScale(doc);
   const cacheKey = buildTokenScaleCacheKey({
     forceScale,
     tokenDocument: doc,
@@ -985,11 +730,11 @@ function _applyTokenScale(token, { forceScale = false } = {}) {
         if (m._seBaseScaleX !== undefined) m.scale.set(m._seBaseScaleX, m._seBaseScaleY);
         m._seLastFactor = 1;
       } else if (m._seBaseScaleX === undefined) {
-        if (!_captureTokenBaseScale(token, factor)) _queueTokenVisualRefresh();
+        if (!captureTokenBaseScale(token, factor, { gridSize: _canvasGridSize() })) _queueTokenVisualRefresh();
       } else if (m._seLastFactor && Math.abs(m.scale.x - m._seBaseScaleX * m._seLastFactor) > 1e-4) {
         // If Foundry just rewrote the scale (e.g. token resize / mirror toggle),
         // re-cache by comparing to the previously applied product.
-        if (!_captureTokenBaseScale(token, m._seLastFactor)) _queueTokenVisualRefresh();
+        if (!captureTokenBaseScale(token, m._seLastFactor, { gridSize: _canvasGridSize() })) _queueTokenVisualRefresh();
       }
       if (tokenScaleEnabled && m._seBaseScaleX !== undefined && m._seBaseScaleY !== undefined) {
         m._seLastFactor = factor;
@@ -1486,29 +1231,6 @@ function _tokenPositionFromCenter(token, center) {
     width,
     height
   };
-}
-
-async function _migrateParallaxHeightContrastSetting() {
-  if (!game.user?.isGM) return;
-  const current = game.settings.get(MODULE_ID, SETTINGS.PARALLAX_HEIGHT_CONTRAST);
-  const key = parallaxHeightContrastKey(current);
-  if (current !== key) await game.settings.set(MODULE_ID, SETTINGS.PARALLAX_HEIGHT_CONTRAST, key);
-}
-
-async function _migrateShadowLengthSetting() {
-  if (!game.user?.isGM) return;
-  const current = game.settings.get(MODULE_ID, SETTINGS.SHADOW_LENGTH);
-  const key = shadowLengthKey(current);
-  if (current !== key) await game.settings.set(MODULE_ID, SETTINGS.SHADOW_LENGTH, key);
-}
-
-async function _migrateMouseDriftWorldDefaults() {
-  if (!game.user?.isGM) return;
-  if (game.settings.get(MODULE_ID, SETTINGS.WORLD_DEFAULTS_VERSION) === MOUSE_DRIFT_WORLD_DEFAULTS_VERSION) return;
-  await Promise.all(ELEVATION_PRESET_SETTING_KEYS
-    .filter(key => game.settings.get(MODULE_ID, key) !== ELEVATION_DEFAULT_SETTINGS[key])
-    .map(key => game.settings.set(MODULE_ID, key, ELEVATION_DEFAULT_SETTINGS[key])));
-  await game.settings.set(MODULE_ID, SETTINGS.WORLD_DEFAULTS_VERSION, MOUSE_DRIFT_WORLD_DEFAULTS_VERSION);
 }
 
 function _patchTokenHudClass(hudClass) {
